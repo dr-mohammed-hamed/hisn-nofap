@@ -20,7 +20,7 @@ object OemProvisioningHelper {
     private const val TAG = "AntiPorn_OemHelper"
 
     val manufacturer: String
-        get() = Build.MANUFACTURER.lowercase(Locale.ROOT)
+        get() = Build.MANUFACTURER?.lowercase(Locale.ROOT) ?: ""
 
     fun isXiaomi(): Boolean =
         manufacturer.contains("xiaomi") || manufacturer.contains("redmi") || manufacturer.contains("poco")

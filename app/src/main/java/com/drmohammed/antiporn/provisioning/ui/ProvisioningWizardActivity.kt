@@ -1,11 +1,14 @@
 package com.drmohammed.antiporn.provisioning.ui
 
 import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -65,6 +68,14 @@ class ProvisioningWizardActivity : AppCompatActivity() {
     private lateinit var cardOemWarning: MaterialCardView
     private lateinit var tvOemWarningTitle: TextView
     private lateinit var tvOemWarningDesc: TextView
+
+    // Overlay & WebADB Cards
+    private lateinit var cardOverlayPermission: MaterialCardView
+    private lateinit var btnGrantOverlayPermission: MaterialButton
+    private lateinit var tvRestrictedSettingsHint: TextView
+    private lateinit var cardWebAdbFallback: MaterialCardView
+    private lateinit var btnCopyWebAdbLink: MaterialButton
+    private lateinit var btnOpenWebAdb: MaterialButton
 
     // Stepper Cards & Inputs
     private lateinit var cardStep2: MaterialCardView
@@ -132,6 +143,7 @@ class ProvisioningWizardActivity : AppCompatActivity() {
         setupListeners()
         setupOemGuidance()
         setupLegacyPureSite()
+        updateOverlayPermissionUi()
     }
 
     private fun bindViews() {
@@ -159,6 +171,13 @@ class ProvisioningWizardActivity : AppCompatActivity() {
         tvRadarStatus = findViewById(R.id.tvRadarStatus)
         etPairingCode = findViewById(R.id.etPairingCode)
         btnPairAndActivate = findViewById(R.id.btnPairAndActivate)
+
+        cardOverlayPermission = findViewById(R.id.cardOverlayPermission)
+        btnGrantOverlayPermission = findViewById(R.id.btnGrantOverlayPermission)
+        tvRestrictedSettingsHint = findViewById(R.id.tvRestrictedSettingsHint)
+        cardWebAdbFallback = findViewById(R.id.cardWebAdbFallback)
+        btnCopyWebAdbLink = findViewById(R.id.btnCopyWebAdbLink)
+        btnOpenWebAdb = findViewById(R.id.btnOpenWebAdb)
 
         etPairingCode.doAfterTextChanged { validateInputs() }
     }
@@ -191,6 +210,39 @@ class ProvisioningWizardActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
             launchWirelessDebuggingScreen()
+        }
+
+        btnGrantOverlayPermission.setOnClickListener {
+            try {
+                val intent = Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
+                startActivity(intent)
+            } catch (_: Exception) {
+                try {
+                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION))
+                } catch (_: Exception) {
+                    Toast.makeText(this, R.string.toast_open_settings_failed, Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+
+        btnCopyWebAdbLink.setOnClickListener {
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            val clip = ClipData.newPlainText("WebADB Install URL", getString(R.string.provisioning_webadb_url))
+            clipboard?.setPrimaryClip(clip)
+            Toast.makeText(this, R.string.provisioning_webadb_link_copied, Toast.LENGTH_SHORT).show()
+        }
+
+        btnOpenWebAdb.setOnClickListener {
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(getString(R.string.provisioning_webadb_url))).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                })
+            } catch (e: Exception) {
+                Timber.tag(TAG).e(e, "Failed opening WebADB URL")
+            }
         }
 
         btnPairAndActivate.setOnClickListener {
@@ -315,7 +367,22 @@ class ProvisioningWizardActivity : AppCompatActivity() {
             updateRadarUi()
         }
         checkDevOptionsStatus()
+        updateOverlayPermissionUi()
         validateInputs()
+    }
+
+    private fun updateOverlayPermissionUi() {
+        val hasOverlay = Settings.canDrawOverlays(this)
+        if (hasOverlay) {
+            cardOverlayPermission.visibility = View.GONE
+        } else {
+            cardOverlayPermission.visibility = View.VISIBLE
+            tvRestrictedSettingsHint.visibility = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
+        }
     }
 
     override fun onStop() {

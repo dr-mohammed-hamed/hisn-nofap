@@ -3,8 +3,11 @@ package com.drmohammed.antiporn.provisioning.engine
 import android.accounts.AccountManager
 import android.content.ComponentName
 import android.content.Context
+import android.os.SystemClock
 import com.drmohammed.antiporn.AdminReceiver
 import com.drmohammed.antiporn.R
+import com.drmohammed.antiporn.provisioning.service.AdbPairingNotificationService
+import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import io.github.rhythmcache.adb.AdbClient
 import io.github.rhythmcache.adb.FileKeyProvider
 import kotlinx.coroutines.Dispatchers
@@ -47,41 +50,117 @@ object DeviceOwnerPromoter {
         if (!promotionMutex.tryLock()) {
             return@withContext PromotionResult.Failure("Promotion already in progress.")
         }
+        val appContext = context.applicationContext
+        val startTime = SystemClock.elapsedRealtime()
         try {
-            val appContext = context.applicationContext
             val keyFile = File(appContext.filesDir, "antiporn_adb.key")
             val keyProvider = FileKeyProvider(keyFile)
 
+            BlackBoxRecorder.recordPairing(
+                appContext,
+                "PAIR_TLS_START",
+                isSuccess = true,
+                details = "pairingPort=$pairingPort"
+            )
+
             Timber.tag(TAG).i("Pairing via SPAKE2 TLS to $LOCALHOST:$pairingPort with code length ${pairingCode.length}...")
             AdbClient.pairTls(LOCALHOST, pairingPort, pairingCode.trim(), keyProvider)
-            Timber.tag(TAG).i("Pairing handshake successful! Waiting 500ms for adbd key persistence...")
+            val pairDuration = SystemClock.elapsedRealtime() - startTime
+            Timber.tag(TAG).i("Pairing handshake successful in ${pairDuration}ms! Waiting 500ms for adbd key persistence...")
+            BlackBoxRecorder.recordPairing(
+                appContext,
+                "PAIR_TLS_SUCCESS",
+                isSuccess = true,
+                executionTimeMs = pairDuration
+            )
             delay(500)
-            Timber.tag(TAG).i("Connecting to main connectPort: $connectPort...")
 
+            // Resolve connectPort if not yet discovered
+            var effectiveConnectPort = connectPort
+            if (effectiveConnectPort <= 0) {
+                effectiveConnectPort = AdbPairingNotificationService.capturedConnectPort
+            }
+            if (effectiveConnectPort <= 0) {
+                Timber.tag(TAG).i("Connect port is 0 after pairing, polling up to 8s for mDNS resolution...")
+                val pollStart = SystemClock.elapsedRealtime()
+                while (effectiveConnectPort <= 0 && SystemClock.elapsedRealtime() - pollStart < 8000) {
+                    delay(250)
+                    effectiveConnectPort = AdbPairingNotificationService.capturedConnectPort
+                }
+            }
+
+            if (effectiveConnectPort <= 0) {
+                val timeoutErr = "Connect port discovery timed out after successful pairing"
+                Timber.tag(TAG).e(timeoutErr)
+                BlackBoxRecorder.recordPairing(
+                    appContext,
+                    "CONNECT_PORT_TIMEOUT",
+                    isSuccess = false,
+                    error = timeoutErr
+                )
+                return@withContext PromotionResult.Failure(timeoutErr)
+            }
+
+            Timber.tag(TAG).i("Connecting to main connectPort: $effectiveConnectPort...")
             val adminComponent = ComponentName(appContext, AdminReceiver::class.java).flattenToShortString()
+
+            val targetHosts = listOfNotNull(
+                LOCALHOST,
+                AdbMdnsDiscovery.lastDiscoveredHost?.takeIf { it != LOCALHOST && it.isNotBlank() }
+            )
 
             var lastException: Exception? = null
             var result: PromotionResult? = null
 
-            for (attempt in 1..2) {
-                try {
-                    AdbClient.connectTls(LOCALHOST, connectPort, keyProvider).use { client ->
-                        result = executeZeroAccountPromotion(appContext, client, adminComponent, 0)
-                    }
-                    break
-                } catch (e: Exception) {
-                    lastException = e
-                    Timber.tag(TAG).w("Connect attempt $attempt failed: ${e.message}")
-                    if (attempt < 2) {
-                        delay(500)
+            hostLoop@ for (host in targetHosts) {
+                for (attempt in 1..2) {
+                    try {
+                        Timber.tag(TAG).i("Connecting to $host:$effectiveConnectPort (attempt $attempt)...")
+                        AdbClient.connectTls(host, effectiveConnectPort, keyProvider).use { client ->
+                            result = executeZeroAccountPromotion(appContext, client, adminComponent, 0)
+                        }
+                        if (result is PromotionResult.Success) {
+                            break@hostLoop
+                        }
+                    } catch (e: Exception) {
+                        lastException = e
+                        Timber.tag(TAG).w("Connect attempt $attempt to $host failed: ${e.message}")
+                        if (attempt < 2) {
+                            delay(500)
+                        }
                     }
                 }
             }
 
-            result ?: throw (lastException ?: IllegalStateException("Failed to connect over TLS"))
+            val finalResult = result ?: throw (lastException ?: IllegalStateException("Failed to connect over TLS"))
+            val totalDuration = SystemClock.elapsedRealtime() - startTime
+            if (finalResult is PromotionResult.Success) {
+                BlackBoxRecorder.recordPairing(
+                    appContext,
+                    "PROMOTION_SUCCESS",
+                    isSuccess = true,
+                    executionTimeMs = totalDuration
+                )
+            } else if (finalResult is PromotionResult.Failure) {
+                BlackBoxRecorder.recordPairing(
+                    appContext,
+                    "PROMOTION_FAILURE",
+                    isSuccess = false,
+                    executionTimeMs = totalDuration,
+                    error = finalResult.message
+                )
+            }
+            finalResult
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Failed during pairAndPromote")
-            PromotionResult.Failure(e.message ?: "Unknown error during wireless promotion", e)
+            val errorMsg = e.message ?: "Unknown error during wireless promotion"
+            BlackBoxRecorder.recordPairing(
+                appContext,
+                "PAIR_AND_PROMOTE_EXCEPTION",
+                isSuccess = false,
+                error = errorMsg
+            )
+            PromotionResult.Failure(errorMsg, e)
         } finally {
             promotionMutex.unlock()
         }
@@ -229,8 +308,11 @@ object DeviceOwnerPromoter {
             if (setupRes.stdoutText.contains("SecurityException", ignoreCase = true) ||
                 setupRes.stderrText.contains("SecurityException", ignoreCase = true) ||
                 setupRes.stderrText.contains("Permission Denial", ignoreCase = true)) {
-                val errorMsg = context?.getString(R.string.provisioning_error_xiaomi_security_settings)
-                    ?: setupRes.stderrText.ifBlank { setupRes.stdoutText }
+                val errorMsg = if (OemProvisioningHelper.isRealmeOrOppo()) {
+                    context?.getString(R.string.provisioning_error_realme_permission_monitoring)
+                } else {
+                    context?.getString(R.string.provisioning_error_xiaomi_security_settings)
+                } ?: setupRes.stderrText.ifBlank { setupRes.stdoutText }
                 return PromotionResult.Failure(errorMsg)
             }
 
@@ -373,8 +455,13 @@ object DeviceOwnerPromoter {
                 context.getString(R.string.provisioning_error_realme_precondition)
             lower.contains("already") && lower.contains("owner") ->
                 context.getString(R.string.provisioning_error_already_device_owner)
-            lower.contains("securityexception") || lower.contains("permission denial") ->
-                context.getString(R.string.provisioning_error_xiaomi_security_settings)
+            lower.contains("securityexception") || lower.contains("permission denial") -> {
+                if (OemProvisioningHelper.isRealmeOrOppo()) {
+                    context.getString(R.string.provisioning_error_realme_permission_monitoring)
+                } else {
+                    context.getString(R.string.provisioning_error_xiaomi_security_settings)
+                }
+            }
             else -> output
         }
     }

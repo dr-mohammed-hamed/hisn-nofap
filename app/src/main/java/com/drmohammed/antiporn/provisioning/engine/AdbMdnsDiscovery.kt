@@ -5,6 +5,7 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
 import android.util.Log
+import java.util.concurrent.Executors
 
 /**
  * mDNS Network Service Discovery for Android 11+ Wireless Debugging.
@@ -19,7 +20,8 @@ import android.util.Log
 class AdbMdnsDiscovery(
     context: Context,
     private val onPairingPortDiscovered: (port: Int) -> Unit,
-    private val onConnectPortDiscovered: (port: Int) -> Unit
+    private val onConnectPortDiscovered: (port: Int) -> Unit,
+    private val onPairingServiceLost: () -> Unit = {}
 ) {
 
     private val appContext = context.applicationContext
@@ -29,8 +31,9 @@ class AdbMdnsDiscovery(
     private var pendingStopPairing = false
     private var pendingStopConnect = false
 
-    private val resolveQueue = ArrayDeque<Pair<NsdServiceInfo, (Int) -> Unit>>()
+    private val resolveQueue = ArrayDeque<Pair<NsdServiceInfo, (Int, String?) -> Unit>>()
     private var isResolving = false
+    private var probeExecutor = Executors.newSingleThreadExecutor()
 
     private val pairingDiscoveryListener = object : NsdManager.DiscoveryListener {
         override fun onDiscoveryStarted(regType: String) {
@@ -49,15 +52,28 @@ class AdbMdnsDiscovery(
         override fun onServiceFound(serviceInfo: NsdServiceInfo) {
             Log.d(TAG, "mDNS Service found: ${serviceInfo.serviceName} (${serviceInfo.serviceType})")
             if (serviceInfo.serviceType.contains(SERVICE_TYPE_PAIRING)) {
-                resolveService(serviceInfo) { port ->
-                    Log.i(TAG, "Captured dynamic Pairing Port: $port")
-                    onPairingPortDiscovered(port)
+                resolveService(serviceInfo) { port, host ->
+                    try {
+                        probeExecutor.execute {
+                            if (isPortActuallyListening(port)) {
+                                Log.i(TAG, "Captured verified active Pairing Port: $port (host=$host)")
+                                lastDiscoveredHost = host
+                                onPairingPortDiscovered(port)
+                            } else {
+                                Log.w(TAG, "Discarded stale cached Pairing Port: $port (nothing listening)")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed submitting port probe task", e)
+                    }
                 }
             }
         }
 
         override fun onServiceLost(serviceInfo: NsdServiceInfo) {
             Log.d(TAG, "mDNS Pairing service lost: ${serviceInfo.serviceName}")
+            lastDiscoveredHost = null
+            onPairingServiceLost()
         }
 
         override fun onDiscoveryStopped(serviceType: String) {
@@ -95,8 +111,9 @@ class AdbMdnsDiscovery(
 
         override fun onServiceFound(serviceInfo: NsdServiceInfo) {
             if (serviceInfo.serviceType.contains(SERVICE_TYPE_CONNECT)) {
-                resolveService(serviceInfo) { port ->
-                    Log.i(TAG, "Captured dynamic Connect Port: $port")
+                resolveService(serviceInfo) { port, host ->
+                    Log.i(TAG, "Captured dynamic Connect Port: $port (host=$host)")
+                    lastDiscoveredHost = host
                     onConnectPortDiscovered(port)
                 }
             }
@@ -187,11 +204,16 @@ class AdbMdnsDiscovery(
         synchronized(this) {
             resolveQueue.clear()
             isResolving = false
+            lastDiscoveredHost = null
         }
+        try {
+            probeExecutor.shutdownNow()
+            probeExecutor = Executors.newSingleThreadExecutor()
+        } catch (_: Exception) {}
     }
 
     @Synchronized
-    private fun resolveService(serviceInfo: NsdServiceInfo, onResolved: (Int) -> Unit) {
+    private fun resolveService(serviceInfo: NsdServiceInfo, onResolved: (Int, String?) -> Unit) {
         resolveQueue.add(serviceInfo to onResolved)
         processNextResolveLocked()
     }
@@ -218,8 +240,9 @@ class AdbMdnsDiscovery(
                 override fun onServiceResolved(resolvedInfo: NsdServiceInfo) {
                     try {
                         val port = resolvedInfo.port
+                        val host = resolvedInfo.host?.hostAddress
                         if (port > 0) {
-                            onResolved(port)
+                            onResolved(port, host)
                         }
                     } catch (e: Exception) {
                         Log.w(TAG, "Exception in onResolved callback for ${serviceInfo.serviceName}", e)
@@ -244,5 +267,23 @@ class AdbMdnsDiscovery(
         private const val TAG = "AntiPorn_AdbMdns"
         private const val SERVICE_TYPE_PAIRING = "_adb-tls-pairing"
         private const val SERVICE_TYPE_CONNECT = "_adb-tls-connect"
+
+        @Volatile
+        var lastDiscoveredHost: String? = null
+
+        fun isPortActuallyListening(port: Int): Boolean {
+            if (port <= 0 || port > 65535) return false
+            return try {
+                java.net.ServerSocket().use { socket ->
+                    socket.reuseAddress = true
+                    socket.bind(java.net.InetSocketAddress("127.0.0.1", port))
+                }
+                false // Successfully bound => Nothing listening, stale dead cache!
+            } catch (_: java.io.IOException) {
+                true // EADDRINUSE => adbd is actively listening!
+            } catch (_: Exception) {
+                false
+            }
+        }
     }
 }
