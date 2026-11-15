@@ -1367,4 +1367,33 @@
     <string name="card_do_status_active_desc">التطبيق يمتلك صلاحية مسؤول الجهاز المالك (Device Owner) لتأمين النظام ضد التخطي.</string>
     <string name="shortcut_pin_success">تم إرسال طلب إضافة الاختصار إلى الشاشة الرئيسية</string>
     <string name="shortcut_not_supported">مشغل الشاشة لا يدعم إضافة الاختصارات تلقائياً</string>
+
+    <!-- Page Shield (درع الصفحات) -->
+    <string name="page_shield_title">درع الصفحات</string>
+    <string name="page_shield_desc">حجب أقسام محددة داخل التطبيقات (مثل الريلز) دون حظر التطبيق بالكامل</string>
+    <string name="page_shield_active_desc">مفعّل لحماية %d تطبيق</string>
+    <string name="page_shield_master_switch">تفعيل درع الصفحات</string>
+    <string name="page_shield_master_switch_desc">تشغيل الكشف الذكي للصفحات المحظورة عبر خدمة الوصول</string>
+    <string name="page_shield_app_youtube">YouTube</string>
+    <string name="page_shield_yt_shorts_title">مقاطع Shorts والريلز</string>
+    <string name="page_shield_yt_shorts_desc">حجب مشغل الفيديوهات القصيرة داخل يوتيوب فور الدخول إليه</string>
+    <string name="page_shield_target_pages_label">الصفحات المستهدفة للحجب</string>
+    <string name="page_shield_reaction_label">رد الفعل عند دخول الصفحة</string>
+    <string name="page_shield_reaction_exit_only">الإخراج من التطبيق فقط (Exit Only)</string>
+    <string name="page_shield_reaction_exit_and_freeze">الإخراج وتجميد التطبيق (Exit &amp; Freeze)</string>
+    <string name="page_shield_freeze_duration_label">مدة التجميد (بالدقائق)</string>
+    <string name="page_shield_freeze_duration_hint">15</string>
+    <string name="page_shield_notif_frozen_title">تم تجميد التطبيق مؤقتاً</string>
+    <string name="page_shield_notif_frozen_msg">تم تجميد %1$s لمدة %2$d دقيقة بسبب محاولة دخول صفحة محظورة</string>
+    <string name="page_shield_notif_unfrozen_title">انتهت فترة تجميد التطبيق</string>
+    <string name="page_shield_notif_unfrozen_msg">تم رفع التجميد عن %1$s وأصبح جاهزاً للاستخدام</string>
+    <string name="page_shield_save_btn">حفظ التغييرات</string>
+    <string name="page_shield_saved_toast">تم حفظ إعدادات درع الصفحات بنجاح</string>
+    <string name="page_shield_save_failed_toast">فشل حفظ إعدادات درع الصفحات</string>
+    <string name="self_control_tile_page_shield_title">درع الصفحات</string>
+    <string name="self_control_tile_page_shield_desc">حجب الريلز وShorts داخل التطبيقات</string>
+    <string name="self_control_page_shield_locked_by_guardian">تم قفل إعدادات درع الصفحات بواسطة المشرف</string>
+    <string name="page_shield_guardian_card_title">درع الصفحات (عن بُعد)</string>
+    <string name="page_shield_registered_apps_header">التطبيقات المدعومة</string>
+    <string name="page_shield_freeze_range_error">مدة التجميد يجب أن تكون بين 1 و 1440 دقيقة</string>
 </resources>

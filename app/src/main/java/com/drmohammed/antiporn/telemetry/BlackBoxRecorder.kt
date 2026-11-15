@@ -45,6 +45,7 @@ object BlackBoxRecorder {
     const val TAG_WAQFA = "WAQFA"
     const val TAG_A11Y = "A11Y"
     const val TAG_NETWORK = "NETWORK"
+    const val TAG_PAGE_SHIELD = "PAGE_SHIELD"
 
     private const val HEALTH_PREFS_NAME = "antiporn_blackbox_health_prefs"
     private const val KEY_LAST_HEALTHY_SHIELD_CHECK_MS = "last_healthy_shield_check_ms"
@@ -231,6 +232,17 @@ object BlackBoxRecorder {
         error: String? = null
     ) {
         record(context, TAG_WAQFA, action, isSuccess, executionTimeMs, error, details)
+    }
+
+    fun recordPageShield(
+        context: Context,
+        action: String,
+        isSuccess: Boolean = true,
+        executionTimeMs: Long = 0L,
+        details: String? = null,
+        error: String? = null
+    ) {
+        record(context, TAG_PAGE_SHIELD, action, isSuccess, executionTimeMs, error, details)
     }
 
     fun recordA11y(

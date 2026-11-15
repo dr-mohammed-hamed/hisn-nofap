@@ -40,11 +40,13 @@ class HisnAccessibilityService : AccessibilityService() {
             val info = serviceInfo ?: android.accessibilityservice.AccessibilityServiceInfo()
             info.flags = info.flags or
                 android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
-                android.accessibilityservice.AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
+                android.accessibilityservice.AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
+                android.accessibilityservice.AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
             info.eventTypes = info.eventTypes or
                 AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
                 AccessibilityEvent.TYPE_WINDOWS_CHANGED
             serviceInfo = info
+            com.drmohammed.antiporn.pageshield.engine.PageShieldAccessibilityHook.getInstance()
         } catch (e: Exception) {
             Timber.tag(TAG).w("Error updating serviceInfo: ${e.message}")
         }

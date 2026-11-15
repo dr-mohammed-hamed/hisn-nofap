@@ -118,6 +118,7 @@ object DeviceOwnerTeardownManager {
                     dpm.setPackagesSuspended(admin, packagesToUnsuspend.toTypedArray(), false)
                     Timber.tag(TAG).i("Un-suspended ${packagesToUnsuspend.size} packages successfully")
                 }
+                com.drmohammed.antiporn.pageshield.engine.PageShieldReactionExecutor.teardown(appContext)
             } catch (e: Exception) {
                 Timber.tag(TAG).e(e, "Error un-suspending packages during teardown")
             }

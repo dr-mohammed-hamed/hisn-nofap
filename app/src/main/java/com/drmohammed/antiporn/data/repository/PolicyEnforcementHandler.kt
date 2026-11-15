@@ -113,6 +113,7 @@ internal class PolicyEnforcementHandler(
                 ZeroTrustForegroundWatcher.syncWatcherState(appContext)
                 AppInventoryManager.getInstance(appContext).syncInventoryToCloud()
                 WaqfaSessionManager.getInstance(appContext).updateConfig(bundle.waqfaConfig)
+                com.drmohammed.antiporn.pageshield.engine.PageShieldAccessibilityHook.getInstance().updateConfig(bundle.pageShieldConfig)
 
                 synchronized(baselineLock) {
                     lastAppliedPolicyBundle = bundle

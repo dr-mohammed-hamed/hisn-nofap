@@ -97,6 +97,9 @@ class AntiPornApplication : Application(), Configuration.Provider {
         // Initialize central Notification Channels
         com.drmohammed.antiporn.notification.manager.AppNotificationManager.getInstance(this).createNotificationChannels()
 
+        // Register Page Shield Accessibility Hook
+        com.drmohammed.antiporn.pageshield.engine.PageShieldAccessibilityHook.getInstance()
+
         // Synchronize Zero-Trust active foreground watcher state on startup
         ZeroTrustForegroundWatcher.syncWatcherState(this)
 

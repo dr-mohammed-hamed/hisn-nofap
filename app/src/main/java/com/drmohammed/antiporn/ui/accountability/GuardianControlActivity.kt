@@ -228,6 +228,18 @@ class GuardianControlActivity : AppCompatActivity() {
             }
         }
 
+        // Tile: Page Shield
+        findViewById<View>(R.id.tilePageShield)?.setOnClickListener {
+            launchSubScreen {
+                val state = viewModel.uiState.value
+                Intent(this, com.drmohammed.antiporn.pageshield.ui.PageShieldSettingsActivity::class.java).apply {
+                    putExtra(com.drmohammed.antiporn.pageshield.ui.PageShieldSettingsActivity.EXTRA_IS_REMOTE, true)
+                    putExtra(com.drmohammed.antiporn.pageshield.ui.PageShieldSettingsActivity.EXTRA_WARD_ID, state.wardId)
+                    putExtra(com.drmohammed.antiporn.pageshield.ui.PageShieldSettingsActivity.EXTRA_POLICY_JSON, state.currentPolicy.toJson())
+                }
+            }
+        }
+
         // Tile 5: Other Settings
         findViewById<View>(R.id.tileOtherSettings)?.setOnClickListener {
             launchSubScreen {

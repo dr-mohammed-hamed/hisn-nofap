@@ -16,6 +16,7 @@ enum class SelfControlSection {
     WEB_FILTER,
     APP_MANAGER,
     WAQFA,
+    PAGE_SHIELD,
     NEW_APPS
 }
 
@@ -118,21 +119,25 @@ object SelfControlAccessGateRegistry {
             Log.w(TAG, "[SelfControlDiag] Failed retrieving local policy in isSectionPermitted", e)
             null
         }
+        val permitted = isSectionPermitted(policy, section)
+        Log.i(TAG, "[SelfControlDiag] isSectionPermitted evaluated for $section => PERMITTED=$permitted")
+        return permitted
+    }
 
+    fun isSectionPermitted(policy: com.drmohammed.antiporn.core.model.DevicePolicyBundle?, section: SelfControlSection): Boolean {
         val isSupervised = policy?.isSupervised == true || !policy?.guardianUid.isNullOrBlank()
         if (!isSupervised) return true
         if (policy?.isSelfControlAllowed != true) return false
 
-        val permitted = when (section) {
+        return when (section) {
             SelfControlSection.GENERAL -> true
             SelfControlSection.CURFEW -> policy.selfControlCurfewAllowed
             SelfControlSection.WEB_FILTER -> policy.selfControlWebAllowed
             SelfControlSection.APP_MANAGER -> policy.selfControlAppsAllowed
             SelfControlSection.WAQFA -> policy.selfControlWaqfaAllowed
+            SelfControlSection.PAGE_SHIELD -> policy.selfControlPageShieldAllowed
             SelfControlSection.NEW_APPS -> policy.selfControlNewAppsAllowed
         }
-        Log.i(TAG, "[SelfControlDiag] isSectionPermitted evaluated for $section => PERMITTED=$permitted")
-        return permitted
     }
 
     fun getActiveGate(): SelfControlAccessGate {

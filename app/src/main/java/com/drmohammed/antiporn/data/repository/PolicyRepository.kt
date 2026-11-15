@@ -64,6 +64,7 @@ class PolicyRepository(
         val initialPolicy = cachedPolicy ?: DevicePolicyBundle.defaultPolicy()
         _currentPolicyFlow = MutableStateFlow(initialPolicy)
         currentPolicyFlow = _currentPolicyFlow.asStateFlow()
+        com.drmohammed.antiporn.pageshield.engine.PageShieldAccessibilityHook.getInstance().updateConfig(initialPolicy.pageShieldConfig)
         com.drmohammed.antiporn.ui.control.gate.SelfControlAccessGateRegistry.isSelfControlAllowedWhenSupervised = initialPolicy.isSelfControlAllowed
 
         repositoryScope.launch {
@@ -312,7 +313,9 @@ class PolicyRepository(
                                         cloudPolicy.customBlockedUrls != current.customBlockedUrls ||
                                         cloudPolicy.customAllowedUrls != current.customAllowedUrls ||
                                         cloudPolicy.guardianUid != current.guardianUid ||
-                                        cloudPolicy.waqfaConfig != current.waqfaConfig
+                                        cloudPolicy.waqfaConfig != current.waqfaConfig ||
+                                        cloudPolicy.pageShieldConfig != current.pageShieldConfig ||
+                                        cloudPolicy.selfControlPageShieldAllowed != current.selfControlPageShieldAllowed
                                     )
                                     val statusChanged = cloudPolicy.breakoutStatus != current.breakoutStatus || cloudPolicy.deactivationStatus != current.deactivationStatus
                                     val isTimeNewer = cloudPolicy.updatedAt > current.updatedAt
@@ -614,6 +617,7 @@ class PolicyRepository(
                         selfControlWebAllowed = current.selfControlWebAllowed,
                         selfControlAppsAllowed = current.selfControlAppsAllowed,
                         selfControlWaqfaAllowed = current.selfControlWaqfaAllowed,
+                        selfControlPageShieldAllowed = current.selfControlPageShieldAllowed,
                         selfControlNewAppsAllowed = current.selfControlNewAppsAllowed
                     )
                     if (isSupervised) {
@@ -656,6 +660,11 @@ class PolicyRepository(
                         if (!current.selfControlWaqfaAllowed) {
                             sanitized = sanitized.copy(
                                 waqfaConfig = current.waqfaConfig
+                            )
+                        }
+                        if (!current.selfControlPageShieldAllowed) {
+                            sanitized = sanitized.copy(
+                                pageShieldConfig = current.pageShieldConfig
                             )
                         }
                         if (!current.selfControlNewAppsAllowed) {

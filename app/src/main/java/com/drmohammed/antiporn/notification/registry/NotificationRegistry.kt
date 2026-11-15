@@ -102,4 +102,10 @@ object NotificationRegistry {
     /** Pre-timeout 60-second warning notification ID. */
     const val NOTIF_WAQFA_WARNING_ID = 6002
 
+    /** Page Shield freeze started event notification ID. */
+    const val EVENT_PAGE_SHIELD_FROZEN_ID = 9001
+
+    /** Page Shield unfreeze event notification ID. */
+    const val EVENT_PAGE_SHIELD_UNFROZEN_ID = 9002
+
 }

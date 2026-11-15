@@ -1090,4 +1090,33 @@
     <string name="card_do_status_active_desc">The application holds Device Owner authority securing the system against tampering.</string>
     <string name="shortcut_pin_success">Shortcut pin request sent to home screen</string>
     <string name="shortcut_not_supported">Home launcher does not support pinned shortcuts</string>
+
+    <!-- Page Shield -->
+    <string name="page_shield_title">Page Shield</string>
+    <string name="page_shield_desc">Block specific sections inside apps (like Shorts) without blocking the entire app</string>
+    <string name="page_shield_active_desc">Active protecting %d apps</string>
+    <string name="page_shield_master_switch">Enable Page Shield</string>
+    <string name="page_shield_master_switch_desc">Enable smart accessibility detection for blocked pages</string>
+    <string name="page_shield_app_youtube">YouTube</string>
+    <string name="page_shield_yt_shorts_title">Shorts &amp; Reels</string>
+    <string name="page_shield_yt_shorts_desc">Block the short-video player inside YouTube immediately upon entry</string>
+    <string name="page_shield_target_pages_label">Target Pages to Block</string>
+    <string name="page_shield_reaction_label">Reaction upon Entry</string>
+    <string name="page_shield_reaction_exit_only">Exit Application Only (Exit Only)</string>
+    <string name="page_shield_reaction_exit_and_freeze">Exit &amp; Freeze Application (Exit &amp; Freeze)</string>
+    <string name="page_shield_freeze_duration_label">Freeze Duration (Minutes)</string>
+    <string name="page_shield_freeze_duration_hint">15</string>
+    <string name="page_shield_notif_frozen_title">App Temporarily Frozen</string>
+    <string name="page_shield_notif_frozen_msg">%1$s has been frozen for %2$d minutes due to accessing a blocked page</string>
+    <string name="page_shield_notif_unfrozen_title">App Freeze Expired</string>
+    <string name="page_shield_notif_unfrozen_msg">%1$s is now unfrozen and ready to use</string>
+    <string name="page_shield_save_btn">Save Changes</string>
+    <string name="page_shield_saved_toast">Page Shield settings saved successfully</string>
+    <string name="page_shield_save_failed_toast">Failed to save Page Shield settings</string>
+    <string name="self_control_tile_page_shield_title">Page Shield</string>
+    <string name="self_control_tile_page_shield_desc">Block Reels &amp; Shorts within apps</string>
+    <string name="self_control_page_shield_locked_by_guardian">Page Shield settings are locked by the guardian</string>
+    <string name="page_shield_guardian_card_title">Page Shield (Remote)</string>
+    <string name="page_shield_registered_apps_header">Supported Applications</string>
+    <string name="page_shield_freeze_range_error">Freeze duration must be between 1 and 1440 minutes</string>
 </resources>

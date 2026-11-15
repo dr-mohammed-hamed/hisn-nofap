@@ -166,6 +166,23 @@ object ActiveShieldsEvaluator {
             )
         }
 
+        // 8. Page Shield (درع الصفحات)
+        val isPageShieldEnabled = policy?.pageShieldConfig?.isEnabled ?: false
+        val isA11yActive = com.drmohammed.antiporn.accessibility.HisnAccessibilityService.instance != null
+        if (isPageShieldEnabled && isA11yActive) {
+            val count = policy?.pageShieldConfig?.getTargetPackages()?.size ?: 0
+            val desc = context.getString(R.string.page_shield_active_desc, count)
+            activeList.add(
+                ActiveShieldInfo(
+                    id = "page_shield",
+                    title = context.getString(R.string.page_shield_title),
+                    description = desc,
+                    iconRes = R.drawable.ic_shield_page,
+                    badgeText = badgeText
+                )
+            )
+        }
+
         return activeList
     }
 

@@ -96,6 +96,7 @@ val appModule = module {
     viewModel { NotificationCenterViewModel(get()) }
     viewModel { WaqfaGateViewModel(androidApplication(), get(), get()) }
     viewModel { WaqfaSettingsViewModel(androidApplication(), get(), get()) }
+    viewModel { com.drmohammed.antiporn.pageshield.ui.PageShieldSettingsViewModel(androidApplication(), get()) }
 
     // Background Workers
     worker { (workerParams: WorkerParameters) ->

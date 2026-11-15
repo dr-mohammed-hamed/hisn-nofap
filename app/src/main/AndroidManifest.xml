@@ -110,6 +110,12 @@
             android:theme="@style/Theme.Antiporn"
             android:screenOrientation="portrait" />
 
+        <activity
+            android:name=".pageshield.ui.PageShieldSettingsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Antiporn"
+            android:screenOrientation="portrait" />
+
         <receiver
             android:name=".PackageChangeReceiver"
             android:enabled="true"
@@ -141,6 +147,14 @@
             <intent-filter>
                 <action android:name="com.drmohammed.antiporn.waqfa.ACTION_SESSION_TIMEOUT" />
                 <action android:name="com.drmohammed.antiporn.waqfa.ACTION_COOLDOWN_EXPIRED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".pageshield.engine.PageShieldAlarmReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.drmohammed.antiporn.ACTION_PAGE_SHIELD_UNFREEZE" />
             </intent-filter>
         </receiver>
 

@@ -123,6 +123,7 @@ class SelfControlFragment : Fragment() {
         binding.tileWebFilter.alpha = if (isSupervised && !policy.selfControlWebAllowed) 0.45f else 1.0f
         binding.tileAppManager.alpha = if (isSupervised && !policy.selfControlAppsAllowed) 0.45f else 1.0f
         binding.tileWaqfa.alpha = if (isSupervised && !policy.selfControlWaqfaAllowed) 0.45f else 1.0f
+        binding.tilePageShield.alpha = if (isSupervised && !policy.selfControlPageShieldAllowed) 0.45f else 1.0f
 
         // 4. QR Barrier State Sync
         val ctx = context?.applicationContext ?: return
@@ -238,6 +239,11 @@ class SelfControlFragment : Fragment() {
             executeWithQrProtection(TAG_NAV_WAQFA)
         }
 
+        // Tile: Page Shield
+        binding.tilePageShield.setOnClickListener {
+            executeWithQrProtection(TAG_NAV_PAGE_SHIELD)
+        }
+
         // Tile 5: Other Settings
         binding.tileOtherSettings.setOnClickListener {
             executeWithQrProtection(TAG_NAV_OTHER)
@@ -269,6 +275,7 @@ class SelfControlFragment : Fragment() {
             TAG_NAV_WEB,
             TAG_NAV_APPS,
             TAG_NAV_WAQFA,
+            TAG_NAV_PAGE_SHIELD,
             TAG_NAV_OTHER
         )
         for (tag in allTags) {
@@ -303,6 +310,7 @@ class SelfControlFragment : Fragment() {
                 TAG_NAV_WEB -> policy.selfControlWebAllowed
                 TAG_NAV_APPS -> policy.selfControlAppsAllowed
                 TAG_NAV_WAQFA -> policy.selfControlWaqfaAllowed
+                TAG_NAV_PAGE_SHIELD -> policy.selfControlPageShieldAllowed
                 else -> true
             }
             if (!isAllowed) {
@@ -372,6 +380,7 @@ class SelfControlFragment : Fragment() {
                 subScreenLauncher.launch(intent)
             }
             TAG_NAV_WAQFA -> launchSubScreen(WaqfaSettingsActivity::class.java)
+            TAG_NAV_PAGE_SHIELD -> launchSubScreen(com.drmohammed.antiporn.pageshield.ui.PageShieldSettingsActivity::class.java)
             TAG_NAV_OTHER -> launchSubScreen(OtherSettingsActivity::class.java)
         }
     }
@@ -424,6 +433,7 @@ class SelfControlFragment : Fragment() {
         private const val TAG_NAV_WEB = "qr_nav_web"
         private const val TAG_NAV_APPS = "qr_nav_apps"
         private const val TAG_NAV_WAQFA = "qr_nav_waqfa"
+        private const val TAG_NAV_PAGE_SHIELD = "qr_nav_page_shield"
         private const val TAG_NAV_OTHER = "qr_nav_other"
     }
 }

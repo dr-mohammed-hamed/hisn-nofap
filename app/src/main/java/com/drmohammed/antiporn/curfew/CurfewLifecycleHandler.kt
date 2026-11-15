@@ -380,7 +380,9 @@ internal object CurfewLifecycleHandler {
                 Log.i(TAG, "Preserving suspension of $pkg on curfew release as it is blacklisted/unapproved high-risk")
                 false
             }
-            else -> !policyState.unapprovedPackages.contains(pkg) && !WaqfaCooldownStore.isPackageInCooldown(context, pkg)
+            else -> !policyState.unapprovedPackages.contains(pkg) &&
+                !WaqfaCooldownStore.isPackageInCooldown(context, pkg) &&
+                !com.drmohammed.antiporn.pageshield.engine.PageShieldFreezeStore.isFrozen(context, pkg)
         }
     }
 
@@ -395,6 +397,7 @@ internal object CurfewLifecycleHandler {
         if (isHighRiskOrBlacklistedForRelease(pkg, policyState.approvedPackages, policyState.customBlacklist)) return false
         if (policyState.unapprovedPackages.contains(pkg)) return false
         if (WaqfaCooldownStore.isPackageInCooldown(context, pkg)) return false
+        if (com.drmohammed.antiporn.pageshield.engine.PageShieldFreezeStore.isFrozen(context, pkg)) return false
         if (!policyState.isZeroTrustActive) return true
 
         val isApproved = policyState.approvedPackages.contains(pkg)
@@ -429,6 +432,7 @@ internal object CurfewLifecycleHandler {
         if (isHighRiskOrBlacklistedForRelease(pkg, policyState.approvedPackages, policyState.customBlacklist)) return false
         if (policyState.unapprovedPackages.contains(pkg)) return false
         if (WaqfaCooldownStore.isPackageInCooldown(context, pkg)) return false
+        if (com.drmohammed.antiporn.pageshield.engine.PageShieldFreezeStore.isFrozen(context, pkg)) return false
         if (!policyState.isZeroTrustActive) return true
 
         val isImmune = immunePackages.contains(pkg) ||
