@@ -54,9 +54,6 @@ class GuardianControlActivity : AppCompatActivity() {
     private lateinit var btnRetryLoadPolicy: MaterialButton
     private lateinit var alertsViewBinder: GuardianAlertsViewBinder
 
-    private lateinit var switchAllowSelfControl: MaterialSwitch
-    private lateinit var btnResetWardQrLock: MaterialButton
-
     private lateinit var layoutWardApprovalsSection: LinearLayout
     private lateinit var layoutPendingApps: LinearLayout
     private lateinit var tvNoPendingApps: TextView
@@ -66,8 +63,6 @@ class GuardianControlActivity : AppCompatActivity() {
 
     private var lastEditNameClickTime = 0L
     private var lastTileClickTime = 0L
-    private var lastResetQrClickTime = 0L
-    private var isBindingSwitch = false
 
     private val subScreenLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -153,8 +148,6 @@ class GuardianControlActivity : AppCompatActivity() {
             onPolicyAcknowledged = { acknowledged -> viewModel.onPolicyAcknowledged(acknowledged) }
         )
 
-        switchAllowSelfControl = findViewById(R.id.switchAllowSelfControl)
-        btnResetWardQrLock = findViewById(R.id.btnResetWardQrLock)
         layoutWardApprovalsSection = findViewById(R.id.layoutWardApprovalsSection)
         layoutPendingApps = findViewById(R.id.layoutPendingApps)
         tvNoPendingApps = findViewById(R.id.tvNoPendingApps)
@@ -185,19 +178,7 @@ class GuardianControlActivity : AppCompatActivity() {
             approvalsViewBinder.loadPendingApprovals()
         }
 
-        switchAllowSelfControl.setOnCheckedChangeListener { _, isChecked ->
-            if (isBindingSwitch) return@setOnCheckedChangeListener
-            viewModel.updateSelfControlPermissionImmediately(isChecked)
-        }
-
-        btnResetWardQrLock.setOnClickListener {
-            val now = SystemClock.elapsedRealtime()
-            if (now - lastResetQrClickTime < 1000L) return@setOnClickListener
-            lastResetQrClickTime = now
-            showResetWardQrConfirmationDialog()
-        }
-
-        // --- 5 Distributed Navigation Tiles ---
+        // --- 6 Distributed Navigation Tiles ---
 
         // Tile 1: Night Curfew
         findViewById<View>(R.id.tileCurfew)?.setOnClickListener {
@@ -258,6 +239,17 @@ class GuardianControlActivity : AppCompatActivity() {
                 }
             }
         }
+
+        // Tile 6: Self-Control Permissions
+        findViewById<View>(R.id.tileSelfControlPermissions)?.setOnClickListener {
+            launchSubScreen {
+                val state = viewModel.uiState.value
+                Intent(this, GuardianSelfControlSettingsActivity::class.java).apply {
+                    putExtra(GuardianSelfControlSettingsActivity.EXTRA_WARD_ID, state.wardId)
+                    putExtra(GuardianSelfControlSettingsActivity.EXTRA_POLICY_JSON, state.currentPolicy.toJson())
+                }
+            }
+        }
     }
 
     private fun launchSubScreen(intentProvider: () -> Intent) {
@@ -288,10 +280,6 @@ class GuardianControlActivity : AppCompatActivity() {
         updateWardTitle(state.wardName)
         cardOfflineBanner.visibility = if (state.isOffline) View.VISIBLE else View.GONE
         btnRetryLoadPolicy.isEnabled = !state.isLoading
-
-        isBindingSwitch = true
-        switchAllowSelfControl.isChecked = state.isSelfControlAllowed
-        isBindingSwitch = false
 
         alertsViewBinder.renderPolicyAlerts(state.currentPolicy)
 
@@ -355,23 +343,6 @@ class GuardianControlActivity : AppCompatActivity() {
                 val newName = input.text?.toString()?.trim() ?: ""
                 viewModel.renameWard(newName)
                 dialog.dismiss()
-            }
-            .setNegativeButton(R.string.dialog_btn_cancel, null)
-            .show()
-    }
-
-    private fun showResetWardQrConfirmationDialog() {
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.dialog_reset_ward_qr_title)
-            .setMessage(R.string.dialog_reset_ward_qr_msg)
-            .setPositiveButton(R.string.btn_reset_ward_qr_lock) { dialog, _ ->
-                dialog.dismiss()
-                btnResetWardQrLock.isEnabled = false
-                viewModel.resetWardSelfControlQr {
-                    if (!isFinishing && !isDestroyed) {
-                        btnResetWardQrLock.isEnabled = true
-                    }
-                }
             }
             .setNegativeButton(R.string.dialog_btn_cancel, null)
             .show()

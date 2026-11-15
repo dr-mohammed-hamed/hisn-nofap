@@ -14,6 +14,8 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.databinding.ActivityWaqfaSettingsBinding
+import com.drmohammed.antiporn.ui.control.gate.SelfControlAccessGateRegistry
+import com.drmohammed.antiporn.ui.control.gate.SelfControlSection
 import com.drmohammed.antiporn.waqfa.model.WaqfaTimeoutReactionType
 import com.google.android.material.color.MaterialColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -40,6 +42,13 @@ class WaqfaSettingsActivity : AppCompatActivity() {
         val wardId = intent.getStringExtra(EXTRA_WARD_ID)
         val policyJson = intent.getStringExtra(EXTRA_POLICY_JSON)
 
+        if (!isRemote && (!SelfControlAccessGateRegistry.getActiveGate().canAccess(this) ||
+                !SelfControlAccessGateRegistry.isSectionPermitted(this, SelfControlSection.WAQFA))) {
+            Toast.makeText(this, R.string.self_control_section_locked_by_guardian, Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
+
         setupToolbar(isRemote)
         setupListeners()
         observeUiState()
@@ -49,6 +58,13 @@ class WaqfaSettingsActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        val isRemote = intent.getBooleanExtra(EXTRA_IS_REMOTE, false)
+        if (!isRemote && (!SelfControlAccessGateRegistry.getActiveGate().canAccess(this) ||
+                !SelfControlAccessGateRegistry.isSectionPermitted(this, SelfControlSection.WAQFA))) {
+            Toast.makeText(this, R.string.self_control_section_locked_by_guardian, Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
         viewModel.refreshEngineStatus()
     }
 

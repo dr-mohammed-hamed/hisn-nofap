@@ -901,9 +901,25 @@
     <string name="gate_open_title">الوصول المباشر</string>
     <string name="gate_access_denied">تم رفض الوصول إلى لوحة التحكم</string>
     <string name="gate_access_denied_by_guardian">تم إيقاف التحكم الذاتي بواسطة المشرف. جميع الدروع مدارة عن بُعد.</string>
-    <string name="guardian_self_control_card_title">صلاحيات التحكم الذاتي</string>
-    <string name="guardian_switch_allow_self_control">السماح للمكفول بالتحكم الذاتي في دروعه</string>
-    <string name="guardian_switch_allow_self_control_desc">عند التعطيل، يُمنع المكفول من تعديل الدروع أو فتح تبويب «الذاتي»، ويقتصر التحكم بالكامل على المشرف</string>
+    <string name="guardian_tile_self_control_title">صلاحيات التحكم الذاتي</string>
+    <string name="guardian_self_control_settings_title">صلاحيات التحكم الذاتي للمكفول</string>
+    <string name="guardian_self_control_master_switch">تفعيل إمكانية التحكم الذاتي للمكفول</string>
+    <string name="guardian_self_control_master_switch_desc">إلغاء التفعيل يقفل كامل صفحة التحكم الذاتي في جهاز المكفول</string>
+    <string name="guardian_self_control_granular_header">تخصيص الأقسام المصرح بها</string>
+    <string name="self_control_perm_curfew">الحظر الليلي</string>
+    <string name="self_control_perm_curfew_desc">السماح للمكفول بضبط ساعات وأيام حظر التجوال</string>
+    <string name="self_control_perm_web">المواقع والشبكات</string>
+    <string name="self_control_perm_web_desc">السماح للمكفول بتعديل تصفية المواقع والـ DNS</string>
+    <string name="self_control_perm_apps">إدارة التطبيقات</string>
+    <string name="self_control_perm_apps_desc">السماح للمكفول بإضافة واستثناء تطبيقات من القائمة السوداء</string>
+    <string name="self_control_perm_waqfa">نظام وقفة</string>
+    <string name="self_control_perm_waqfa_desc">السماح للمكفول بضبط فترات الاستراحة والحد اليومي</string>
+    <string name="self_control_perm_new_apps">السماح بالتطبيقات الجديدة</string>
+    <string name="self_control_perm_new_apps_desc">السماح للمكفول بالموافقة الذاتية على التطبيقات المثبتة حديثاً</string>
+    <string name="guardian_qr_reset_section_title">رمز الاستجابة السريعة (QR)</string>
+    <string name="guardian_qr_reset_section_desc">في حال رغبة المكفول بإنشاء رمز باركود جديد لحماية نفسه، يمكنك إلغاء القفل القديم وإعادته للافتراضي</string>
+    <string name="self_control_section_locked_by_guardian">عذراً، هذا القسم مدار ومقفل من قبل المشرف</string>
+    <string name="toast_guardian_permissions_saved">تم تحديث الصلاحية بنجاح</string>
     <string name="btn_manage_my_device">إدارة جهازي</string>
 
     <!-- Modern Redesign & Navigation Tokens -->

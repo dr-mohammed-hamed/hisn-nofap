@@ -102,11 +102,14 @@ class SelfControlFragment : Fragment() {
         updateLockState(state.isLocked)
         if (state.isLocked) return
 
-        // 2. Pending Approvals Card (Topmost, only visible when count > 0)
-        if (state.pendingApprovalsCount == 0) {
+        val policy = state.policy
+        val isSupervised = policy.isSupervised || !policy.guardianUid.isNullOrBlank()
+
+        // 2. Pending Approvals Card (Topmost, only visible when count > 0 AND allowed or not supervised)
+        if (state.pendingApprovalsCount == 0 || (isSupervised && !policy.selfControlNewAppsAllowed)) {
             lastRenderedApprovalsCount = 0
             binding.cardPendingApps.visibility = View.GONE
-            binding.tvNoPendingApps.visibility = View.VISIBLE
+            binding.tvNoPendingApps.visibility = View.GONE
         } else {
             binding.cardPendingApps.visibility = View.VISIBLE
             if (lastRenderedApprovalsCount != state.pendingApprovalsCount) {
@@ -115,7 +118,13 @@ class SelfControlFragment : Fragment() {
             }
         }
 
-        // 3. QR Barrier State Sync
+        // 3. Visual feedback for granular tile permissions
+        binding.tileCurfew.alpha = if (isSupervised && !policy.selfControlCurfewAllowed) 0.45f else 1.0f
+        binding.tileWebFilter.alpha = if (isSupervised && !policy.selfControlWebAllowed) 0.45f else 1.0f
+        binding.tileAppManager.alpha = if (isSupervised && !policy.selfControlAppsAllowed) 0.45f else 1.0f
+        binding.tileWaqfa.alpha = if (isSupervised && !policy.selfControlWaqfaAllowed) 0.45f else 1.0f
+
+        // 4. QR Barrier State Sync
         val ctx = context?.applicationContext ?: return
         val qrManager = SelfControlQrManager.getInstance(ctx)
         val isQrEnabled = qrManager.isQrLockEnabled()
@@ -285,6 +294,22 @@ class SelfControlFragment : Fragment() {
         val now = SystemClock.elapsedRealtime()
         if (now - lastTileClickTime < 600L) return
         lastTileClickTime = now
+
+        val policy = selfControlViewModel.uiState.value.policy
+        val isSupervised = policy.isSupervised || !policy.guardianUid.isNullOrBlank()
+        if (isSupervised) {
+            val isAllowed = when (tag) {
+                TAG_NAV_CURFEW -> policy.selfControlCurfewAllowed
+                TAG_NAV_WEB -> policy.selfControlWebAllowed
+                TAG_NAV_APPS -> policy.selfControlAppsAllowed
+                TAG_NAV_WAQFA -> policy.selfControlWaqfaAllowed
+                else -> true
+            }
+            if (!isAllowed) {
+                Toast.makeText(requireContext(), R.string.self_control_section_locked_by_guardian, Toast.LENGTH_SHORT).show()
+                return
+            }
+        }
 
         val ctx = context?.applicationContext ?: return
         val qrManager = SelfControlQrManager.getInstance(ctx)

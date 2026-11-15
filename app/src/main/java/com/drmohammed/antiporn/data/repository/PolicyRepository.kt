@@ -605,11 +605,67 @@ class PolicyRepository(
                 if (isSupervised && (!current.isSelfControlAllowed || !bundle.isSelfControlAllowed)) {
                     null
                 } else {
-                    val newPolicy = bundle.copy(
+                    var sanitized = bundle.copy(
                         guardianUid = current.guardianUid,
                         guardianName = current.guardianName,
                         isSupervised = isSupervised,
                         isSelfControlAllowed = current.isSelfControlAllowed,
+                        selfControlCurfewAllowed = current.selfControlCurfewAllowed,
+                        selfControlWebAllowed = current.selfControlWebAllowed,
+                        selfControlAppsAllowed = current.selfControlAppsAllowed,
+                        selfControlWaqfaAllowed = current.selfControlWaqfaAllowed,
+                        selfControlNewAppsAllowed = current.selfControlNewAppsAllowed
+                    )
+                    if (isSupervised) {
+                        if (!current.selfControlCurfewAllowed) {
+                            sanitized = sanitized.copy(
+                                curfewStartHour = current.curfewStartHour,
+                                curfewStartMinute = current.curfewStartMinute,
+                                curfewEndHour = current.curfewEndHour,
+                                curfewEndMinute = current.curfewEndMinute,
+                                isCurfewEnabled = current.isCurfewEnabled,
+                                isInstantInternetKillEnabled = current.isInstantInternetKillEnabled,
+                                isWeekendCurfewEnabled = current.isWeekendCurfewEnabled,
+                                weekendCurfewStartHour = current.weekendCurfewStartHour,
+                                weekendCurfewStartMinute = current.weekendCurfewStartMinute,
+                                weekendCurfewEndHour = current.weekendCurfewEndHour,
+                                weekendCurfewEndMinute = current.weekendCurfewEndMinute
+                            )
+                        }
+                        if (!current.selfControlWebAllowed) {
+                            sanitized = sanitized.copy(
+                                browserFilterMode = current.browserFilterMode,
+                                isFullSystemFilteringEnabled = current.isFullSystemFilteringEnabled,
+                                customBlockedUrls = current.customBlockedUrls,
+                                customAllowedUrls = current.customAllowedUrls,
+                                dnsHost = current.dnsHost,
+                                isYouTubeRestrictedModeEnabled = current.isYouTubeRestrictedModeEnabled,
+                                isTelegramWebBlocked = current.isTelegramWebBlocked
+                            )
+                        }
+                        if (!current.selfControlAppsAllowed) {
+                            sanitized = sanitized.copy(
+                                customBlacklistPackages = current.customBlacklistPackages,
+                                customCurfewWhitelistPackages = current.customCurfewWhitelistPackages,
+                                customAiScanPackages = current.customAiScanPackages,
+                                excludedAiScanPackages = current.excludedAiScanPackages,
+                                curfewVpnBypassPackages = current.curfewVpnBypassPackages,
+                                protectedAppPackages = current.protectedAppPackages
+                            )
+                        }
+                        if (!current.selfControlWaqfaAllowed) {
+                            sanitized = sanitized.copy(
+                                waqfaConfig = current.waqfaConfig
+                            )
+                        }
+                        if (!current.selfControlNewAppsAllowed) {
+                            sanitized = sanitized.copy(
+                                lockNewInstallsUntilApproved = current.lockNewInstallsUntilApproved
+                            )
+                        }
+                    }
+
+                    val newPolicy = sanitized.copy(
                         guardianPolicySnapshot = if (isSupervised) (current.guardianPolicySnapshot ?: current.toJson()) else null,
                         lastSelfModifiedAt = if (isSupervised) TrustedTimeProvider.currentTimeMillis(appContext) else null,
                         version = current.version + 1,

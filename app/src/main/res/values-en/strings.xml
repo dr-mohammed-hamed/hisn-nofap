@@ -665,9 +665,25 @@
     <string name="gate_open_title">Unrestricted Access</string>
     <string name="gate_access_denied">Access Denied: QR code verification required.</string>
     <string name="gate_access_denied_by_guardian">Self-control has been disabled by your supervisor. All shields are remotely managed.</string>
-    <string name="guardian_self_control_card_title">Self-Control Permissions</string>
-    <string name="guardian_switch_allow_self_control">Allow Ward Self-Control Over Shields</string>
-    <string name="guardian_switch_allow_self_control_desc">When disabled, the ward cannot modify shields or access the Self tab; all protection is managed remotely by the guardian.</string>
+    <string name="guardian_tile_self_control_title">Self-Control Permissions</string>
+    <string name="guardian_self_control_settings_title">Ward Self-Control Permissions</string>
+    <string name="guardian_self_control_master_switch">Enable Self-Control for Ward</string>
+    <string name="guardian_self_control_master_switch_desc">Disabling locks the entire Self-Control panel on the ward\'s device</string>
+    <string name="guardian_self_control_granular_header">Granular Section Permissions</string>
+    <string name="self_control_perm_curfew">Night Curfew</string>
+    <string name="self_control_perm_curfew_desc">Allow ward to adjust curfew hours and active days</string>
+    <string name="self_control_perm_web">Web &amp; Network Filtering</string>
+    <string name="self_control_perm_web_desc">Allow ward to customize website filtering and DNS</string>
+    <string name="self_control_perm_apps">App Management</string>
+    <string name="self_control_perm_apps_desc">Allow ward to add/exclude apps from blacklist</string>
+    <string name="self_control_perm_waqfa">Waqfa System</string>
+    <string name="self_control_perm_waqfa_desc">Allow ward to adjust break periods and daily limits</string>
+    <string name="self_control_perm_new_apps">Approve New Applications</string>
+    <string name="self_control_perm_new_apps_desc">Allow ward to self-approve newly installed apps</string>
+    <string name="guardian_qr_reset_section_title">QR Code Lock</string>
+    <string name="guardian_qr_reset_section_desc">If the ward wants to create a new barcode lock to protect themselves, you can remotely reset the old lock to default</string>
+    <string name="self_control_section_locked_by_guardian">Sorry, this section is managed and locked by your supervisor</string>
+    <string name="toast_guardian_permissions_saved">Permission updated successfully</string>
     <string name="btn_manage_my_device">Manage My Device</string>
 
     <!-- Browser URL Filter -->

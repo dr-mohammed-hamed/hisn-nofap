@@ -64,8 +64,9 @@ class CurfewSettingsActivity : AppCompatActivity() {
         wardId = intent.getStringExtra(EXTRA_WARD_ID).orEmpty()
         val policyJson = intent.getStringExtra(EXTRA_POLICY_JSON)
 
-        if (!isRemote && !SelfControlAccessGateRegistry.getActiveGate().canAccess(this)) {
-            Toast.makeText(this, R.string.gate_access_denied_by_guardian, Toast.LENGTH_SHORT).show()
+        if (!isRemote && (!SelfControlAccessGateRegistry.getActiveGate().canAccess(this) ||
+                !SelfControlAccessGateRegistry.isSectionPermitted(this, com.drmohammed.antiporn.ui.control.gate.SelfControlSection.CURFEW))) {
+            Toast.makeText(this, R.string.self_control_section_locked_by_guardian, Toast.LENGTH_SHORT).show()
             finish()
             return
         }
@@ -131,9 +132,11 @@ class CurfewSettingsActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (!isRemote && !SelfControlAccessGateRegistry.getActiveGate().canAccess(this)) {
-            Toast.makeText(this, R.string.gate_access_denied_by_guardian, Toast.LENGTH_SHORT).show()
+        if (!isRemote && (!SelfControlAccessGateRegistry.getActiveGate().canAccess(this) ||
+                !SelfControlAccessGateRegistry.isSectionPermitted(this, com.drmohammed.antiporn.ui.control.gate.SelfControlSection.CURFEW))) {
+            Toast.makeText(this, R.string.self_control_section_locked_by_guardian, Toast.LENGTH_SHORT).show()
             finish()
+            return
         }
     }
 

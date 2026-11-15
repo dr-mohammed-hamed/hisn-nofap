@@ -139,6 +139,19 @@ class SelfControlApprovalsViewBinder(
         approveBtn: MaterialButton?,
         rejectBtn: MaterialButton?
     ) {
+        val policy = try {
+            com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(activity.applicationContext).getCurrentPolicy()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed retrieving local policy in resolveApproval", e)
+            null
+        }
+
+        val isSupervised = policy?.isSupervised == true || !policy?.guardianUid.isNullOrBlank()
+        if (isSupervised && policy?.selfControlNewAppsAllowed != true) {
+            Toast.makeText(activity, R.string.self_control_section_locked_by_guardian, Toast.LENGTH_SHORT).show()
+            return
+        }
+
         if (isApproved) {
             val qrManager = SelfControlQrManager.getInstance(activity.applicationContext)
             if (qrManager.isQrLockEnabled()) {

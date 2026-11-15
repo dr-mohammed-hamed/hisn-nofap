@@ -8,6 +8,18 @@ import com.drmohammed.antiporn.R
 private const val TAG = "SelfControlGate"
 
 /**
+ * Enumeration of distinct sections in the Self-Control panel that can be granularly controlled.
+ */
+enum class SelfControlSection {
+    GENERAL,
+    CURFEW,
+    WEB_FILTER,
+    APP_MANAGER,
+    WAQFA,
+    NEW_APPS
+}
+
+/**
  * Pluggable barrier/gate interface controlling access to the Self-Control panel.
  *
  * Current implementation uses [OpenAccessGate] (direct immediate access),
@@ -93,6 +105,33 @@ object SelfControlAccessGateRegistry {
         val permitted = if (isSupervised) isAllowed else true
 
         Log.i(TAG, "[SelfControlDiag] isSelfControlPermitted evaluated: isSupervised=$isSupervised (policySupervised=${policy?.isSupervised}, hasGuardianUid=${!policy?.guardianUid.isNullOrBlank()}), isSelfControlAllowed=$isAllowed => PERMITTED=$permitted")
+        return permitted
+    }
+
+    /**
+     * Synchronously checks whether a specific sub-section of self-control is permitted by policy.
+     */
+    fun isSectionPermitted(context: Context, section: SelfControlSection): Boolean {
+        val policy = try {
+            com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(context.applicationContext).getCurrentPolicy()
+        } catch (e: Exception) {
+            Log.w(TAG, "[SelfControlDiag] Failed retrieving local policy in isSectionPermitted", e)
+            null
+        }
+
+        val isSupervised = policy?.isSupervised == true || !policy?.guardianUid.isNullOrBlank()
+        if (!isSupervised) return true
+        if (policy?.isSelfControlAllowed != true) return false
+
+        val permitted = when (section) {
+            SelfControlSection.GENERAL -> true
+            SelfControlSection.CURFEW -> policy.selfControlCurfewAllowed
+            SelfControlSection.WEB_FILTER -> policy.selfControlWebAllowed
+            SelfControlSection.APP_MANAGER -> policy.selfControlAppsAllowed
+            SelfControlSection.WAQFA -> policy.selfControlWaqfaAllowed
+            SelfControlSection.NEW_APPS -> policy.selfControlNewAppsAllowed
+        }
+        Log.i(TAG, "[SelfControlDiag] isSectionPermitted evaluated for $section => PERMITTED=$permitted")
         return permitted
     }
 

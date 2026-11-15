@@ -78,8 +78,9 @@ class RemoteAppManagerActivity : AppCompatActivity() {
         wardId = intent.getStringExtra(EXTRA_WARD_ID) ?: ""
         wardName = intent.getStringExtra(EXTRA_WARD_NAME) ?: getString(R.string.status_ward_badge)
 
-        if (isLocalMode && !SelfControlAccessGateRegistry.getActiveGate().canAccess(this)) {
-            Toast.makeText(this, R.string.gate_access_denied_by_guardian, Toast.LENGTH_SHORT).show()
+        if (isLocalMode && (!SelfControlAccessGateRegistry.getActiveGate().canAccess(this) ||
+                !SelfControlAccessGateRegistry.isSectionPermitted(this, com.drmohammed.antiporn.ui.control.gate.SelfControlSection.APP_MANAGER))) {
+            Toast.makeText(this, R.string.self_control_section_locked_by_guardian, Toast.LENGTH_SHORT).show()
             finish()
             return
         }
@@ -347,9 +348,11 @@ class RemoteAppManagerActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (isFinishing || isDestroyed) return
-        if (isLocalMode && !SelfControlAccessGateRegistry.getActiveGate().canAccess(this)) {
-            Toast.makeText(this, R.string.gate_access_denied_by_guardian, Toast.LENGTH_SHORT).show()
+        if (isLocalMode && (!SelfControlAccessGateRegistry.getActiveGate().canAccess(this) ||
+                !SelfControlAccessGateRegistry.isSectionPermitted(this, com.drmohammed.antiporn.ui.control.gate.SelfControlSection.APP_MANAGER))) {
+            Toast.makeText(this, R.string.self_control_section_locked_by_guardian, Toast.LENGTH_SHORT).show()
             finish()
+            return
         }
     }
 
