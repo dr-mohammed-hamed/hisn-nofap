@@ -9,6 +9,8 @@ import android.os.PowerManager
 import android.os.SystemClock
 import com.drmohammed.antiporn.accessibility.bus.ForegroundAppEventBus
 import com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator
+import com.drmohammed.antiporn.banking.BankingCloakManager
+import com.drmohammed.antiporn.waqfa.model.WaqfaConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -22,33 +24,80 @@ import timber.log.Timber
  * - طالما أن [HisnAccessibilityService] متصلة ونشطة: يدخل في سبات تام (0% CPU / Zero Polling).
  * - في حال انقطاع الخدمة: يحاول أولاً الإفاقة الصامتة (مع مهلة تبريد 15 ثانية)،
  *   ثم ينشط كـ Fallback احتياطي بمعدل 400ms حصراً أثناء إضاءة الشاشة.
+ * - عند تفعيل وضع التخفي البنكي (BankingCloakManager.isCloaked)، يستمر المراقب بالعمل
+ *   حتى لو كان نظام «وَقْفَة» معطلاً، لرصد مغادرة تطبيق البنك واستعادة الحماية فوراً.
  */
-class WaqfaForegroundWatcher(
+class WaqfaForegroundWatcher internal constructor(
     context: Context,
-    private val checkIntervalMs: Long = 400L
+    private val checkIntervalMs: Long = 400L,
+    injectedUsageStatsManager: UsageStatsManager? = null,
+    injectedEventBus: ForegroundAppEventBus? = null,
+    private val injectedScheduler: WatcherScheduler? = null,
+    private val sessionManagerProvider: ((Context) -> WaqfaSessionManager)? = null,
+    private val configProvider: ((Context) -> WaqfaConfig)? = null
 ) {
+    constructor(context: Context, checkIntervalMs: Long = 400L) : this(
+        context = context,
+        checkIntervalMs = checkIntervalMs,
+        injectedUsageStatsManager = null,
+        injectedEventBus = null,
+        injectedScheduler = null,
+        sessionManagerProvider = null,
+        configProvider = null
+    )
+
     private val context = context.applicationContext
-    private val handlerThread = HandlerThread("WaqfaWatcherThread").apply { start() }
-    private val handler = Handler(handlerThread.looper)
-    private val usageStatsManager = this.context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
-    private val eventBus = ForegroundAppEventBus.getInstance(this.context)
+    private var handlerThread: HandlerThread? = null
+    private var dynamicScheduler: WatcherScheduler? = injectedScheduler
+
+    private val scheduler: WatcherScheduler
+        get() = synchronized(this) {
+            dynamicScheduler ?: run {
+                val ht = HandlerThread("WaqfaWatcherThread").apply { start() }
+                handlerThread = ht
+                HandlerWatcherScheduler(Handler(ht.looper)).also { dynamicScheduler = it }
+            }
+        }
+
+    private val usageStatsManager: UsageStatsManager? =
+        injectedUsageStatsManager ?: (this.context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager)
+
+    private val eventBus: ForegroundAppEventBus =
+        injectedEventBus ?: ForegroundAppEventBus.getInstance(this.context)
+
+    private fun getSessionManager(): WaqfaSessionManager =
+        sessionManagerProvider?.invoke(context) ?: WaqfaSessionManager.getInstance(context)
+
+    private fun getConfig(): WaqfaConfig =
+        configProvider?.invoke(context) ?: getSessionManager().getConfig()
+
+    private fun getElapsedRealtime(): Long {
+        return try {
+            SystemClock.elapsedRealtime()
+        } catch (e: Throwable) {
+            System.currentTimeMillis()
+        }
+    }
 
     private var watcherScope: CoroutineScope? = null
     private var stateCollectorJob: Job? = null
 
     @Volatile
-    private var isRunning = false
+    internal var isRunning = false
+        internal set
 
     @Volatile
-    private var isScreenOn = false
+    internal var isScreenOn = false
+        internal set
 
     @Volatile
-    private var lastForegroundPackage: String = ""
+    internal var lastForegroundPackage: String = ""
+        internal set
 
     @Volatile
     private var lastHealingAttemptTimeMs: Long = 0L
 
-    private val checkRunnable = object : Runnable {
+    internal val checkRunnable = object : Runnable {
         override fun run() {
             if (!isRunning || !isScreenOn) return
 
@@ -59,24 +108,25 @@ class WaqfaForegroundWatcher(
             }
 
             // محاولة الإفاقة الذاتية الصامتة مع مهلة تبريد 15 ثانية
-            val now = SystemClock.elapsedRealtime()
+            val now = getElapsedRealtime()
             if (now - lastHealingAttemptTimeMs >= SELF_HEALING_COOLDOWN_MS) {
                 lastHealingAttemptTimeMs = now
                 if (AccessibilitySelfActivator.enableSilently(context)) {
                     Timber.tag(TAG).i("Self-healing triggered HisnAccessibilityService activation; holding polling loop")
-                    handler.postDelayed(this, checkIntervalMs * 2)
+                    scheduler.postDelayed(this, checkIntervalMs * 2)
                     return
                 }
             }
 
-            val config = WaqfaSessionManager.getInstance(context).getConfig()
-            if (!config.isEnabled || config.targetPackages.isEmpty()) {
+            val config = getConfig()
+            val isCloaked = BankingCloakManager.isCloaked
+            if ((!config.isEnabled || config.targetPackages.isEmpty()) && !isCloaked) {
                 Timber.tag(TAG).d("Waqfa is disabled or has no targets; pausing foreground watcher loop")
                 return
             }
 
             evaluateForegroundPackage(config)
-            handler.postDelayed(this, checkIntervalMs)
+            scheduler.postDelayed(this, checkIntervalMs)
         }
     }
 
@@ -96,12 +146,12 @@ class WaqfaForegroundWatcher(
         stateCollectorJob = scope.launch {
             eventBus.isAccessibilityActive.collect { active ->
                 if (active) {
-                    handler.removeCallbacks(checkRunnable)
+                    scheduler.removeCallbacks(checkRunnable)
                     Timber.tag(TAG).i("HisnAccessibilityService connected: Waqfa polling stopped (Zero-Polling Active)")
                 } else if (isRunning && isScreenOn) {
                     Timber.tag(TAG).w("HisnAccessibilityService disconnected: Activating Waqfa fallback polling loop")
-                    handler.removeCallbacks(checkRunnable)
-                    handler.post(checkRunnable)
+                    scheduler.removeCallbacks(checkRunnable)
+                    scheduler.post(checkRunnable)
                 }
             }
         }
@@ -116,8 +166,8 @@ class WaqfaForegroundWatcher(
         }
 
         if (!eventBus.isAccessibilityActive.value) {
-            handler.removeCallbacks(checkRunnable)
-            handler.post(checkRunnable)
+            scheduler.removeCallbacks(checkRunnable)
+            scheduler.post(checkRunnable)
             Timber.tag(TAG).i("WaqfaForegroundWatcher fallback started (interval: ${checkIntervalMs}ms)")
         } else {
             Timber.tag(TAG).i("WaqfaForegroundWatcher started in dormant state (Accessibility 0ms active)")
@@ -127,21 +177,27 @@ class WaqfaForegroundWatcher(
     @Synchronized
     fun stop() {
         isRunning = false
-        handler.removeCallbacks(checkRunnable)
+        dynamicScheduler?.removeCallbacks(checkRunnable)
         stateCollectorJob?.cancel()
         stateCollectorJob = null
         watcherScope?.cancel()
         watcherScope = null
         lastForegroundPackage = ""
+        handlerThread?.quitSafely()
+        handlerThread = null
+        if (injectedScheduler == null) {
+            dynamicScheduler = null
+        }
         Timber.tag(TAG).i("WaqfaForegroundWatcher stopped")
     }
 
     fun notifyConfigChanged() {
         if (isRunning && isScreenOn && !eventBus.isAccessibilityActive.value) {
-            handler.removeCallbacks(checkRunnable)
-            val config = WaqfaSessionManager.getInstance(context).getConfig()
-            if (config.isEnabled && config.targetPackages.isNotEmpty()) {
-                handler.post(checkRunnable)
+            scheduler.removeCallbacks(checkRunnable)
+            val config = getConfig()
+            val isCloaked = BankingCloakManager.isCloaked
+            if ((config.isEnabled && config.targetPackages.isNotEmpty()) || isCloaked) {
+                scheduler.post(checkRunnable)
             }
         }
     }
@@ -150,18 +206,23 @@ class WaqfaForegroundWatcher(
         isScreenOn = screenOn
         if (screenOn) {
             if (isRunning && !eventBus.isAccessibilityActive.value) {
-                handler.removeCallbacks(checkRunnable)
-                handler.post(checkRunnable)
+                scheduler.removeCallbacks(checkRunnable)
+                scheduler.post(checkRunnable)
             }
         } else {
-            handler.removeCallbacks(checkRunnable)
+            scheduler.removeCallbacks(checkRunnable)
+            if (BankingCloakManager.isCloaked) {
+                Timber.tag(TAG).i("Screen turned off while banking cloak active; restoring protection immediately")
+                BankingCloakManager.restoreProtection(context)
+            }
         }
         Timber.tag(TAG).d("WaqfaForegroundWatcher screen state: screenOn=$screenOn, a11yActive=${eventBus.isAccessibilityActive.value}")
     }
 
-    private fun evaluateForegroundPackage(config: com.drmohammed.antiporn.waqfa.model.WaqfaConfig) {
+    internal fun evaluateForegroundPackage(config: WaqfaConfig) {
         val usm = usageStatsManager ?: return
-        if (!config.isEnabled || config.targetPackages.isEmpty()) {
+        val isCloaked = BankingCloakManager.isCloaked
+        if ((!config.isEnabled || config.targetPackages.isEmpty()) && !isCloaked) {
             return
         }
 
@@ -190,8 +251,15 @@ class WaqfaForegroundWatcher(
         }
 
         if (latestForeground.isNotBlank()) {
+            onForegroundPackageDetected(latestForeground)
+        }
+    }
+
+    internal fun onForegroundPackageDetected(latestForeground: String) {
+        if (latestForeground.isNotBlank()) {
             lastForegroundPackage = latestForeground
             eventBus.emitFromFallbackWatcher(latestForeground)
+            BankingCloakManager.onForegroundPackageChanged(context, latestForeground)
         }
     }
 
@@ -207,5 +275,32 @@ class WaqfaForegroundWatcher(
                 instance ?: WaqfaForegroundWatcher(context.applicationContext).also { instance = it }
             }
         }
+
+        fun setInstance(watcher: WaqfaForegroundWatcher?) {
+            instance = watcher
+        }
+    }
+}
+
+/**
+ * واجهة مجردة لجدولة المهام لتسهيل اختبار WaqfaForegroundWatcher دون الارتباط بـ Android Looper.
+ */
+interface WatcherScheduler {
+    fun post(runnable: Runnable)
+    fun postDelayed(runnable: Runnable, delayMs: Long)
+    fun removeCallbacks(runnable: Runnable)
+}
+
+private class HandlerWatcherScheduler(private val handler: Handler) : WatcherScheduler {
+    override fun post(runnable: Runnable) {
+        handler.post(runnable)
+    }
+
+    override fun postDelayed(runnable: Runnable, delayMs: Long) {
+        handler.postDelayed(runnable, delayMs)
+    }
+
+    override fun removeCallbacks(runnable: Runnable) {
+        handler.removeCallbacks(runnable)
     }
 }

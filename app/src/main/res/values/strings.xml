@@ -1333,4 +1333,15 @@
     <string name="toast_reset_ward_qr_failed">فشل إرسال أمر فك القفل، تحقق من اتصالك بالإنترنت</string>
     <string name="notif_self_control_qr_reset_by_guardian_title">تم إلغاء قفل الرقابة الذاتية</string>
     <string name="notif_self_control_qr_reset_by_guardian_msg">قام المشرف بإلغاء قفل الـ QR وحذف التوكن عن بُعد بنجاح.</string>
+
+    <!-- Safe Banking Cloak -->
+    <string name="banking_app_not_installed">تطبيق إنستاباي غير مثبت على الهاتف</string>
+    <string name="banking_shortcut_label">إنستاباي</string>
+    <string name="banking_shortcut_long_label">إنستاباي الآمن</string>
+    <string name="card_banking_title">المعاملات البنكية وإنستاباي</string>
+    <string name="card_banking_desc">تشغيل إنستاباي بنقرة واحدة دون تعارض مع الحماية، واستئنافها تلقائياً عند الخروج</string>
+    <string name="btn_pin_instapay_shortcut">تثبيت الاختصار على الشاشة الرئيسية</string>
+    <string name="btn_launch_instapay_now">تشغيل إنستاباي الآن</string>
+    <string name="shortcut_pin_success">تم إرسال طلب إضافة الاختصار إلى الشاشة الرئيسية</string>
+    <string name="shortcut_not_supported">مشغل الشاشة لا يدعم إضافة الاختصارات تلقائياً</string>
 </resources>

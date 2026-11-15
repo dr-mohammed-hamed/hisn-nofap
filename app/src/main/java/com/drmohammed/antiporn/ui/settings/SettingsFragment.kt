@@ -16,6 +16,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.drmohammed.antiporn.R
+import com.drmohammed.antiporn.banking.BankingCloakManager
+import com.drmohammed.antiporn.banking.BankingShortcutHelper
 import com.drmohammed.antiporn.core.engine.ProtectionEngine
 import com.drmohammed.antiporn.databinding.BottomSheetDiagnosticLogsBinding
 import com.drmohammed.antiporn.databinding.FragmentSettingsBinding
@@ -59,6 +61,8 @@ class SettingsFragment : Fragment() {
     private var lastViewLogsClickTime = 0L
     private var lastEditNameClickTime = 0L
     private var lastDeviceOwnerClickTime = 0L
+    private var lastPinShortcutClickTime = 0L
+    private var lastLaunchInstaPayClickTime = 0L
 
     override fun onAttach(context: Context) {
         super.onAttach(context)
@@ -347,6 +351,20 @@ class SettingsFragment : Fragment() {
 
         binding.btnLinkGoogle.setOnClickListener {
             actionListener?.onLinkGoogleRequested()
+        }
+
+        binding.btnPinInstaPayShortcut.setOnClickListener {
+            val currentTime = SystemClock.elapsedRealtime()
+            if (currentTime - lastPinShortcutClickTime < 1000L) return@setOnClickListener
+            lastPinShortcutClickTime = currentTime
+            BankingShortcutHelper.pinInstaPayShortcut(requireContext())
+        }
+
+        binding.btnLaunchInstaPayNow.setOnClickListener {
+            val currentTime = SystemClock.elapsedRealtime()
+            if (currentTime - lastLaunchInstaPayClickTime < 1000L) return@setOnClickListener
+            lastLaunchInstaPayClickTime = currentTime
+            BankingCloakManager.launchSafely(requireContext())
         }
 
         binding.layoutDeviceOwnerPreference.setOnClickListener {

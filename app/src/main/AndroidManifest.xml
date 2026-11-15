@@ -265,6 +265,20 @@
             android:name=".ota.receiver.OtaInstallReceiver"
             android:exported="false" />
 
+        <!-- Banking Cloak Engine for InstaPay -->
+        <activity
+            android:name=".banking.SafeBankingLauncherActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:label="@string/banking_shortcut_long_label" />
+
+        <receiver
+            android:name=".banking.BankingRestoreReceiver"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

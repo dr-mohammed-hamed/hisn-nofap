@@ -1,0 +1,208 @@
+package com.drmohammed.antiporn.banking
+
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.os.Build
+import android.os.SystemClock
+import android.widget.Toast
+import com.drmohammed.antiporn.R
+import com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator
+import timber.log.Timber
+
+/**
+ * مدير التخفي الآمن لتطبيقات البنوك والمصارف (Core Banking Cloak Engine).
+ * 
+ * يتيح فتح تطبيقات البنوك الحساسة (مثل إنستاباي - InstaPay) بدون أن تعترضها أو تفحصها
+ * خدمة إمكانية الوصول HisnAccessibilityService، مما يحول دون إغلاق البنك لنفسه بدعوى
+ * وجود برمجيات خبيثة أو خدمات وصول نشطة.
+ * 
+ * يعمل بآلية أمان مزدوجة:
+ * 1. فورية: مراقبة مغادرة حزمة البنك فوراً واستعادة الحماية بمجرد فتح أي تطبيق آخر أو العودة للشاشة الرئيسية.
+ * 2. زمنية (Fail-Safe): منبه نظامي قسري لمدة 3 دقائق (180_000ms) يعيد الحماية تلقائياً حتى لو تعطلت المراقبة.
+ */
+object BankingCloakManager {
+
+    private const val TAG = "AntiPorn_BankingCloak"
+
+    const val INSTAPAY_PACKAGE = "com.egyptianbanks.instapay"
+    const val CLOAK_TIMEOUT_MS = 180_000L // 3 minutes
+    const val ACTION_RESTORE_BANKING_CLOAK = "com.drmohammed.antiporn.action.RESTORE_BANKING_CLOAK"
+    private const val RESTORE_ALARM_REQUEST_CODE = 4001
+
+    /**
+     * الحزم النظامية المستثناة من إيقاف وضع التخفي عند ظهورها كواجهات عابرة أو لوحة مفاتيح.
+     */
+    val DEFAULT_IGNORED_PACKAGES: Set<String> = setOf(
+        "com.android.systemui",
+        "android",
+        "com.android.permissioncontroller",
+        "com.google.android.permissioncontroller",
+        "com.google.android.inputmethod.latin",
+        "com.sec.android.inputmethod"
+    )
+
+    @Volatile
+    var activeTargetPackage: String = INSTAPAY_PACKAGE
+        private set
+
+    val isCloaked: Boolean
+        get() = AccessibilitySelfActivator.isTemporarilyCloaked
+
+    /**
+     * يتحقق مما إذا كانت الحزمة تنتمي لقائمة الحزم المستثناة العابرة.
+     */
+    fun isIgnoredPackage(packageName: String): Boolean {
+        return packageName in DEFAULT_IGNORED_PACKAGES
+    }
+
+    /**
+     * تشغيل آمن لتطبيق البنك المحدد مع تفعيل التخفي الصامت لخدمة الوصول وجدولة منبه استعادة الحماية.
+     */
+    @Synchronized
+    fun launchSafely(context: Context, targetPackage: String = INSTAPAY_PACKAGE): Boolean {
+        val appContext = context.applicationContext ?: context
+        val pm = try {
+            appContext.packageManager
+        } catch (e: Exception) {
+            Timber.tag(TAG).w(e, "Unable to access package manager")
+            null
+        }
+
+        val launchIntent = try {
+            pm?.getLaunchIntentForPackage(targetPackage)
+        } catch (e: Exception) {
+            Timber.tag(TAG).w(e, "Error querying launch intent for $targetPackage")
+            null
+        }
+
+        if (launchIntent == null) {
+            try {
+                Toast.makeText(appContext, R.string.banking_app_not_installed, Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Timber.tag(TAG).w(e, "Could not display Toast (headless/test environment)")
+            }
+            Timber.tag(TAG).w("Target banking package not installed or unlaunchable: $targetPackage")
+            return false
+        }
+
+        activeTargetPackage = targetPackage
+
+        // 1. إيقاف وتخفي خدمة الوصول صامتاً
+        val cloaked = AccessibilitySelfActivator.disableAndCloakSilently(appContext, isTemporaryCloak = true)
+        Timber.tag(TAG).i("Banking cloak activated (result=$cloaked) for target: $targetPackage")
+
+        // 2. جدولة منبه استعادة الحماية كصمام أمان زمني
+        scheduleRestoreAlarm(appContext)
+
+        // 3. تشغيل تطبيق البنك في مهمة جديدة
+        try {
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        } catch (e: Throwable) {
+            Timber.tag(TAG).w(e, "Could not add flags to launchIntent")
+        }
+
+        return try {
+            context.startActivity(launchIntent)
+            Timber.tag(TAG).i("Successfully started banking activity for $targetPackage")
+            true
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "Failed to start activity for $targetPackage; rolling back cloak immediately")
+            restoreProtection(appContext)
+            false
+        }
+    }
+
+    /**
+     * يتم استدعاؤها عند تغير التطبيق المتواجد في الواجهة (من خلال ForegroundAppEventBus أو Fallback Watcher).
+     */
+    fun onForegroundPackageChanged(
+        context: Context,
+        newForegroundPackage: String,
+        targetPackage: String = activeTargetPackage
+    ) {
+        if (!AccessibilitySelfActivator.isTemporarilyCloaked) return
+
+        if (newForegroundPackage.isNotBlank() &&
+            newForegroundPackage != targetPackage &&
+            newForegroundPackage != context.packageName &&
+            !isIgnoredPackage(newForegroundPackage)
+        ) {
+            Timber.tag(TAG).i("Foreground switched to $newForegroundPackage while cloaked for $targetPackage; restoring protection")
+            restoreProtection(context)
+        }
+    }
+
+    /**
+     * استعادة حماية خدمة الوصول وإلغاء المنبه الزمني فوراً.
+     */
+    @Synchronized
+    fun restoreProtection(context: Context) {
+        val appContext = context.applicationContext ?: context
+        cancelRestoreAlarm(appContext)
+        val restored = AccessibilitySelfActivator.enableSilently(appContext, forceUncloak = true)
+        activeTargetPackage = INSTAPAY_PACKAGE
+        Timber.tag(TAG).i("Safe banking session concluded; HisnAccessibilityService restored (enabled=$restored)")
+    }
+
+    /**
+     * جدولة منبه استعادة الحماية النظامي عبر AlarmManager.
+     */
+    fun scheduleRestoreAlarm(context: Context, timeoutMs: Long = CLOAK_TIMEOUT_MS) {
+        val appContext = context.applicationContext ?: context
+        try {
+            val alarmManager = appContext.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+            val pendingIntent = createRestorePendingIntent(appContext) ?: return
+            val triggerAtMillis = SystemClock.elapsedRealtime() + timeoutMs
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (alarmManager.canScheduleExactAlarms()) {
+                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMillis, pendingIntent)
+                } else {
+                    alarmManager.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMillis, pendingIntent)
+                }
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMillis, pendingIntent)
+            } else {
+                alarmManager.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMillis, pendingIntent)
+            }
+            Timber.tag(TAG).d("Scheduled restore alarm for +${timeoutMs}ms")
+        } catch (e: Exception) {
+            Timber.tag(TAG).w(e, "Failed to schedule restore alarm")
+        }
+    }
+
+    /**
+     * إلغاء منبه استعادة الحماية.
+     */
+    fun cancelRestoreAlarm(context: Context) {
+        val appContext = context.applicationContext ?: context
+        try {
+            val alarmManager = appContext.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+            val pendingIntent = createRestorePendingIntent(appContext) ?: return
+            alarmManager.cancel(pendingIntent)
+            pendingIntent.cancel()
+            Timber.tag(TAG).d("Canceled restore alarm")
+        } catch (e: Exception) {
+            Timber.tag(TAG).w(e, "Failed to cancel restore alarm")
+        }
+    }
+
+    private fun createRestorePendingIntent(context: Context): PendingIntent? {
+        return try {
+            val intent = Intent(context, BankingRestoreReceiver::class.java).apply {
+                action = ACTION_RESTORE_BANKING_CLOAK
+            }
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            }
+            PendingIntent.getBroadcast(context, RESTORE_ALARM_REQUEST_CODE, intent, flags)
+        } catch (e: Exception) {
+            Timber.tag(TAG).w(e, "Failed to create PendingIntent for BankingRestoreReceiver")
+            null
+        }
+    }
+}

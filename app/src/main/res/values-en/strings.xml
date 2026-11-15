@@ -1056,4 +1056,15 @@
     <string name="toast_reset_ward_qr_failed">Failed to send QR unlock command, please check your network connection</string>
     <string name="notif_self_control_qr_reset_by_guardian_title">Self-Control QR Lock Reset</string>
     <string name="notif_self_control_qr_reset_by_guardian_msg">Your guardian has remotely reset and removed the Self-Control QR lock.</string>
+
+    <!-- Safe Banking Cloak -->
+    <string name="banking_app_not_installed">InstaPay app is not installed on this device</string>
+    <string name="banking_shortcut_label">InstaPay</string>
+    <string name="banking_shortcut_long_label">Safe InstaPay</string>
+    <string name="card_banking_title">Banking &amp; InstaPay</string>
+    <string name="card_banking_desc">One-tap launch for InstaPay without protection conflicts, with auto-restore upon exit.</string>
+    <string name="btn_pin_instapay_shortcut">Pin to Home Screen</string>
+    <string name="btn_launch_instapay_now">Launch InstaPay Now</string>
+    <string name="shortcut_pin_success">Shortcut pin request sent to home screen</string>
+    <string name="shortcut_not_supported">Home launcher does not support pinned shortcuts</string>
 </resources>
