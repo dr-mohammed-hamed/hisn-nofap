@@ -470,7 +470,6 @@ class QrScannerBottomSheet : BottomSheetDialogFragment() {
 
     companion object {
         const val TAG = "QrScannerBottomSheet"
-        const val REQUEST_KEY_TEST_SCAN = "qr_scanner_test_scan"
         const val EXTRA_REQUEST_KEY = "extra_request_key"
         const val EXTRA_PAYLOAD = "extra_payload"
         const val RESULT_KEY_VERIFIED = "result_key_verified"

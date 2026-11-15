@@ -47,27 +47,6 @@ class QrExportDialog : BottomSheetDialogFragment() {
     private lateinit var btnProceedTestScan: MaterialButton
     private lateinit var btnCloseExportDialog: MaterialButton
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        parentFragmentManager.setFragmentResultListener(
-            QrScannerBottomSheet.REQUEST_KEY_TEST_SCAN,
-            this
-        ) { _, bundle ->
-            val verified = bundle.getBoolean(QrScannerBottomSheet.RESULT_KEY_VERIFIED, false)
-            if (verified) {
-                val ctx = context?.applicationContext ?: return@setFragmentResultListener
-                val qrManager = SelfControlQrManager.getInstance(ctx)
-                qrManager.setQrLockEnabled(true)
-                Toast.makeText(ctx, R.string.qr_wizard_test_success_toast, Toast.LENGTH_LONG).show()
-                parentFragmentManager.setFragmentResult(
-                    REQUEST_KEY_SETUP_COMPLETED,
-                    Bundle().apply { putBoolean(RESULT_KEY_ENABLED, true) }
-                )
-                dismissAllowingStateLoss()
-            }
-        }
-    }
-
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,
@@ -118,20 +97,21 @@ class QrExportDialog : BottomSheetDialogFragment() {
         }
 
         btnProceedTestScan.setOnClickListener {
-            launchTestScan()
+            val ctx = context?.applicationContext ?: return@setOnClickListener
+            btnProceedTestScan.isEnabled = false
+            val qrManager = SelfControlQrManager.getInstance(ctx)
+            qrManager.setQrLockEnabled(true)
+            Toast.makeText(ctx, R.string.qr_wizard_test_success_toast, Toast.LENGTH_LONG).show()
+            parentFragmentManager.setFragmentResult(
+                REQUEST_KEY_SETUP_COMPLETED,
+                Bundle().apply { putBoolean(RESULT_KEY_ENABLED, true) }
+            )
+            dismissAllowingStateLoss()
         }
 
         btnCloseExportDialog.setOnClickListener {
             dismiss()
         }
-    }
-
-    private fun launchTestScan() {
-        val parentFm = parentFragmentManager
-        if (parentFm.isStateSaved || parentFm.findFragmentByTag(QrScannerBottomSheet.TAG) != null) return
-
-        QrScannerBottomSheet.newInstance(QrScannerBottomSheet.REQUEST_KEY_TEST_SCAN)
-            .show(parentFm, QrScannerBottomSheet.TAG)
     }
 
     private fun shareQrCode(bitmap: Bitmap) {
