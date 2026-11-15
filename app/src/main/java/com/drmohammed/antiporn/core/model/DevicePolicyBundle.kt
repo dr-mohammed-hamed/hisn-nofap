@@ -57,7 +57,7 @@ data class DevicePolicyBundle(
     val lastSelfModifiedAt: Long? = null,
     val waqfaConfig: WaqfaConfig = WaqfaConfig(),
     val pageShieldConfig: com.drmohammed.antiporn.pageshield.model.PageShieldConfig = com.drmohammed.antiporn.pageshield.model.PageShieldConfig(),
-    val selfControlPageShieldAllowed: Boolean = true,
+    val selfControlPageShieldAllowed: Boolean = false,
     val version: Long = 1L,
     val updatedAt: Long = 0L,
     val remoteSelfControlResetRequestedAt: Long? = null
@@ -313,7 +313,7 @@ data class DevicePolicyBundle(
             val remoteResetAt = (map["remoteSelfControlResetRequestedAt"] as? Number)?.toLong()
             val waqfa = WaqfaConfig.fromMap(map["waqfaConfig"])
             val pageShield = com.drmohammed.antiporn.pageshield.model.PageShieldConfig.fromMap(map["pageShieldConfig"])
-            val selfControlPageShieldAllowed = (map["selfControlPageShieldAllowed"] as? Boolean) ?: true
+            val selfControlPageShieldAllowed = (map["selfControlPageShieldAllowed"] as? Boolean) ?: false
 
             val version = (map["version"] as? Number)?.toLong() ?: 1L
             val updatedAt = (map["updatedAt"] as? Number)?.toLong() ?: 0L
@@ -426,7 +426,7 @@ data class DevicePolicyBundle(
                 val remoteResetAt = if (json.has("remoteSelfControlResetRequestedAt") && !json.isNull("remoteSelfControlResetRequestedAt")) json.optLong("remoteSelfControlResetRequestedAt") else null
                 val waqfa = WaqfaConfig.fromJson(json.optJSONObject("waqfaConfig"))
                 val pageShield = com.drmohammed.antiporn.pageshield.model.PageShieldConfig.fromJson(json.optJSONObject("pageShieldConfig"))
-                val selfControlPageShieldAllowed = json.optBoolean("selfControlPageShieldAllowed", true)
+                val selfControlPageShieldAllowed = json.optBoolean("selfControlPageShieldAllowed", false)
 
                 DevicePolicyBundle(
                     curfewStartHour = json.optInt("curfewStartHour", com.drmohammed.antiporn.curfew.CurfewConfig.START_HOUR).coerceIn(0, 23),

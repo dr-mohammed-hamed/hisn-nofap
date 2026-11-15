@@ -676,6 +676,8 @@
     <string name="self_control_perm_apps_desc">Allow ward to add/exclude apps from blacklist</string>
     <string name="self_control_perm_waqfa">Waqfa System</string>
     <string name="self_control_perm_waqfa_desc">Allow ward to adjust break periods and daily limits</string>
+    <string name="self_control_perm_page_shield">Page Shield (Shorts &amp; Reels)</string>
+    <string name="self_control_perm_page_shield_desc">Allow ward to configure and toggle Shorts &amp; Reels blocking within apps</string>
     <string name="self_control_perm_new_apps">Approve New Applications</string>
     <string name="self_control_perm_new_apps_desc">Allow ward to self-approve newly installed apps</string>
     <string name="guardian_qr_reset_section_title">QR Code Lock</string>

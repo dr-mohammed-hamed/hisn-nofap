@@ -106,6 +106,7 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
         binding.switchPermWeb.isChecked = policy.selfControlWebAllowed
         binding.switchPermApps.isChecked = policy.selfControlAppsAllowed
         binding.switchPermWaqfa.isChecked = policy.selfControlWaqfaAllowed
+        binding.switchPermPageShield.isChecked = policy.selfControlPageShieldAllowed
         binding.switchPermNewApps.isChecked = policy.selfControlNewAppsAllowed
 
         updateGranularContainerState(policy.isSelfControlAllowed)
@@ -118,12 +119,14 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
         binding.switchPermWeb.isEnabled = isMasterAllowed
         binding.switchPermApps.isEnabled = isMasterAllowed
         binding.switchPermWaqfa.isEnabled = isMasterAllowed
+        binding.switchPermPageShield.isEnabled = isMasterAllowed
         binding.switchPermNewApps.isEnabled = isMasterAllowed
 
         binding.cardPermCurfew.isEnabled = isMasterAllowed
         binding.cardPermWeb.isEnabled = isMasterAllowed
         binding.cardPermApps.isEnabled = isMasterAllowed
         binding.cardPermWaqfa.isEnabled = isMasterAllowed
+        binding.cardPermPageShield.isEnabled = isMasterAllowed
         binding.cardPermNewApps.isEnabled = isMasterAllowed
     }
 
@@ -137,12 +140,14 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
             binding.switchPermWeb.isEnabled = false
             binding.switchPermApps.isEnabled = false
             binding.switchPermWaqfa.isEnabled = false
+            binding.switchPermPageShield.isEnabled = false
             binding.switchPermNewApps.isEnabled = false
 
             binding.cardPermCurfew.isEnabled = false
             binding.cardPermWeb.isEnabled = false
             binding.cardPermApps.isEnabled = false
             binding.cardPermWaqfa.isEnabled = false
+            binding.cardPermPageShield.isEnabled = false
             binding.cardPermNewApps.isEnabled = false
         }
         binding.btnResetWardQrLock.isEnabled = enabled
@@ -169,38 +174,47 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
             if (!isPushing && binding.switchPermWaqfa.isEnabled) binding.switchPermWaqfa.performClick()
         }
 
+        binding.cardPermPageShield.setOnClickListener {
+            if (!isPushing && binding.switchPermPageShield.isEnabled) binding.switchPermPageShield.performClick()
+        }
+
         binding.cardPermNewApps.setOnClickListener {
             if (!isPushing && binding.switchPermNewApps.isEnabled) binding.switchPermNewApps.performClick()
         }
 
-        binding.switchMasterSelfControl.setOnCheckedChangeListener { buttonView, isChecked ->
-            if (isBinding || !buttonView.isPressed) return@setOnCheckedChangeListener
+        binding.switchMasterSelfControl.setOnCheckedChangeListener { _, isChecked ->
+            if (isBinding) return@setOnCheckedChangeListener
             updateGranularContainerState(isChecked)
             pushUpdatedPolicy { it.copy(isSelfControlAllowed = isChecked) }
         }
 
-        binding.switchPermCurfew.setOnCheckedChangeListener { buttonView, isChecked ->
-            if (isBinding || !buttonView.isPressed) return@setOnCheckedChangeListener
+        binding.switchPermCurfew.setOnCheckedChangeListener { _, isChecked ->
+            if (isBinding) return@setOnCheckedChangeListener
             pushUpdatedPolicy { it.copy(selfControlCurfewAllowed = isChecked) }
         }
 
-        binding.switchPermWeb.setOnCheckedChangeListener { buttonView, isChecked ->
-            if (isBinding || !buttonView.isPressed) return@setOnCheckedChangeListener
+        binding.switchPermWeb.setOnCheckedChangeListener { _, isChecked ->
+            if (isBinding) return@setOnCheckedChangeListener
             pushUpdatedPolicy { it.copy(selfControlWebAllowed = isChecked) }
         }
 
-        binding.switchPermApps.setOnCheckedChangeListener { buttonView, isChecked ->
-            if (isBinding || !buttonView.isPressed) return@setOnCheckedChangeListener
+        binding.switchPermApps.setOnCheckedChangeListener { _, isChecked ->
+            if (isBinding) return@setOnCheckedChangeListener
             pushUpdatedPolicy { it.copy(selfControlAppsAllowed = isChecked) }
         }
 
-        binding.switchPermWaqfa.setOnCheckedChangeListener { buttonView, isChecked ->
-            if (isBinding || !buttonView.isPressed) return@setOnCheckedChangeListener
+        binding.switchPermWaqfa.setOnCheckedChangeListener { _, isChecked ->
+            if (isBinding) return@setOnCheckedChangeListener
             pushUpdatedPolicy { it.copy(selfControlWaqfaAllowed = isChecked) }
         }
 
-        binding.switchPermNewApps.setOnCheckedChangeListener { buttonView, isChecked ->
-            if (isBinding || !buttonView.isPressed) return@setOnCheckedChangeListener
+        binding.switchPermPageShield.setOnCheckedChangeListener { _, isChecked ->
+            if (isBinding) return@setOnCheckedChangeListener
+            pushUpdatedPolicy { it.copy(selfControlPageShieldAllowed = isChecked) }
+        }
+
+        binding.switchPermNewApps.setOnCheckedChangeListener { _, isChecked ->
+            if (isBinding) return@setOnCheckedChangeListener
             pushUpdatedPolicy { it.copy(selfControlNewAppsAllowed = isChecked) }
         }
 

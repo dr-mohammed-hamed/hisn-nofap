@@ -914,6 +914,8 @@
     <string name="self_control_perm_apps_desc">السماح للمكفول بإضافة واستثناء تطبيقات من القائمة السوداء</string>
     <string name="self_control_perm_waqfa">نظام وقفة</string>
     <string name="self_control_perm_waqfa_desc">السماح للمكفول بضبط فترات الاستراحة والحد اليومي</string>
+    <string name="self_control_perm_page_shield">درع الصفحات (Shorts والريلز)</string>
+    <string name="self_control_perm_page_shield_desc">السماح للمكفول بضبط وتعديل حجب مقاطع Shorts داخل التطبيقات</string>
     <string name="self_control_perm_new_apps">السماح بالتطبيقات الجديدة</string>
     <string name="self_control_perm_new_apps_desc">السماح للمكفول بالموافقة الذاتية على التطبيقات المثبتة حديثاً</string>
     <string name="guardian_qr_reset_section_title">رمز الاستجابة السريعة (QR)</string>

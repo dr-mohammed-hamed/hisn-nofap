@@ -337,6 +337,52 @@ class DevicePolicyBundleTest {
     }
 
     @Test
+    fun testGranularSelfControlPermissions_defaultsAndSerializationEdgeCases() {
+        val defaultBundle = DevicePolicyBundle()
+        assertTrue(defaultBundle.selfControlCurfewAllowed)
+        assertFalse(defaultBundle.selfControlWebAllowed)
+        assertFalse(defaultBundle.selfControlAppsAllowed)
+        assertTrue(defaultBundle.selfControlWaqfaAllowed)
+        assertFalse(defaultBundle.selfControlPageShieldAllowed)
+        assertFalse(defaultBundle.selfControlNewAppsAllowed)
+
+        val jsonExplicit = """
+            {
+                "selfControlCurfewAllowed": false,
+                "selfControlWebAllowed": true,
+                "selfControlAppsAllowed": true,
+                "selfControlWaqfaAllowed": false,
+                "selfControlPageShieldAllowed": true,
+                "selfControlNewAppsAllowed": true
+            }
+        """.trimIndent()
+        val parsedJson = DevicePolicyBundle.fromJson(jsonExplicit)
+        assertFalse(parsedJson.selfControlCurfewAllowed)
+        assertTrue(parsedJson.selfControlWebAllowed)
+        assertTrue(parsedJson.selfControlAppsAllowed)
+        assertFalse(parsedJson.selfControlWaqfaAllowed)
+        assertTrue(parsedJson.selfControlPageShieldAllowed)
+        assertTrue(parsedJson.selfControlNewAppsAllowed)
+
+        val roundtrip = DevicePolicyBundle.fromJson(parsedJson.toJson())
+        assertEquals(parsedJson.selfControlCurfewAllowed, roundtrip.selfControlCurfewAllowed)
+        assertEquals(parsedJson.selfControlWebAllowed, roundtrip.selfControlWebAllowed)
+        assertEquals(parsedJson.selfControlAppsAllowed, roundtrip.selfControlAppsAllowed)
+        assertEquals(parsedJson.selfControlWaqfaAllowed, roundtrip.selfControlWaqfaAllowed)
+        assertEquals(parsedJson.selfControlPageShieldAllowed, roundtrip.selfControlPageShieldAllowed)
+        assertEquals(parsedJson.selfControlNewAppsAllowed, roundtrip.selfControlNewAppsAllowed)
+
+        val map = parsedJson.toMap()
+        val fromMap = DevicePolicyBundle.fromMap(map)
+        assertEquals(parsedJson.selfControlCurfewAllowed, fromMap.selfControlCurfewAllowed)
+        assertEquals(parsedJson.selfControlWebAllowed, fromMap.selfControlWebAllowed)
+        assertEquals(parsedJson.selfControlAppsAllowed, fromMap.selfControlAppsAllowed)
+        assertEquals(parsedJson.selfControlWaqfaAllowed, fromMap.selfControlWaqfaAllowed)
+        assertEquals(parsedJson.selfControlPageShieldAllowed, fromMap.selfControlPageShieldAllowed)
+        assertEquals(parsedJson.selfControlNewAppsAllowed, fromMap.selfControlNewAppsAllowed)
+    }
+
+    @Test
     fun testGuardianPolicyConstruction_ensuresSupervisionInvariants() {
         val baseDefault = DevicePolicyBundle.defaultPolicy()
         assertFalse(baseDefault.isSupervised)

@@ -99,7 +99,7 @@ class PageShieldUnitTest {
         assertNotNull(parsed)
         assertFalse(parsed.pageShieldConfig.isEnabled)
         assertTrue(parsed.pageShieldConfig.appPolicies.isEmpty())
-        assertTrue(parsed.selfControlPageShieldAllowed)
+        assertFalse(parsed.selfControlPageShieldAllowed)
 
         // Bundle roundtrip with active PageShieldConfig
         val activePolicy = AppPageShieldPolicy(
@@ -113,14 +113,14 @@ class PageShieldUnitTest {
         )
         val bundleWithShield = parsed.copy(
             pageShieldConfig = activeConfig,
-            selfControlPageShieldAllowed = false
+            selfControlPageShieldAllowed = true
         )
 
         val roundtripJson = bundleWithShield.toJson()
         val roundtripRestored = DevicePolicyBundle.fromJson(roundtripJson)
 
         assertTrue(roundtripRestored.pageShieldConfig.isEnabled)
-        assertFalse(roundtripRestored.selfControlPageShieldAllowed)
+        assertTrue(roundtripRestored.selfControlPageShieldAllowed)
         assertTrue(roundtripRestored.pageShieldConfig.hasActiveRulesForPackage(PageShieldRegistry.PACKAGE_YOUTUBE))
     }
 
