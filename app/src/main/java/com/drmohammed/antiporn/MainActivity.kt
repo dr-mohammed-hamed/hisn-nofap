@@ -261,7 +261,6 @@ class MainActivity : AppCompatActivity(),
         super.onResume()
         val isDeviceOwner = ProtectionEngine.isDeviceOwner(this)
         if (isDeviceOwner) {
-            DnsWatchdogService.startService(this)
             CurfewScheduler.scheduleNextAlarms(this)
             CurfewEnforcer.syncBlockStateAsync(this)
             lifecycleScope.launch(Dispatchers.IO) {
@@ -271,6 +270,8 @@ class MainActivity : AppCompatActivity(),
                             triggerEnforcement(showToast = false)
                         }
                     }
+                } else if (!DnsWatchdogService.isRunning && !com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isTeardownInProgress) {
+                    DnsWatchdogService.startService(this@MainActivity)
                 }
             }
             com.drmohammed.antiporn.data.repository.ApprovalRepository.getInstance(this).syncZeroTrustBaselineAndReconcileAsync()

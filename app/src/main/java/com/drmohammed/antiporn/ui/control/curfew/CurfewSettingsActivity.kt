@@ -258,15 +258,7 @@ class CurfewSettingsActivity : AppCompatActivity() {
                     if (isRemote) {
                         policyRepo.pushPolicyToWard(wardId, updatedPolicy)
                     } else {
-                        val saved = policyRepo.saveAndEnforceSelfPolicy(updatedPolicy)
-                        if (saved) {
-                            CurfewScheduler.scheduleNextAlarms(app)
-                            CurfewEnforcer.syncBlockState(app)
-                            withContext(Dispatchers.Main + NonCancellable) {
-                                ProtectionEngine.applyAllAsync(app)
-                            }
-                        }
-                        saved
+                        policyRepo.saveAndEnforceSelfPolicy(updatedPolicy)
                     }
                 }
 

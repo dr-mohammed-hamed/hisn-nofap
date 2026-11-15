@@ -182,6 +182,7 @@ internal object CurfewVpnDnsBridge {
 
     @RequiresApi(Build.VERSION_CODES.Q)
     private fun ensureOpportunisticDnsForLocalVpnInternal(context: Context): Boolean {
+        com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.markInternalDnsMutation()
         var dpmOk = true
         val dpmMode = readDpmPrivateDnsMode(context)
         if (dpmMode != DevicePolicyManager.PRIVATE_DNS_MODE_OPPORTUNISTIC) {
@@ -320,13 +321,14 @@ internal object CurfewVpnDnsBridge {
         val globalSpecifier = readGlobalSetting(context, "private_dns_specifier")
         val modeFromDpm = readDpmPrivateDnsMode(context)
 
-        val isVpnExpectedAndActive = CurfewBlackholeVpnService.isRunning &&
-            CurfewBlackholeVpnService.evaluateRequiredMode(context) != CurfewBlackholeVpnService.VpnMode.IDLE &&
+        val requiredVpnMode = CurfewBlackholeVpnService.evaluateRequiredMode(context)
+        val isVpnExpected = requiredVpnMode != CurfewBlackholeVpnService.VpnMode.IDLE &&
             isVpnConsentGranted(context)
 
-        if (isVpnExpectedAndActive) {
+        if (isVpnExpected) {
             val isHealthy = isLocalVpnDnsStateConsistent(modeFromDpm, globalMode, globalSpecifier)
-            return if (isHealthy && isDnsLocked) {
+            val isVpnServiceUp = CurfewBlackholeVpnService.isRunning
+            return if (isHealthy && isDnsLocked && isVpnServiceUp) {
                 ShieldStatus.Active(context.getString(R.string.shield_dns_local_filter_active))
             } else {
                 ShieldStatus.NeedsEnforcement(context.getString(R.string.shield_dns_local_filter_needs_sync))
@@ -365,6 +367,7 @@ internal object CurfewVpnDnsBridge {
         context: Context,
         targetHost: String
     ): Pair<Int, Boolean> {
+        com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.markInternalDnsMutation()
         var dnsSetResult = DevicePolicyManager.PRIVATE_DNS_SET_NO_ERROR
         var usedFallback = false
         val currentMode = readDpmPrivateDnsMode(context)
@@ -521,7 +524,7 @@ internal object CurfewVpnDnsBridge {
                 }
                 var vpnWasTornDown = false
                 if (CurfewBlackholeVpnService.isServiceOrTunnelActive()) {
-                    CurfewBlackholeVpnService.forceReleaseVpn(context)
+                    CurfewBlackholeVpnService.forceReleaseVpnAndAwait(context, 2000L)
                     vpnWasTornDown = true
                 }
                 if (vpnWasTornDown || !isStandaloneDnsShieldActive(context)) {

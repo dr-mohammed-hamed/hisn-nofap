@@ -78,54 +78,56 @@ internal class PolicyEnforcementHandler(
         bundle: DevicePolicyBundle,
         effectivePreviousPolicy: DevicePolicyBundle
     ) {
-        var appliedSuccessfully = false
-        try {
-            val isDeviceOwner = SafeDpmGateway.isDeviceOwner(appContext)
-            if (isDeviceOwner) {
-                enforceTimeAndDatePolicy(bundle)
-            }
-
-            // Reschedule curfew alarms (using the updated timezone) and sync curfew/VPN state
-            CurfewScheduler.scheduleNextAlarms(appContext)
-            CurfewConfig.setVpnBypassedPackages(appContext, bundle.curfewVpnBypassPackages)
-            CurfewEnforcer.syncBlockState(appContext)
-
-            if (isDeviceOwner) {
-                SafeDpmGateway.executeRaw(
-                    context = appContext,
-                    tag = BlackBoxRecorder.TAG_SHIELD,
-                    actionName = "applyBrowserAndDnsShields"
-                ) { dpm, admin ->
-                    BrowserShield.applyBrowserRestrictions(dpm, admin, bundle)
-                    DnsShield.apply(appContext, dpm, admin)
+        com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.runInternalTransitionSuspend {
+            var appliedSuccessfully = false
+            try {
+                val isDeviceOwner = SafeDpmGateway.isDeviceOwner(appContext)
+                if (isDeviceOwner) {
+                    enforceTimeAndDatePolicy(bundle)
                 }
 
-                enforceCustomBlacklistSuspension(bundle)
+                // Reschedule curfew alarms (using the updated timezone) and sync curfew/VPN state
+                CurfewScheduler.scheduleNextAlarms(appContext)
+                CurfewConfig.setVpnBypassedPackages(appContext, bundle.curfewVpnBypassPackages)
+                CurfewEnforcer.syncBlockState(appContext)
+                CurfewBlackholeVpnService.syncPolicy(appContext)
 
-                val approvalRepo = ApprovalRepository.getInstance(appContext)
-                reconcileBlacklistAndApprovals(bundle, effectivePreviousPolicy, approvalRepo)
-                releaseNewlyWhitelistedIfAllowed(bundle, approvalRepo)
-                reconcileProtectedPackages(bundle, effectivePreviousPolicy)
-            }
+                if (isDeviceOwner) {
+                    SafeDpmGateway.executeRaw(
+                        context = appContext,
+                        tag = BlackBoxRecorder.TAG_SHIELD,
+                        actionName = "applyBrowserAndDnsShields"
+                    ) { dpm, admin ->
+                        BrowserShield.applyBrowserRestrictions(dpm, admin, bundle)
+                        DnsShield.apply(appContext, dpm, admin)
+                    }
 
-            ZeroTrustForegroundWatcher.syncWatcherState(appContext)
-            AppInventoryManager.getInstance(appContext).syncInventoryToCloud()
-            CurfewBlackholeVpnService.syncPolicy(appContext)
-            WaqfaSessionManager.getInstance(appContext).updateConfig(bundle.waqfaConfig)
+                    enforceCustomBlacklistSuspension(bundle)
 
-            synchronized(baselineLock) {
-                lastAppliedPolicyBundle = bundle
-            }
-            appliedSuccessfully = true
-            Log.i(TAG, "Successfully applied policy bundle v${bundle.version} to system engines")
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            Log.e(TAG, "Error applying policy bundle to system engines", e)
-        } finally {
-            if (!appliedSuccessfully) {
+                    val approvalRepo = ApprovalRepository.getInstance(appContext)
+                    reconcileBlacklistAndApprovals(bundle, effectivePreviousPolicy, approvalRepo)
+                    releaseNewlyWhitelistedIfAllowed(bundle, approvalRepo)
+                    reconcileProtectedPackages(bundle, effectivePreviousPolicy)
+                }
+
+                ZeroTrustForegroundWatcher.syncWatcherState(appContext)
+                AppInventoryManager.getInstance(appContext).syncInventoryToCloud()
+                WaqfaSessionManager.getInstance(appContext).updateConfig(bundle.waqfaConfig)
+
                 synchronized(baselineLock) {
-                    if (lastAppliedPolicyBundle == null || pendingBaselinePreviousPolicy == null) {
-                        pendingBaselinePreviousPolicy = effectivePreviousPolicy
+                    lastAppliedPolicyBundle = bundle
+                }
+                appliedSuccessfully = true
+                Log.i(TAG, "Successfully applied policy bundle v${bundle.version} to system engines")
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                Log.e(TAG, "Error applying policy bundle to system engines", e)
+            } finally {
+                if (!appliedSuccessfully) {
+                    synchronized(baselineLock) {
+                        if (lastAppliedPolicyBundle == null || pendingBaselinePreviousPolicy == null) {
+                            pendingBaselinePreviousPolicy = effectivePreviousPolicy
+                        }
                     }
                 }
             }

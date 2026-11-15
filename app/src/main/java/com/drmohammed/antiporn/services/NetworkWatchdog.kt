@@ -183,6 +183,9 @@ class NetworkWatchdog {
 
                             val event = classifyCapabilityTransition(previous, current, netKey) ?: return
                             recordTransitionEvent(appContext, event)
+                            if (event.action == "NET_VALIDATED") {
+                                onNetworkAvailable.invoke()
+                            }
                         } catch (e: Exception) {
                             Log.e(TAG, "Error handling onCapabilitiesChanged for network=$network", e)
                         }

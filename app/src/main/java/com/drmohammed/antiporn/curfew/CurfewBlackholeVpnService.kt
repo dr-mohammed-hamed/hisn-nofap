@@ -498,6 +498,7 @@ class CurfewBlackholeVpnService : VpnService() {
             Log.w(TAG, "Error closing VPN interface descriptor", e)
         } finally {
             vpnInterface = null
+            completeTunnelStoppedWaiters(true)
         }
 
         try {
@@ -531,6 +532,7 @@ class CurfewBlackholeVpnService : VpnService() {
         isServiceDestroyed = true
         if (synchronized(companionStateLock) { activeService == null || activeService?.get() === this }) {
             completeTunnelWaiters(false)
+            completeTunnelStoppedWaiters(true)
         }
         super.onDestroy()
         Log.i(TAG, "CurfewBlackholeVpnService destroyed")
@@ -583,6 +585,9 @@ class CurfewBlackholeVpnService : VpnService() {
         @Volatile
         private var tunnelReadyDeferred: CompletableDeferred<Boolean>? = null
 
+        @Volatile
+        private var tunnelStoppedDeferred: CompletableDeferred<Boolean>? = null
+
         private fun prepareTunnelWaiter(): CompletableDeferred<Boolean> = synchronized(companionStateLock) {
             tunnelReadyDeferred?.takeIf { !it.isCompleted }
                 ?: CompletableDeferred<Boolean>().also { tunnelReadyDeferred = it }
@@ -593,6 +598,18 @@ class CurfewBlackholeVpnService : VpnService() {
                 tunnelReadyDeferred.also { tunnelReadyDeferred = null }
             }
             deferred?.complete(ready)
+        }
+
+        private fun prepareTunnelStoppedWaiter(): CompletableDeferred<Boolean> = synchronized(companionStateLock) {
+            tunnelStoppedDeferred?.takeIf { !it.isCompleted }
+                ?: CompletableDeferred<Boolean>().also { tunnelStoppedDeferred = it }
+        }
+
+        private fun completeTunnelStoppedWaiters(stopped: Boolean) {
+            val deferred = synchronized(companionStateLock) {
+                tunnelStoppedDeferred.also { tunnelStoppedDeferred = null }
+            }
+            deferred?.complete(stopped)
         }
 
         fun awaitTunnelReadyBlocking(timeoutMs: Long = 1_500L): Boolean {
@@ -675,12 +692,34 @@ class CurfewBlackholeVpnService : VpnService() {
         }
 
         fun forceReleaseVpn(context: Context) {
+            forceReleaseVpnAndAwait(context, 1000L)
+        }
+
+        fun forceReleaseVpnAndAwait(context: Context, timeoutMs: Long = 2000L): Boolean {
             if (!isServiceOrTunnelActive()) {
-                Log.d(TAG, "VPN already inactive; skipping forceReleaseVpn")
-                return
+                Log.d(TAG, "VPN already inactive; skipping forceReleaseVpnAndAwait")
+                return true
             }
-            Log.i(TAG, "Force releasing VPN interface and service")
+            Log.i(TAG, "Force releasing VPN interface and awaiting tunnel teardown (timeout=${timeoutMs}ms)")
+            val waiter = synchronized(companionStateLock) {
+                prepareTunnelStoppedWaiter()
+            }
             stop(context)
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                return !isServiceOrTunnelActive()
+            }
+            val stopped = try {
+                runBlocking {
+                    withTimeoutOrNull(timeoutMs) { waiter.await() } ?: !isServiceOrTunnelActive()
+                }
+            } catch (e: Exception) {
+                if (e is InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+                Log.w(TAG, "Interrupted/failed awaiting VPN tunnel release", e)
+                !isServiceOrTunnelActive()
+            }
+            return stopped
         }
 
         fun start(context: Context) {

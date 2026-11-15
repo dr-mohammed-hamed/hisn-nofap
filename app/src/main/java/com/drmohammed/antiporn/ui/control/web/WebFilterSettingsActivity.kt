@@ -623,15 +623,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
                         policyRepo.pushPolicyToWard(wardId, updatedPolicy)
                     }
                 } else {
-                    val saved = policyRepo.saveAndEnforceSelfPolicy(updatedPolicy)
-                    if (saved) {
-                        withContext(Dispatchers.Main) {
-                            if (!isFinishing && !isDestroyed) {
-                                ProtectionEngine.applyAllAsync(app)
-                            }
-                        }
-                    }
-                    saved
+                    policyRepo.saveAndEnforceSelfPolicy(updatedPolicy)
                 }
 
                 withContext(Dispatchers.Main) {

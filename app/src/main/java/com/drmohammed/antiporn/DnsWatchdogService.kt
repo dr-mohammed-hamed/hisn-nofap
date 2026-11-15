@@ -278,6 +278,12 @@ class DnsWatchdogService : Service() {
         val handler = Handler(Looper.getMainLooper())
         dnsObserver = object : ContentObserver(handler) {
             override fun onChange(selfChange: Boolean, uri: Uri?) {
+                if (com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isWithinSettleWindow()) {
+                    Log.d(TAG, "DNS setting change observed during settle window: uri=$uri. Delaying audit...")
+                    debounceHandler.removeCallbacks(checkRunnable)
+                    debounceHandler.postDelayed(checkRunnable, 3500L)
+                    return
+                }
                 Log.d(TAG, "DNS setting change observed: uri=$uri. Debouncing check...")
                 debounceHandler.removeCallbacks(checkRunnable)
                 debounceHandler.postDelayed(checkRunnable, DEBOUNCE_DELAY_MS)
@@ -426,6 +432,32 @@ class DnsWatchdogService : Service() {
             return
         }
 
+        // 0. Settle window & teardown check
+        if (com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isWithinSettleWindow()) {
+            Log.d(TAG, "System is within legitimate transition or settle window. Postponing watchdog audit...")
+            debounceHandler.removeCallbacks(checkRunnable)
+            debounceHandler.postDelayed(checkRunnable, 3500L)
+            return
+        }
+
+        // 0b. First-time baseline check: silently establish protection without false alarms
+        if (!com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.hasCompletedInitialEnforcement(appContext)) {
+            Log.i(TAG, "Initial Device Owner protection baseline not yet established. Applying shields silently...")
+            val results = ProtectionEngine.applyAllSync(appContext)
+            if (results.any { it.success }) {
+                com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.markInitialEnforcementCompleted(appContext)
+            }
+            return
+        }
+
+        // 0c. Live curfew block reconciliation: reconcile scheduled transitions before audit
+        val shouldBlockBeActive = CurfewEnforcer.isEffectiveBlockActive(appContext)
+        val wasBlockEnforced = CurfewConfig.isLastBlockEnforced(appContext)
+        if (shouldBlockBeActive != wasBlockEnforced) {
+            Log.i(TAG, "Scheduled block state transition pending ($wasBlockEnforced -> $shouldBlockBeActive). Reconciling before audit.")
+            CurfewEnforcer.syncBlockState(appContext)
+        }
+
         val desyncReasons = mutableListOf<String>()
 
         // 1. Surgical inspection of all registered security shields
@@ -446,34 +478,40 @@ class DnsWatchdogService : Service() {
             }
         }
 
-        // 2. Direct Settings.Global verification for Private DNS (aware of 24/7 VPN & DoT fallback)
-        try {
-            val mode = Settings.Global.getString(appContext.contentResolver, "private_dns_mode")
-            val specifier = Settings.Global.getString(appContext.contentResolver, "private_dns_specifier")
-            val isVpnActive = com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge.isVpnConsentGranted(appContext) &&
-                com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService.isRunning &&
-                com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService.evaluateRequiredMode(appContext) !=
-                com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService.VpnMode.IDLE
-            if (isVpnActive) {
-                // When 24/7 VPN is active, Private DNS is set to opportunistic (or off) with empty specifier to use local TUN UDP 53
-                val isAppropriate = mode == "opportunistic" || mode == "off" || mode == null
-                val isSpecifierClean = specifier.isNullOrEmpty()
-                if (!isAppropriate || !isSpecifierClean) {
-                    val reason = "Settings.Global DNS mismatch: VPN is running, expected mode='opportunistic' and empty specifier but found mode='$mode', specifier='$specifier'"
-                    Log.w(TAG, reason)
-                    desyncReasons.add("[DNS_GLOBAL: $reason]")
+        // 2. Direct Settings.Global verification for Private DNS (Android 10+ / API 29+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                val mode = Settings.Global.getString(appContext.contentResolver, "private_dns_mode")
+                val specifier = Settings.Global.getString(appContext.contentResolver, "private_dns_specifier")
+                val requiredMode = com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService.evaluateRequiredMode(appContext)
+                val isVpnConsentGranted = com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge.isVpnConsentGranted(appContext)
+                val isVpnActive = isVpnConsentGranted && requiredMode != com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService.VpnMode.IDLE
+
+                if (isVpnActive) {
+                    // When VPN mode is required, Private DNS is set to opportunistic (or off) with empty specifier
+                    val isAppropriate = mode == "opportunistic" || mode == "off" || mode == null
+                    val isSpecifierClean = specifier.isNullOrEmpty()
+                    if (!isAppropriate || !isSpecifierClean) {
+                        val reason = "Settings.Global DNS mismatch: VPN required, expected mode='opportunistic' and empty specifier but found mode='$mode', specifier='$specifier'"
+                        Log.w(TAG, reason)
+                        desyncReasons.add("[DNS_GLOBAL: $reason]")
+                    }
+                    if (!com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService.isRunning) {
+                        Log.i(TAG, "VPN service not running while required. Enqueuing silent sync.")
+                        com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService.syncPolicy(appContext)
+                    }
+                } else {
+                    val expectedHost = DnsShield.getEffectiveDnsHost(appContext)
+                    val isHostMatching = specifier?.equals(expectedHost, ignoreCase = true) == true
+                    if (mode != "hostname" || !isHostMatching) {
+                        val reason = "Settings.Global DNS mismatch (mode=$mode, specifier=$specifier, expected=$expectedHost)"
+                        Log.w(TAG, reason)
+                        desyncReasons.add("[DNS_GLOBAL: $reason]")
+                    }
                 }
-            } else {
-                val expectedHost = DnsShield.getEffectiveDnsHost(appContext)
-                val isHostMatching = specifier?.equals(expectedHost, ignoreCase = true) == true
-                if (mode != "hostname" || !isHostMatching) {
-                    val reason = "Settings.Global DNS mismatch (mode=$mode, specifier=$specifier, expected=$expectedHost)"
-                    Log.w(TAG, reason)
-                    desyncReasons.add("[DNS_GLOBAL: $reason]")
-                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Could not read Settings.Global directly", e)
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "Could not read Settings.Global directly", e)
         }
 
         // 3. Verify Target Timezone and Network Auto Time directly (only if time lock is active in policy)
@@ -487,17 +525,19 @@ class DnsWatchdogService : Service() {
 
         if (isTimeLocked) {
             try {
-                val targetTzId = CurfewConfig.getTargetTimeZoneId(appContext)
-                val targetTz = TimeZone.getTimeZone(targetTzId)
-                TimeZone.setDefault(null)
-                val currentTz = TimeZone.getDefault()
-                val trustedTime = TrustedTimeProvider.currentTimeMillis(appContext)
-                val isTargetTz = currentTz.id == targetTzId || currentTz.hasSameRules(targetTz) ||
-                    currentTz.getOffset(trustedTime) == targetTz.getOffset(trustedTime)
-                if (!isTargetTz) {
-                    val tzReason = "Timezone mismatch (current=${currentTz.id}, expected=$targetTzId)"
-                    Log.w(TAG, tzReason)
-                    desyncReasons.add("[TIMEZONE: $tzReason]")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    val targetTzId = CurfewConfig.getTargetTimeZoneId(appContext)
+                    val targetTz = TimeZone.getTimeZone(targetTzId)
+                    TimeZone.setDefault(null)
+                    val currentTz = TimeZone.getDefault()
+                    val trustedTime = TrustedTimeProvider.currentTimeMillis(appContext)
+                    val isTargetTz = currentTz.id == targetTzId || currentTz.hasSameRules(targetTz) ||
+                        currentTz.getOffset(trustedTime) == targetTz.getOffset(trustedTime)
+                    if (!isTargetTz) {
+                        val tzReason = "Timezone mismatch (current=${currentTz.id}, expected=$targetTzId)"
+                        Log.w(TAG, tzReason)
+                        desyncReasons.add("[TIMEZONE: $tzReason]")
+                    }
                 }
 
                 // Check auto-time (network clock synchronization)
@@ -509,15 +549,6 @@ class DnsWatchdogService : Service() {
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Could not verify Timezone or Auto Time directly in watchdog", e)
-            }
-        }
-
-        // Live self-healing curfew/nap block synchronization during active periods
-        if (CurfewEnforcer.isEffectiveBlockActive(appContext)) {
-            try {
-                CurfewEnforcer.syncBlockStateAsync(appContext)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error synchronizing block state in watchdog", e)
             }
         }
 
@@ -536,15 +567,18 @@ class DnsWatchdogService : Service() {
                 metadata = "failedCount=${desyncReasons.size}"
             )
 
+            // Silent self-healing first
             ProtectionEngine.applyAllAsync(appContext)
 
-            // Only post user-facing tamper alert notification if actual DNS or Time tampering is detected
+            // Post user-facing tamper alert ONLY for confirmed external tampering
             val isDirectTamper = desyncReasons.any {
-                it.startsWith("[DNS_GLOBAL:") || it.startsWith("[TIMEZONE:") ||
-                        it.startsWith("[AUTO_TIME:") || it.startsWith("[dns:") ||
-                        it.startsWith("[system_tamper:")
+                it.startsWith("[TIMEZONE:") ||
+                    it.startsWith("[AUTO_TIME:") ||
+                    it.startsWith("[system_tamper:") ||
+                    (it.startsWith("[DNS_GLOBAL:") && !it.contains("VPN required"))
             }
-            if (isDirectTamper) {
+
+            if (isDirectTamper && !com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isTeardownInProgress) {
                 try {
                     AppNotificationManager.getInstance(appContext).postEventNotification(
                         category = NotificationCategory.SHIELDS,

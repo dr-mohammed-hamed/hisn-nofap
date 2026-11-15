@@ -312,15 +312,7 @@ class OtherSettingsActivity : AppCompatActivity() {
                         policyRepo.pushPolicyToWard(wardId, updatedPolicy)
                     }
                 } else {
-                    val saved = policyRepo.saveAndEnforceSelfPolicy(updatedPolicy)
-                    if (saved) {
-                        CurfewScheduler.scheduleNextAlarms(app)
-                        CurfewEnforcer.syncBlockState(app)
-                        withContext(Dispatchers.Main) {
-                            ProtectionEngine.applyAllAsync(app)
-                        }
-                    }
-                    saved
+                    policyRepo.saveAndEnforceSelfPolicy(updatedPolicy)
                 }
 
                 withContext(Dispatchers.Main) {

@@ -87,6 +87,14 @@ object DeviceOwnerTeardownManager {
             }
         }
 
+        ProtectionTransitionGuard.isTeardownInProgress = true
+        ProtectionTransitionGuard.resetInitialEnforcement(appContext)
+        try {
+            appContext.stopService(android.content.Intent(appContext, com.drmohammed.antiporn.DnsWatchdogService::class.java))
+        } catch (e: Exception) {
+            Timber.tag(TAG).w("Error stopping DnsWatchdogService before teardown: ${e.message}")
+        }
+
         try {
             Timber.tag(TAG).w("[TEARDOWN] Starting complete safe unwinding of Device Owner restrictions...")
 

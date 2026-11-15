@@ -47,7 +47,8 @@ internal object CurfewLifecycleHandler {
     }
 
     fun enforceActivation(context: Context): Boolean {
-        var overallSuccess = true
+        return com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.runInternalTransition {
+            var overallSuccess = true
         val instantKill = CurfewConfig.isInstantInternetKillEnabled(context)
         val vpnEnabled = instantKill || CurfewConfig.isVpnBlackholeEnabled(context)
 
@@ -100,11 +101,13 @@ internal object CurfewLifecycleHandler {
             isSuccess = overallSuccess,
             details = "targets=${targets.size}, suspended=${newlySuspendedApps.size}, tracked=${activeTrackedApps.size}, failed=${failedApps.size}, vpnEnabled=$vpnEnabled, instantKill=$instantKill, nap=${NapController.isNapActive(context)}"
         )
-        return overallSuccess
+        overallSuccess
+        }
     }
 
     fun enforceRelease(context: Context): Boolean {
-        var overallSuccess = true
+        return com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.runInternalTransition {
+            var overallSuccess = true
         val instantKill = CurfewConfig.isInstantInternetKillEnabled(context)
         val requiredMode = CurfewBlackholeVpnService.evaluateRequiredMode(context)
         val alwaysOnPkg = SafeDpmGateway.getAlwaysOnVpnPackageBlocking(context).getOrNull()
@@ -199,7 +202,8 @@ internal object CurfewLifecycleHandler {
             details = "released=${appsBatchToUnsuspend.size - failedApps.size}, failedApps=${failedApps.size}, failedStores=${failedStores.size}"
         )
         syncNotificationSafely(context, "enforceRelease")
-        return overallSuccess
+        overallSuccess
+        }
     }
 
     fun handlePackageAdded(context: Context, packageName: String) {

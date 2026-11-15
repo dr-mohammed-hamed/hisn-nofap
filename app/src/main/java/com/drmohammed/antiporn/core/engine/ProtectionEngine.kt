@@ -33,12 +33,12 @@ object ProtectionEngine {
     private const val TAG = "AntiPorn_Engine"
 
     val shields: List<ProtectionShield> = listOf(
-        DnsShield,
-        VpnShield,
-        BrowserShield,
         SystemTamperShield,
-        AppSuspensionShield,
-        CurfewShield
+        VpnShield,
+        CurfewShield,
+        DnsShield,
+        BrowserShield,
+        AppSuspensionShield
     )
 
     private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -126,61 +126,70 @@ object ProtectionEngine {
      * MUST be called from a background thread.
      */
     fun applyAllSync(context: Context): List<ShieldResult> {
-        val appContext = context.applicationContext ?: context
-        if (!isDeviceOwner(appContext)) {
-            Log.w(TAG, "App is not Device/Profile Owner. Cannot apply shields.")
-            return listOf(
+        return ProtectionTransitionGuard.runInternalTransition {
+            val appContext = context.applicationContext ?: context
+            if (!isDeviceOwner(appContext)) {
+                Log.w(TAG, "App is not Device/Profile Owner. Cannot apply shields.")
+                return@runInternalTransition listOf(
+                    ShieldResult(
+                        shieldId = "engine",
+                        success = false,
+                        message = appContext.getString(R.string.toast_not_device_owner)
+                    )
+                )
+            }
+
+            val dpmResult = com.drmohammed.antiporn.telemetry.SafeDpmGateway.executeRawBlocking(
+                context = appContext,
+                tag = com.drmohammed.antiporn.telemetry.BlackBoxRecorder.TAG_SHIELD,
+                actionName = "applyAllShieldsSync",
+                requireDeviceOwner = true
+            ) { dpm, admin ->
+                val results = mutableListOf<ShieldResult>()
+                for (shield in shields) {
+                    try {
+                        val res = shield.apply(appContext, dpm, admin)
+                        results.add(res)
+                        Log.d(TAG, "Applied shield [${shield.id}]: success=${res.success}")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Exception applying shield [${shield.id}]", e)
+                        results.add(
+                            ShieldResult(
+                                shieldId = shield.id,
+                                success = false,
+                                message = appContext.getString(R.string.toast_error_applying, e.localizedMessage ?: "Unknown")
+                            )
+                        )
+                    }
+                }
+                results
+            }
+
+            val results = dpmResult.getOrNull() ?: listOf(
                 ShieldResult(
                     shieldId = "engine",
                     success = false,
-                    message = appContext.getString(R.string.toast_not_device_owner)
+                    message = appContext.getString(R.string.toast_dpm_missing)
                 )
             )
-        }
 
-        val dpmResult = com.drmohammed.antiporn.telemetry.SafeDpmGateway.executeRawBlocking(
-            context = appContext,
-            tag = com.drmohammed.antiporn.telemetry.BlackBoxRecorder.TAG_SHIELD,
-            actionName = "applyAllShieldsSync",
-            requireDeviceOwner = true
-        ) { dpm, admin ->
-            val results = mutableListOf<ShieldResult>()
-            for (shield in shields) {
+            // If critical shields applied successfully, mark initial baseline as established
+            val criticalResults = results.filter { it.shieldId in listOf("system_tamper", "vpn", "dns") }
+            val criticalShieldsSuccess = criticalResults.isNotEmpty() && criticalResults.all { it.success }
+            if (criticalShieldsSuccess || (results.isNotEmpty() && results.all { it.success })) {
+                ProtectionTransitionGuard.markInitialEnforcementCompleted(appContext)
+            }
+
+            if (!DnsWatchdogService.isRunning && !ProtectionTransitionGuard.isTeardownInProgress) {
                 try {
-                    val res = shield.apply(appContext, dpm, admin)
-                    results.add(res)
-                    Log.d(TAG, "Applied shield [${shield.id}]: success=${res.success}")
+                    DnsWatchdogService.startService(appContext)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Exception applying shield [${shield.id}]", e)
-                    results.add(
-                        ShieldResult(
-                            shieldId = shield.id,
-                            success = false,
-                            message = appContext.getString(R.string.toast_error_applying, e.localizedMessage ?: "Unknown")
-                        )
-                    )
+                    Log.e(TAG, "Failed to start watchdog service", e)
                 }
             }
+
             results
         }
-
-        val results = dpmResult.getOrNull() ?: listOf(
-            ShieldResult(
-                shieldId = "engine",
-                success = false,
-                message = appContext.getString(R.string.toast_dpm_missing)
-            )
-        )
-
-        if (!DnsWatchdogService.isRunning) {
-            try {
-                DnsWatchdogService.startService(appContext)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to start watchdog service", e)
-            }
-        }
-
-        return results
     }
 
     /**

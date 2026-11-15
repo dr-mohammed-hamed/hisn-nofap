@@ -78,7 +78,6 @@ class AdminReceiver : DeviceAdminReceiver() {
 
     private fun enforcePoliciesAsync(context: Context) {
         val appContext = context.applicationContext
-        DnsWatchdogService.startService(appContext)
         try {
             com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(appContext).startFirestoreSync()
         } catch (e: Exception) {

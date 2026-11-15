@@ -129,13 +129,8 @@ class SelfControlViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val success = policyRepository.saveAndEnforceSelfPolicy(policyToSave)
-                CurfewScheduler.scheduleNextAlarms(app)
-                CurfewEnforcer.syncBlockState(app)
 
                 withContext(Dispatchers.Main) {
-                    ProtectionEngine.applyAllAsync(app) {
-                        Log.i(TAG, "ProtectionEngine reapplied following policy save.")
-                    }
                     if (success) {
                         _uiState.update { current ->
                             current.copy(
