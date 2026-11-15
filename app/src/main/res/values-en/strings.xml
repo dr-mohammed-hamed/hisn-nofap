@@ -569,6 +569,7 @@
     <string name="ai_service_channel_name">AI Visual Shield Service</string>
     <string name="ai_service_channel_desc">Persistent foreground notification for AI screen protection.</string>
     <string name="ai_service_action_stop">Stop AI Shield</string>
+    <string name="ai_service_resume_prompt">Screen AI paused while locked. Tap here to resume shield immediately.</string>
     <string name="ai_permission_denied">Screen capture permission was denied.</string>
     <string name="title_guardian_control">Accountability &amp; Supervision</string>
     <string name="my_pairing_code_label">Your Pairing Code</string>

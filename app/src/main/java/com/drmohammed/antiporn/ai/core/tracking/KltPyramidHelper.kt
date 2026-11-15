@@ -7,6 +7,8 @@ import java.nio.ByteBuffer
  */
 internal object KltPyramidHelper {
 
+    private val scratchRowBuffer = ThreadLocal.withInitial { ByteArray(1920 * 4) }
+
     /**
      * استخراج قناة الإضاءة (Luma) بدقة وسرعة من مخزن البايتات الخام دون تخصيص ذاكرة.
      */
@@ -19,35 +21,56 @@ internal object KltPyramidHelper {
         dstLuma: ByteArray
     ) {
         val bufferCap = rawBuffer.capacity()
+        val savedPos = rawBuffer.position()
 
-        if (pixelStride == 1) {
-            // معالجة YUV أو Luma خالصة مباشرة
-            for (y in 0 until height) {
-                val srcRow = y * rowStride
-                val dstRow = y * width
-                for (x in 0 until width) {
-                    val offset = srcRow + x
-                    if (offset < bufferCap) {
-                        dstLuma[dstRow + x] = rawBuffer.get(offset)
+        try {
+            if (pixelStride == 1) {
+                // معالجة YUV أو Luma خالصة مباشرة
+                if (rowStride == width) {
+                    val copyLen = minOf(width * height, bufferCap, dstLuma.size)
+                    rawBuffer.position(0)
+                    rawBuffer.get(dstLuma, 0, copyLen)
+                } else {
+                    for (y in 0 until height) {
+                        val srcRow = y * rowStride
+                        val dstRow = y * width
+                        val copyLen = minOf(width, maxOf(0, bufferCap - srcRow))
+                        if (copyLen > 0) {
+                            rawBuffer.position(srcRow)
+                            rawBuffer.get(dstLuma, dstRow, copyLen)
+                        }
+                    }
+                }
+            } else {
+                // معالجة RGBA_8888 سريعة بقراءة سطر كامل لتفادي JNI get() الفردي
+                val requiredBytes = width * pixelStride
+                var rowBytes = scratchRowBuffer.get() ?: ByteArray(1920 * 4)
+                if (rowBytes.size < requiredBytes) {
+                    rowBytes = ByteArray(maxOf(requiredBytes, 1920 * 4))
+                    scratchRowBuffer.set(rowBytes)
+                }
+                for (y in 0 until height) {
+                    val srcRow = y * rowStride
+                    val dstRow = y * width
+                    val copyLen = minOf(requiredBytes, maxOf(0, bufferCap - srcRow))
+                    if (copyLen > 0) {
+                        rawBuffer.position(srcRow)
+                        rawBuffer.get(rowBytes, 0, copyLen)
+                        for (x in 0 until width) {
+                            val px = x * pixelStride
+                            if (px + 2 < copyLen) {
+                                val r = rowBytes[px].toInt() and 0xFF
+                                val g = rowBytes[px + 1].toInt() and 0xFF
+                                val b = rowBytes[px + 2].toInt() and 0xFF
+                                val luma = (r * 77 + g * 150 + b * 29) ushr 8
+                                dstLuma[dstRow + x] = luma.toByte()
+                            }
+                        }
                     }
                 }
             }
-        } else {
-            // معالجة RGBA_8888 (حساب الإضاءة السريعة Y = (77*R + 150*G + 29*B) >> 8)
-            for (y in 0 until height) {
-                val srcRow = y * rowStride
-                val dstRow = y * width
-                for (x in 0 until width) {
-                    val offset = srcRow + x * pixelStride
-                    if (offset + 2 < bufferCap) {
-                        val r = rawBuffer.get(offset).toInt() and 0xFF
-                        val g = rawBuffer.get(offset + 1).toInt() and 0xFF
-                        val b = rawBuffer.get(offset + 2).toInt() and 0xFF
-                        val luma = (r * 77 + g * 150 + b * 29) ushr 8
-                        dstLuma[dstRow + x] = luma.toByte()
-                    }
-                }
-            }
+        } finally {
+            try { rawBuffer.position(savedPos) } catch (_: Exception) {}
         }
     }
 

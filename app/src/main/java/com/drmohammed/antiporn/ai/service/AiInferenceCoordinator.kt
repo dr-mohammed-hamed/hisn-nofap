@@ -48,6 +48,8 @@ class AiInferenceCoordinator(
     private var lastAnchorCheckTimeMs: Long = 0L
     private var lastA11yScreenshotAttemptMs: Long = 0L
     private var consecutiveA11yFailures: Int = 0
+    private var lastA11yFailureTimeMs: Long = 0L
+    private var a11yStageIndex: Int = 0
 
     private var inferenceBitmap: Bitmap? = null
     private var scratchPixels: IntArray? = null
@@ -87,14 +89,13 @@ class AiInferenceCoordinator(
     }
 
     fun initialize(onInitialized: (Boolean) -> Unit = {}) {
-        val infThread = HandlerThread("AiInferenceWorker", android.os.Process.THREAD_PRIORITY_BACKGROUND)
+        val infThread = HandlerThread("AiInferenceWorker", android.os.Process.THREAD_PRIORITY_MORE_FAVORABLE)
         infThread.start()
         inferenceThread = infThread
         val handler = Handler(infThread.looper)
         inferenceHandler = handler
 
         kltTracker = KltOpticalFlowTracker()
-        halalifyDetector = HalalifyGenderDetector(context)
         nudeNetDetector = NudeNetDetector()
         blurOverlayManager = ScreenBlurOverlayManager(context).apply {
             isKltTrackingActive = true
@@ -108,6 +109,7 @@ class AiInferenceCoordinator(
         contextualWatcher = ContextualGatingWatcher(
             context,
             onStateChanged = { isTarget, _ ->
+                consecutiveA11yFailures = 0
                 if (!isTarget) {
                     if (::kltTracker.isInitialized) kltTracker.flush()
                     if (::blurOverlayManager.isInitialized) blurOverlayManager.dismissFast()
@@ -117,16 +119,23 @@ class AiInferenceCoordinator(
         contextualWatcher.start()
 
         handler.post {
-            val halalifyOk = halalifyDetector.isInitialized
-            val nudeOk = if (ENABLE_NUDENET) nudeNetDetector.initialize(context) else true
-            if (!halalifyOk || !nudeOk) {
-                initError = if (!halalifyOk) "Halalify initialization failed" else "NudeNet initialization failed"
-                Log.e(TAG, "AI initialization failed: $initError")
+            try {
+                halalifyDetector = HalalifyGenderDetector(context)
+                val halalifyOk = halalifyDetector.isInitialized
+                val nudeOk = if (ENABLE_NUDENET) nudeNetDetector.initialize(context) else true
+                if (!halalifyOk || !nudeOk) {
+                    initError = if (!halalifyOk) "Halalify initialization failed" else "NudeNet initialization failed"
+                    Log.e(TAG, "AI initialization failed: $initError")
+                    mainHandler.post { onInitialized(false) }
+                } else {
+                    initError = ""
+                    Log.i(TAG, "Halalify ready (NudeNet enabled=$ENABLE_NUDENET)")
+                    mainHandler.post { onInitialized(true) }
+                }
+            } catch (e: Exception) {
+                initError = "AI initialization exception: ${e.message}"
+                Log.e(TAG, "Failed to initialize detector", e)
                 mainHandler.post { onInitialized(false) }
-            } else {
-                initError = ""
-                Log.i(TAG, "Halalify ready (NudeNet enabled=$ENABLE_NUDENET)")
-                mainHandler.post { onInitialized(true) }
             }
         }
     }
@@ -200,7 +209,8 @@ class AiInferenceCoordinator(
         // 2. Async Anchor Path: Clean A11y Screenshot OR 4-Stage Rotation (FullFrame + 3 Slices) (4-5 FPS)
         val a11y = HisnAccessibilityService.instance
         val isA11ySupported = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) && (a11y != null)
-        val isA11yActive = isA11ySupported && (consecutiveA11yFailures < 3)
+        val isCooldownPassed = (now - lastA11yFailureTimeMs) >= 3000L
+        val isA11yActive = isA11ySupported && (consecutiveA11yFailures < 3 || isCooldownPassed)
 
         val anchorInterval = if (isA11yActive) 350L else ANCHOR_INTERVAL_MS
         val shouldTriggerAnchor = !isHalalifyInferring.get() &&
@@ -250,6 +260,7 @@ class AiInferenceCoordinator(
                         }
                     } else {
                         consecutiveA11yFailures++
+                        lastA11yFailureTimeMs = now
                         Log.d(TAG, "A11y clean capture returned null (consecutive failures: $consecutiveA11yFailures)")
                         lastAnchorCheckTimeMs = SystemClock.elapsedRealtime()
                         isHalalifyInferring.set(false)
@@ -288,8 +299,38 @@ class AiInferenceCoordinator(
         frameHeight: Int
     ) {
         if (!isRunning || captureGen != sceneGenerationId) return
+        if (!::halalifyDetector.isInitialized || !halalifyDetector.isInitialized) {
+            Log.w(TAG, "Halalify detector not ready, skipping clean bitmap inference")
+            return
+        }
         val startHalalify = SystemClock.elapsedRealtime()
-        val detections = halalifyDetector.detect(cleanBitmap)
+
+        val cleanAspect = cleanBitmap.height.toFloat() / cleanBitmap.width.toFloat().coerceAtLeast(1f)
+        val shouldTileClean = cleanAspect >= 1.4f
+        val a11yStage = if (shouldTileClean) (a11yStageIndex++ % 3) else 0
+
+        val (inputToDetect, cropOffsetY, cropH) = when (a11yStage) {
+            1 -> {
+                val h = (cleanBitmap.height * 0.60f).toInt().coerceAtLeast(1)
+                Triple(Bitmap.createBitmap(cleanBitmap, 0, 0, cleanBitmap.width, h), 0, h)
+            }
+            2 -> {
+                val h = (cleanBitmap.height * 0.60f).toInt().coerceAtLeast(1)
+                val topY = (cleanBitmap.height - h).coerceAtLeast(0)
+                Triple(Bitmap.createBitmap(cleanBitmap, 0, topY, cleanBitmap.width, h), topY, h)
+            }
+            else -> {
+                Triple(cleanBitmap, 0, cleanBitmap.height)
+            }
+        }
+
+        val detections = try {
+            halalifyDetector.detect(inputToDetect)
+        } finally {
+            if (inputToDetect !== cleanBitmap) {
+                try { inputToDetect.recycle() } catch (_: Exception) {}
+            }
+        }
         notifyDetectionUpdated(detections)
         val halalifyLatency = SystemClock.elapsedRealtime() - startHalalify
         val femaleDetections = detections.filter { it.isFemale }
@@ -309,10 +350,15 @@ class AiInferenceCoordinator(
         val scaledWinHeight = (windowBounds.bottom - windowBounds.top) * scaleY
 
         val mappedFullBoxes = femaleDetections.map { det ->
-            val pxL = scaledWinLeft + (det.boundingBox.left * scaledWinWidth) + dtX
-            val pxT = scaledWinTop + (det.boundingBox.top * scaledWinHeight) + dtY
-            val pxR = scaledWinLeft + (det.boundingBox.right * scaledWinWidth) + dtX
-            val pxB = scaledWinTop + (det.boundingBox.bottom * scaledWinHeight) + dtY
+            val boxLeftNorm = det.boundingBox.left
+            val boxRightNorm = det.boundingBox.right
+            val boxTopNorm = (cropOffsetY + det.boundingBox.top * cropH) / cleanBitmap.height.toFloat()
+            val boxBottomNorm = (cropOffsetY + det.boundingBox.bottom * cropH) / cleanBitmap.height.toFloat()
+
+            val pxL = scaledWinLeft + (boxLeftNorm * scaledWinWidth) + dtX
+            val pxT = scaledWinTop + (boxTopNorm * scaledWinHeight) + dtY
+            val pxR = scaledWinLeft + (boxRightNorm * scaledWinWidth) + dtX
+            val pxB = scaledWinTop + (boxBottomNorm * scaledWinHeight) + dtY
 
             val normL = (pxL / frameWidth).coerceIn(0f, 1f)
             val normT = (pxT / frameHeight).coerceIn(0f, 1f)
@@ -324,9 +370,11 @@ class AiInferenceCoordinator(
         val mergedBoxes = KltMathHelper.mergeBoxesSpatially(mappedFullBoxes, 40f / frameHeight)
 
         val winNormL = (scaledWinLeft / frameWidth).coerceIn(0f, 1f)
-        val winNormT = (scaledWinTop / frameHeight).coerceIn(0f, 1f)
         val winNormR = ((scaledWinLeft + scaledWinWidth) / frameWidth).coerceIn(winNormL + 0.001f, 1f)
-        val winNormB = ((scaledWinTop + scaledWinHeight) / frameHeight).coerceIn(winNormT + 0.001f, 1f)
+        val tileWinTop = scaledWinTop + (cropOffsetY.toFloat() / cleanBitmap.height.toFloat()) * scaledWinHeight
+        val tileWinBottom = scaledWinTop + ((cropOffsetY + cropH).toFloat() / cleanBitmap.height.toFloat()) * scaledWinHeight
+        val winNormT = (tileWinTop / frameHeight).coerceIn(0f, 1f)
+        val winNormB = (tileWinBottom / frameHeight).coerceIn(winNormT + 0.001f, 1f)
         val tileNormRect = TrackedModestyBox.createRectF(winNormL, winNormT, winNormR, winNormB)
 
         if (::kltTracker.isInitialized) {
@@ -335,7 +383,8 @@ class AiInferenceCoordinator(
                 tileNormRect = tileNormRect,
                 frameWidth = frameWidth,
                 frameHeight = frameHeight,
-                timestampMs = captureTimestamp
+                timestampMs = captureTimestamp,
+                isCleanSource = true
             )
         }
 
@@ -363,6 +412,10 @@ class AiInferenceCoordinator(
                 inferenceHandler?.post {
                     try {
                         if (!isRunning || captureGen != sceneGenerationId) return@post
+                        if (!::halalifyDetector.isInitialized || !halalifyDetector.isInitialized) {
+                            Log.w(TAG, "Halalify detector not ready, skipping full frame inference")
+                            return@post
+                        }
                         val startHalalify = SystemClock.elapsedRealtime()
                         val detections = halalifyDetector.detect(fullBitmapInstance)
                         notifyDetectionUpdated(detections)
@@ -396,7 +449,8 @@ class AiInferenceCoordinator(
                                 tileNormRect = tileNormRect,
                                 frameWidth = width,
                                 frameHeight = height,
-                                timestampMs = captureTimestamp
+                                timestampMs = captureTimestamp,
+                                isCleanSource = false
                             )
                         }
 
@@ -447,6 +501,10 @@ class AiInferenceCoordinator(
                 inferenceHandler?.post {
                     try {
                         if (!isRunning || captureGen != sceneGenerationId) return@post
+                        if (!::halalifyDetector.isInitialized || !halalifyDetector.isInitialized) {
+                            Log.w(TAG, "Halalify detector not ready, skipping tile inference")
+                            return@post
+                        }
                         val startHalalify = SystemClock.elapsedRealtime()
                         val detections = halalifyDetector.detect(tileBitmapInstance)
                         notifyDetectionUpdated(detections)
@@ -486,7 +544,8 @@ class AiInferenceCoordinator(
                                 tileNormRect = tileNormRect,
                                 frameWidth = width,
                                 frameHeight = height,
-                                timestampMs = captureTimestamp
+                                timestampMs = captureTimestamp,
+                                isCleanSource = false
                             )
                         }
 
@@ -604,6 +663,7 @@ class AiInferenceCoordinator(
         accumulatedScrollDx = 0f
         accumulatedScrollDy = 0f
         consecutiveA11yFailures = 0
+        lastAnchorCheckTimeMs = 0L
         synchronized(drawnBoxesLock) {
             lastDrawnPixelBoxes.clear()
         }
@@ -641,7 +701,7 @@ class AiInferenceCoordinator(
             scratchTilePixels = pixels
         }
 
-        val requiredRowBytes = (offsetX + tileWidth) * pixelStride
+        val requiredRowBytes = tileWidth * pixelStride
         var rowBytes = scratchRowBytes
         if (rowBytes == null || rowBytes.size < requiredRowBytes) {
             rowBytes = ByteArray(requiredRowBytes.coerceAtLeast(rowStride))
@@ -652,12 +712,12 @@ class AiInferenceCoordinator(
         try {
             for (ty in 0 until tileHeight) {
                 val fullY = offsetY + ty
-                buffer.position(fullY * rowStride)
+                val startPos = fullY * rowStride + offsetX * pixelStride
+                buffer.position(startPos)
                 buffer.get(rowBytes, 0, requiredRowBytes)
                 val outRowOffset = ty * tileWidth
                 for (tx in 0 until tileWidth) {
-                    val fullX = offsetX + tx
-                    val px = fullX * pixelStride
+                    val px = tx * pixelStride
                     val r = rowBytes[px].toInt() and 0xFF
                     val g = rowBytes[px + 1].toInt() and 0xFF
                     val b = rowBytes[px + 2].toInt() and 0xFF

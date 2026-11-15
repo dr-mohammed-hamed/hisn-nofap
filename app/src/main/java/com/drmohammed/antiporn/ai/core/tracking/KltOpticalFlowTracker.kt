@@ -264,7 +264,8 @@ class KltOpticalFlowTracker(
         tileNormRect: RectF,
         frameWidth: Int,
         frameHeight: Int,
-        timestampMs: Long
+        timestampMs: Long,
+        isCleanSource: Boolean = false
     ) {
         initOrUpdateAnchorsInternal(
             detections = detections,
@@ -272,7 +273,8 @@ class KltOpticalFlowTracker(
             frameWidth = frameWidth,
             frameHeight = frameHeight,
             timestampMs = timestampMs,
-            targetTileRect = tileNormRect
+            targetTileRect = tileNormRect,
+            isCleanSource = isCleanSource
         )
     }
 
@@ -285,7 +287,8 @@ class KltOpticalFlowTracker(
         frameWidth: Int,
         frameHeight: Int,
         timestampMs: Long,
-        targetTileRect: RectF? = null
+        targetTileRect: RectF? = null,
+        isCleanSource: Boolean = false
     ) {
         val safeWidth = if (frameWidth > 0) frameWidth else 1
         val safeHeight = if (frameHeight > 0) frameHeight else 1
@@ -437,21 +440,32 @@ class KltOpticalFlowTracker(
                     val coverage = if (trackArea > 0f) interArea / trackArea else 0f
 
                     if (coverage >= 0.80f) {
-                        val ringChange = track.lastOuterRingChangeRatio
-                        if (ringChange < 0.20f) {
-                            // سكون تام للمحيط الخارجي (صورة ثابتة): تمديد الصلاحية لمنع وميض الـ 2.5s
-                            track.lastAnchorTimestampMs = timestampMs
-                            track.ageFrames = 0
-                        } else if (ringChange >= 0.40f && lastGeneralChangeRatio >= 0.45f) {
-                            // تغير بنيوي شامل للمشهد: إسقاط سريع لتفادي الزومبي
+                        if (isCleanSource) {
+                            // على مصادر اللقطات النظيفة (أندرويد 14+): الكشف قطعي ولا وجود للتعتيم الذاتي
+                            // الصندوق غير المطابق داخل الشريحة يفقد صلاحيته سريعاً دون زومبي
                             track.ageFrames += 2
-                        } else if (ringChange >= 0.20f) {
-                            // حركة فيديو اعتيادية: زيادة تدريجية ناعمة مع مهلة 8 نبضات (~1.6 ثانية)
-                            track.ageFrames += 1
-                        }
+                            if (track.ageFrames >= 4) {
+                                track.confidence = 0f
+                            }
+                        } else {
+                            val ringChange = maxOf(track.lastOuterRingChangeRatio, track.maxRingChangeSinceLastAnchor)
+                            track.maxRingChangeSinceLastAnchor = 0f
 
-                        if (track.ageFrames >= 8) {
-                            track.confidence = 0f
+                            if (ringChange < 0.20f) {
+                                // سكون تام للمحيط الخارجي (صورة ثابتة): تمديد الصلاحية لمنع وميض الـ 2.5s
+                                track.lastAnchorTimestampMs = timestampMs
+                                track.ageFrames = 0
+                            } else if (ringChange >= 0.40f && lastGeneralChangeRatio >= 0.45f) {
+                                // تغير بنيوي شامل للمشهد: إسقاط سريع لتفادي الزومبي
+                                track.ageFrames += 2
+                            } else if (ringChange >= 0.20f) {
+                                // حركة فيديو اعتيادية: زيادة تدريجية ناعمة مع مهلة 8 نبضات (~1.6 ثانية)
+                                track.ageFrames += 1
+                            }
+
+                            if (track.ageFrames >= 8) {
+                                track.confidence = 0f
+                            }
                         }
                     }
                 }
@@ -579,12 +593,14 @@ class KltOpticalFlowTracker(
             for (gx in 1..BG_GRID_X) {
                 val px = leftUiMargin + gx * stepX
 
-                // استبعاد أي نقطة تقع داخل أو بجوار صناديق التعتيم النشطة
+                // استبعاد أي نقطة تقع داخل أو بجوار صناديق التعتيم النشطة متضمناً هامش الحماية
                 var insideBox = false
                 for (t in activeTracks) {
                     val box = t.rawBoundingBox
-                    if (px >= (box.left - 4f) && px <= (box.right + 4f) &&
-                        py >= (box.top - 4f) && py <= (box.bottom + 4f)
+                    val padX = (box.right - box.left) * TrackedModestyBox.DEFAULT_SAFETY_PADDING_RATIO + 8f
+                    val padY = (box.bottom - box.top) * TrackedModestyBox.DEFAULT_SAFETY_PADDING_RATIO + 8f
+                    if (px >= (box.left - padX) && px <= (box.right + padX) &&
+                        py >= (box.top - padY) && py <= (box.bottom + padY)
                     ) {
                         insideBox = true
                         break
@@ -635,16 +651,23 @@ class KltOpticalFlowTracker(
             val rawBox = track.rawBoundingBox
 
             // حساب التغير في الحزام المحيط خارج الصندوق لتغذية منطق مكافحة الزومبي والتعتيم الذاتي
-            track.lastOuterRingChangeRatio = calculateOuterRingChangeRatio(rawBox, prevLuma, currLuma, width, height)
+            val ringRatio = calculateOuterRingChangeRatio(rawBox, prevLuma, currLuma, width, height)
+            track.lastOuterRingChangeRatio = ringRatio
+            track.maxRingChangeSinceLastAnchor = maxOf(track.maxRingChangeSinceLastAnchor, ringRatio)
 
-            // تجميع نقاط الخلفية الواقعة في الجوار المحلي للصندوق (نطاق رأسي ±25% من ارتفاع الشاشة)
+            // تجميع نقاط الخلفية الواقعة في الجوار المحلي للصندوق
             val trackCenterY = (rawBox.top + rawBox.bottom) * 0.5f
             var localBgCount = 0
-            val localBandY = height * 0.25f
+            val boxH = rawBox.bottom - rawBox.top
+            val localBandY = minOf(height * 0.15f, maxOf(boxH * 1.0f, height * 0.08f))
+            val localBandX = width * 0.25f
 
             for (k in 0 until bgValidCount) {
+                val px = scratchBgPointsX[k]
                 val py = scratchBgPointsY[k]
-                if (kotlin.math.abs(py - trackCenterY) <= localBandY) {
+                if (kotlin.math.abs(py - trackCenterY) <= localBandY &&
+                    px >= (rawBox.left - localBandX) && px <= (rawBox.right + localBandX)
+                ) {
                     scratchLocalDeltasX[localBgCount] = scratchBgDeltasX[k]
                     scratchLocalDeltasY[localBgCount] = scratchBgDeltasY[k]
                     localBgCount++
@@ -694,13 +717,15 @@ class KltOpticalFlowTracker(
                     newB / height
                 )
                 track.confidence = 1.0f
-                track.ageFrames = 0
+                val motionMagnitude = kotlin.math.hypot(trackDx.toDouble(), trackDy.toDouble())
+                if (motionMagnitude >= 1.5) {
+                    track.ageFrames = 0
+                }
                 continue
             }
 
             // الشاشة ساكنة دون تمرير عام: فحص حركة الهدف الموضعي إن وُجد
             val boxW = rawBox.right - rawBox.left
-            val boxH = rawBox.bottom - rawBox.top
 
             if (boxW < 8f || boxH < 8f) {
                 track.ageFrames++

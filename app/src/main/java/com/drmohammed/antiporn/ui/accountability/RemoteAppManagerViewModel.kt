@@ -83,12 +83,16 @@ class RemoteAppManagerViewModel(
                 val newBlacklist = policy.customBlacklistPackages.toSet()
                 val newProtected = policy.protectedAppPackages.toSet()
                 val newAiScan = policy.customAiScanPackages.toSet()
+                val newExcludedAiScan = policy.excludedAiScanPackages.toSet()
+                val newLockNewInstalls = policy.lockNewInstallsUntilApproved
 
                 if (state.customCurfewWhitelist != newCurfewWhitelist ||
                     state.curfewVpnBypass != newCurfewVpnBypass ||
                     state.customBlacklist != newBlacklist ||
                     state.protectedApps != newProtected ||
                     state.customAiScanPackages != newAiScan ||
+                    state.excludedAiScanPackages != newExcludedAiScan ||
+                    state.lockNewInstallsUntilApproved != newLockNewInstalls ||
                     state.isScreenAiEnabledGlobally != policy.isScreenAiEnabledGlobally
                 ) {
                     _uiState.update { current ->
@@ -97,14 +101,18 @@ class RemoteAppManagerViewModel(
                             customBlacklist = newBlacklist,
                             customCurfewWhitelist = newCurfewWhitelist,
                             customAiScanPackages = newAiScan,
+                            excludedAiScanPackages = newExcludedAiScan,
                             curfewVpnBypass = newCurfewVpnBypass,
                             protectedApps = newProtected,
+                            lockNewInstallsUntilApproved = newLockNewInstalls,
                             isScreenAiEnabledGlobally = policy.isScreenAiEnabledGlobally,
                             initialBlacklist = newBlacklist,
                             initialCurfewWhitelist = newCurfewWhitelist,
                             initialAiScanPackages = newAiScan,
+                            initialExcludedAiScanPackages = newExcludedAiScan,
                             initialCurfewVpnBypass = newCurfewVpnBypass,
-                            initialProtectedApps = newProtected
+                            initialProtectedApps = newProtected,
+                            initialLockNewInstalls = newLockNewInstalls
                         )
                     }
                 }
@@ -143,12 +151,14 @@ class RemoteAppManagerViewModel(
                     customBlacklist = policy.customBlacklistPackages.toSet(),
                     customCurfewWhitelist = policy.customCurfewWhitelistPackages.toSet(),
                     customAiScanPackages = policy.customAiScanPackages.toSet(),
+                    excludedAiScanPackages = policy.excludedAiScanPackages.toSet(),
                     curfewVpnBypass = policy.curfewVpnBypassPackages.toSet(),
                     protectedApps = policy.protectedAppPackages.toSet(),
                     lockNewInstallsUntilApproved = policy.lockNewInstallsUntilApproved,
                     initialBlacklist = policy.customBlacklistPackages.toSet(),
                     initialCurfewWhitelist = policy.customCurfewWhitelistPackages.toSet(),
                     initialAiScanPackages = policy.customAiScanPackages.toSet(),
+                    initialExcludedAiScanPackages = policy.excludedAiScanPackages.toSet(),
                     initialCurfewVpnBypass = policy.curfewVpnBypassPackages.toSet(),
                     initialProtectedApps = policy.protectedAppPackages.toSet(),
                     initialLockNewInstalls = policy.lockNewInstallsUntilApproved,
@@ -214,12 +224,14 @@ class RemoteAppManagerViewModel(
                 customBlacklist = policy.customBlacklistPackages.toSet(),
                 customCurfewWhitelist = policy.customCurfewWhitelistPackages.toSet(),
                 customAiScanPackages = policy.customAiScanPackages.toSet(),
+                excludedAiScanPackages = policy.excludedAiScanPackages.toSet(),
                 curfewVpnBypass = policy.curfewVpnBypassPackages.toSet(),
                 protectedApps = policy.protectedAppPackages.toSet(),
                 lockNewInstallsUntilApproved = policy.lockNewInstallsUntilApproved,
                 initialBlacklist = policy.customBlacklistPackages.toSet(),
                 initialCurfewWhitelist = policy.customCurfewWhitelistPackages.toSet(),
                 initialAiScanPackages = policy.customAiScanPackages.toSet(),
+                initialExcludedAiScanPackages = policy.excludedAiScanPackages.toSet(),
                 initialCurfewVpnBypass = policy.curfewVpnBypassPackages.toSet(),
                 initialProtectedApps = policy.protectedAppPackages.toSet(),
                 initialLockNewInstalls = policy.lockNewInstallsUntilApproved,
@@ -381,12 +393,20 @@ class RemoteAppManagerViewModel(
     fun setAiScanTarget(packageName: String, isTarget: Boolean) {
         _uiState.update { state ->
             val aiScan = state.customAiScanPackages.toMutableSet()
+            val excluded = state.excludedAiScanPackages.toMutableSet()
             if (isTarget) {
                 aiScan.add(packageName)
+                excluded.remove(packageName)
             } else {
                 aiScan.remove(packageName)
+                if (com.drmohammed.antiporn.ai.core.policy.AiExemptionRegistry.isTarget(packageName)) {
+                    excluded.add(packageName)
+                }
             }
-            state.copy(customAiScanPackages = aiScan)
+            state.copy(
+                customAiScanPackages = aiScan,
+                excludedAiScanPackages = excluded
+            )
         }
     }
 
@@ -565,6 +585,7 @@ class RemoteAppManagerViewModel(
                 customBlacklistPackages = state.customBlacklist,
                 customCurfewWhitelistPackages = state.customCurfewWhitelist,
                 customAiScanPackages = state.customAiScanPackages,
+                excludedAiScanPackages = state.excludedAiScanPackages,
                 curfewVpnBypassPackages = state.curfewVpnBypass,
                 protectedAppPackages = state.protectedApps,
                 lockNewInstallsUntilApproved = state.lockNewInstallsUntilApproved,
@@ -602,6 +623,7 @@ class RemoteAppManagerViewModel(
                             initialBlacklist = state.customBlacklist,
                             initialCurfewWhitelist = state.customCurfewWhitelist,
                             initialAiScanPackages = state.customAiScanPackages,
+                            initialExcludedAiScanPackages = state.excludedAiScanPackages,
                             initialCurfewVpnBypass = state.curfewVpnBypass,
                             initialProtectedApps = state.protectedApps,
                             initialLockNewInstalls = state.lockNewInstallsUntilApproved

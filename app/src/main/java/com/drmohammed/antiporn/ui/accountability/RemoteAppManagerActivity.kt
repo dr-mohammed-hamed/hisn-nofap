@@ -247,6 +247,7 @@ class RemoteAppManagerActivity : AppCompatActivity() {
             customBlacklist = state.customBlacklist,
             customCurfewWhitelist = state.customCurfewWhitelist,
             customAiScanPackages = state.customAiScanPackages,
+            excludedAiScanPackages = state.excludedAiScanPackages,
             curfewVpnBypass = state.curfewVpnBypass,
             protectedApps = state.protectedApps,
             initialCurfewWhitelist = state.initialCurfewWhitelist,
@@ -375,6 +376,7 @@ class RemoteAppManagerActivity : AppCompatActivity() {
         private var customBlacklist: Set<String> = emptySet()
         private var customCurfewWhitelist: Set<String> = emptySet()
         private var customAiScanPackages: Set<String> = emptySet()
+        private var excludedAiScanPackages: Set<String> = emptySet()
         private var curfewVpnBypass: Set<String> = emptySet()
         private var protectedApps: Set<String> = emptySet()
         private var initialCurfewWhitelist: Set<String> = emptySet()
@@ -386,6 +388,7 @@ class RemoteAppManagerActivity : AppCompatActivity() {
             customBlacklist: Set<String>,
             customCurfewWhitelist: Set<String>,
             customAiScanPackages: Set<String>,
+            excludedAiScanPackages: Set<String>,
             curfewVpnBypass: Set<String>,
             protectedApps: Set<String>,
             initialCurfewWhitelist: Set<String>,
@@ -398,6 +401,7 @@ class RemoteAppManagerActivity : AppCompatActivity() {
             this.customBlacklist = customBlacklist
             this.customCurfewWhitelist = customCurfewWhitelist
             this.customAiScanPackages = customAiScanPackages
+            this.excludedAiScanPackages = excludedAiScanPackages
             this.curfewVpnBypass = curfewVpnBypass
             this.protectedApps = protectedApps
             this.initialCurfewWhitelist = initialCurfewWhitelist
@@ -516,7 +520,7 @@ class RemoteAppManagerActivity : AppCompatActivity() {
 
             holder.switchProtect.isChecked = protectedApps.contains(pkg)
 
-            val isAiTarget = customAiScanPackages.contains(pkg) || com.drmohammed.antiporn.ai.core.policy.AiExemptionRegistry.isTarget(pkg)
+            val isAiTarget = (customAiScanPackages.contains(pkg) || com.drmohammed.antiporn.ai.core.policy.AiExemptionRegistry.isTarget(pkg)) && !excludedAiScanPackages.contains(pkg)
 
             if (!isScreenAiEnabledGlobally) {
                 holder.switchAiScanTarget.isChecked = false

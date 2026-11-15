@@ -74,12 +74,29 @@ object AiExemptionRegistry {
     )
 
     /**
+     * متصفحات OEM الشائعة ومنصات التغذية البصرية الإضافية.
+     */
+    private val OEM_AND_EXTRA_BROWSERS: Set<String> = setOf(
+        "com.mi.globalbrowser",
+        "com.heytap.browser",
+        "com.coloros.browser",
+        "com.vivo.browser",
+        "com.huawei.browser",
+        "com.transsion.phoenix",
+        "com.yandex.browser",
+        "com.opera.gx",
+        "com.instagram.barcelona", // Threads
+        "com.pinterest"
+    )
+
+    /**
      * هل الحزمة هدف فحص؟ المتصفحات المقيدة + السوشيال + القائمة السوداء + المتاجر.
      * المتاجر (Play والعينية) هدف عمداً لمنع ثغرة التثبيت الجانبي وقت التجربة.
      */
     fun isTarget(packageName: String): Boolean {
         val lower = packageName.lowercase(Locale.ROOT)
         if (AppPolicyRegistry.isRestrictedBrowser(packageName)) return true
+        if (OEM_AND_EXTRA_BROWSERS.contains(lower)) return true
         if (AppPolicyRegistry.isPermanentlyBlacklisted(packageName)) return true
         if (AppPolicyRegistry.isAppStore(packageName)) return true
         if (SOCIAL_FEED_PACKAGES.contains(lower)) return true

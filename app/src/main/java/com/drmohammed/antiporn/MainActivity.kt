@@ -230,6 +230,10 @@ class MainActivity : AppCompatActivity(),
             val menuId = positionToMenuId(tabPos)
             navigateToTab(menuId)
         }
+        if (intent.getBooleanExtra("EXTRA_REQUEST_AI_TOGGLE", false)) {
+            intent.removeExtra("EXTRA_REQUEST_AI_TOGGLE")
+            onToggleAiRequested(true)
+        }
     }
 
     fun navigateToTab(tabId: Int) {

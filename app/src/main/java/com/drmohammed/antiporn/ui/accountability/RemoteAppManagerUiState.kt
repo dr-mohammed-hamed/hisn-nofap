@@ -20,12 +20,14 @@ data class RemoteAppManagerUiState(
     val customBlacklist: Set<String> = emptySet(),
     val customCurfewWhitelist: Set<String> = emptySet(),
     val customAiScanPackages: Set<String> = emptySet(),
+    val excludedAiScanPackages: Set<String> = emptySet(),
     val curfewVpnBypass: Set<String> = emptySet(),
     val protectedApps: Set<String> = emptySet(),
     val lockNewInstallsUntilApproved: Boolean = false,
     val initialBlacklist: Set<String> = emptySet(),
     val initialCurfewWhitelist: Set<String> = emptySet(),
     val initialAiScanPackages: Set<String> = emptySet(),
+    val initialExcludedAiScanPackages: Set<String> = emptySet(),
     val initialCurfewVpnBypass: Set<String> = emptySet(),
     val initialProtectedApps: Set<String> = emptySet(),
     val initialLockNewInstalls: Boolean = false,
@@ -37,6 +39,7 @@ data class RemoteAppManagerUiState(
         get() = customBlacklist != initialBlacklist ||
                 customCurfewWhitelist != initialCurfewWhitelist ||
                 customAiScanPackages != initialAiScanPackages ||
+                excludedAiScanPackages != initialExcludedAiScanPackages ||
                 curfewVpnBypass != initialCurfewVpnBypass ||
                 protectedApps != initialProtectedApps ||
                 lockNewInstallsUntilApproved != initialLockNewInstalls

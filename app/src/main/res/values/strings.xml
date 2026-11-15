@@ -314,6 +314,7 @@
     <string name="ai_service_channel_desc">إشعارات خدمة التقاط الشاشة وتحليل النماذج المحلية</string>
 
     <string name="ai_service_action_stop">إيقاف</string>
+    <string name="ai_service_resume_prompt">تم إيقاف الفحص مؤقتاً عند قفل الشاشة. انقر هنا لإعادة تفعيل الدرع فوراً.</string>
 
     <string name="ai_permission_denied">تم رفض إذن التقاط الشاشة</string>
 

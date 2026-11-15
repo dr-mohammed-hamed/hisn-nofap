@@ -102,6 +102,9 @@ class ScreenBlurOverlayManager(
         }
         overlayView?.clearRegions()
         onRegionsCleared?.invoke()
+        if (currentAttachedType != WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY) {
+            detachOverlay()
+        }
     }
 
     companion object {
@@ -450,6 +453,9 @@ class ScreenBlurOverlayManager(
             overlayScheduler.removeCallbacks(clearRunnable)
             overlayView?.clearRegions()
             onRegionsCleared?.invoke()
+            if (currentAttachedType != WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY) {
+                detachOverlay()
+            }
         }
     }
 
@@ -533,12 +539,15 @@ class ScreenBlurOverlayManager(
             this.type = windowType
             this.flags = MANDATORY_FLAGS
             this.format = PixelFormat.TRANSLUCENT
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                this.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                this.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
                 this.fitInsetsTypes = 0
                 this.fitInsetsSides = 0
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                this.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+            if (windowType != WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                this.alpha = 0.8f
             }
         }
         try {
@@ -601,6 +610,7 @@ class ScreenBlurOverlayManager(
             true
         } catch (e: Exception) {
             logE(TAG, "Failed to attach overlay view to WindowManager", e)
+            overlayView = null
             isAttached = false
             activeWm = null
             currentAttachedType = 0

@@ -68,6 +68,7 @@ class HalalifyGenderDetector(
     }
 
     private val pixelArray by lazy { IntArray(MODEL_INPUT_SIZE * MODEL_INPUT_SIZE) }
+    private val floatInputArray by lazy { FloatArray(MODEL_INPUT_SIZE * MODEL_INPUT_SIZE * MODEL_CHANNELS) }
 
     private var letterboxedBitmap: Bitmap? = null
     private var letterboxCanvas: Canvas? = null
@@ -192,14 +193,14 @@ class HalalifyGenderDetector(
 
             letterboxed.getPixels(pixelArray, 0, MODEL_INPUT_SIZE, 0, 0, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE)
 
+            var floatIdx = 0
+            val inv255 = 1.0f / 255.0f
             for (pixel in pixelArray) {
-                val r = ((pixel shr 16) and 0xFF) / 255.0f
-                val g = ((pixel shr 8) and 0xFF) / 255.0f
-                val b = (pixel and 0xFF) / 255.0f
-                buffer.putFloat(r)
-                buffer.putFloat(g)
-                buffer.putFloat(b)
+                floatInputArray[floatIdx++] = ((pixel shr 16) and 0xFF) * inv255
+                floatInputArray[floatIdx++] = ((pixel shr 8) and 0xFF) * inv255
+                floatInputArray[floatIdx++] = (pixel and 0xFF) * inv255
             }
+            buffer.asFloatBuffer().put(floatInputArray)
             buffer.rewind()
 
             interp.run(buffer, outputArray)

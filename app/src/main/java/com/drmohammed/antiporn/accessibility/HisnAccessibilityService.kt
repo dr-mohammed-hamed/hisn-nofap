@@ -3,6 +3,8 @@ package com.drmohammed.antiporn.accessibility
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
 import android.graphics.Rect
 import android.os.Build
 import android.view.Display
@@ -34,6 +36,18 @@ class HisnAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        try {
+            val info = serviceInfo ?: android.accessibilityservice.AccessibilityServiceInfo()
+            info.flags = info.flags or
+                android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+                android.accessibilityservice.AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
+            info.eventTypes = info.eventTypes or
+                AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+                AccessibilityEvent.TYPE_WINDOWS_CHANGED
+            serviceInfo = info
+        } catch (e: Exception) {
+            Timber.tag(TAG).w("Error updating serviceInfo: ${e.message}")
+        }
         eventBus.setAccessibilityActive(true)
         Timber.tag(TAG).i("HisnAccessibilityService connected to Android Framework (Instant 0ms Engine Active)")
         com.drmohammed.antiporn.telemetry.BlackBoxRecorder.recordA11y(
@@ -48,7 +62,8 @@ class HisnAccessibilityService : AccessibilityService() {
         val evt = event ?: return
 
         when (evt.eventType) {
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
                 handleWindowStateChanged(evt)
             }
             else -> {
@@ -59,7 +74,17 @@ class HisnAccessibilityService : AccessibilityService() {
     }
 
     private fun handleWindowStateChanged(event: AccessibilityEvent) {
-        val packageName = event.packageName?.toString() ?: return
+        val packageName = event.packageName?.toString() ?: run {
+            try {
+                val win = windows.firstOrNull { it.isFocused && it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+                val root = win?.root
+                val pkg = root?.packageName?.toString()
+                try { root?.recycle() } catch (_: Exception) {}
+                pkg
+            } catch (_: Exception) {
+                null
+            }
+        } ?: return
         val className = event.className?.toString()
 
         // 1. فلترة النوافذ العابرة ولوحات المفاتيح وواجهة النظام
@@ -129,16 +154,21 @@ class HisnAccessibilityService : AccessibilityService() {
     fun captureCleanWindowBitmap(onResult: (Bitmap?, Rect) -> Unit) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             val interactiveWindow = try {
-                windows.filter { win ->
-                    win.type == AccessibilityWindowInfo.TYPE_APPLICATION &&
-                    win.root?.packageName != applicationContext.packageName
-                }.maxByOrNull { win ->
+                windows.mapNotNull { win ->
+                    if (win.type != AccessibilityWindowInfo.TYPE_APPLICATION) return@mapNotNull null
+                    val root = win.root
+                    val pkg = root?.packageName?.toString()
+                    try { root?.recycle() } catch (_: Exception) {}
+                    if (pkg == null || pkg == applicationContext.packageName) return@mapNotNull null
+                    Pair(win, pkg)
+                }.maxByOrNull { (win, pkg) ->
                     val b = Rect()
                     win.getBoundsInScreen(b)
                     val area = (b.right - b.left).toLong() * (b.bottom - b.top).toLong()
+                    val targetBonus = if (com.drmohammed.antiporn.ai.core.policy.AiExemptionRegistry.isTarget(pkg)) 2_000_000_000L else 0L
                     val focusBonus = if (win.isFocused) 1_000_000_000L else 0L
-                    focusBonus + area
-                }
+                    targetBonus + focusBonus + area
+                }?.first
             } catch (e: Exception) {
                 null
             }
@@ -161,10 +191,24 @@ class HisnAccessibilityService : AccessibilityService() {
                                 val colorSpace = screenshotResult.colorSpace
                                 val bitmap = try {
                                     val wrapped = Bitmap.wrapHardwareBuffer(hwBuffer, colorSpace)
-                                    val copied = wrapped?.copy(Bitmap.Config.ARGB_8888, false)
-                                    try { wrapped?.recycle() } catch (_: Exception) {}
-                                    copied
+                                    if (wrapped != null) {
+                                        val origW = wrapped.width
+                                        val origH = wrapped.height
+                                        val maxDim = 924
+                                        val scale = minOf(1.0f, maxDim.toFloat() / maxOf(origW, origH).toFloat())
+                                        val targetW = (origW * scale).toInt().coerceAtLeast(1)
+                                        val targetH = (origH * scale).toInt().coerceAtLeast(1)
+                                        val scaled = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
+                                        val canvas = Canvas(scaled)
+                                        val paint = Paint(Paint.FILTER_BITMAP_FLAG)
+                                        canvas.drawBitmap(wrapped, null, Rect(0, 0, targetW, targetH), paint)
+                                        try { wrapped.recycle() } catch (_: Exception) {}
+                                        scaled
+                                    } else {
+                                        null
+                                    }
                                 } catch (e: Exception) {
+                                    Timber.tag(TAG).w("Error converting hardware buffer to bitmap: ${e.message}")
                                     null
                                 } finally {
                                     try { hwBuffer.close() } catch (_: Exception) {}

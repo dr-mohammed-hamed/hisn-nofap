@@ -26,6 +26,7 @@ data class TrackedModestyBox(
     var lastAnchorTimestampMs: Long,
     val isFemale: Boolean = true,
     var lastOuterRingChangeRatio: Float = 0f,
+    var maxRingChangeSinceLastAnchor: Float = 0f,
     var wasMatchedInCurrentAnchor: Boolean = false
 ) {
     /**

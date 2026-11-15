@@ -24,6 +24,7 @@ data class DevicePolicyBundle(
     val customBlacklistPackages: Set<String> = emptySet(),
     val customCurfewWhitelistPackages: Set<String> = emptySet(),
     val customAiScanPackages: Set<String> = emptySet(),
+    val excludedAiScanPackages: Set<String> = emptySet(),
     val curfewVpnBypassPackages: Set<String> = emptySet(),
     val protectedAppPackages: Set<String> = emptySet(),
     val browserFilterMode: Int = BROWSER_FILTER_OFF,
@@ -75,6 +76,7 @@ data class DevicePolicyBundle(
             "customBlacklistPackages" to customBlacklistPackages.toList(),
             "customCurfewWhitelistPackages" to customCurfewWhitelistPackages.toList(),
             "customAiScanPackages" to customAiScanPackages.toList(),
+            "excludedAiScanPackages" to excludedAiScanPackages.toList(),
             "curfewVpnBypassPackages" to curfewVpnBypassPackages.toList(),
             "protectedAppPackages" to protectedAppPackages.toList(),
             "browserFilterMode" to browserFilterMode,
@@ -130,6 +132,9 @@ data class DevicePolicyBundle(
 
         val aiScanArr = JSONArray().apply { customAiScanPackages.forEach { put(it) } }
         json.put("customAiScanPackages", aiScanArr)
+
+        val excludedAiScanArr = JSONArray().apply { excludedAiScanPackages.forEach { put(it) } }
+        json.put("excludedAiScanPackages", excludedAiScanArr)
 
         val vpnBypassArr = JSONArray().apply { curfewVpnBypassPackages.forEach { put(it) } }
         json.put("curfewVpnBypassPackages", vpnBypassArr)
@@ -247,6 +252,7 @@ data class DevicePolicyBundle(
                 (map["customCurfewWhitelistPackages"] as? List<*>)?.filterIsInstance<String>()?.toSet() ?: emptySet()
             }
             val aiScan = (map["customAiScanPackages"] as? List<*>)?.filterIsInstance<String>()?.toSet() ?: emptySet()
+            val excludedAiScan = (map["excludedAiScanPackages"] as? List<*>)?.filterIsInstance<String>()?.toSet() ?: emptySet()
             val vpnBypass = (map["curfewVpnBypassPackages"] as? List<*>)?.filterIsInstance<String>()?.toSet() ?: emptySet()
             val protectedApps = (map["protectedAppPackages"] as? List<*>)?.filterIsInstance<String>()?.toSet() ?: emptySet()
 
@@ -298,6 +304,7 @@ data class DevicePolicyBundle(
                 customBlacklistPackages = blacklist,
                 customCurfewWhitelistPackages = whitelist,
                 customAiScanPackages = aiScan,
+                excludedAiScanPackages = excludedAiScan,
                 curfewVpnBypassPackages = vpnBypass,
                 protectedAppPackages = protectedApps,
                 browserFilterMode = browserFilterMode,
@@ -348,6 +355,7 @@ data class DevicePolicyBundle(
                     com.drmohammed.antiporn.curfew.CurfewConfig.STATIC_WHITELIST
                 }
                 val aiScan = json.optJSONArray("customAiScanPackages").toStringSet()
+                val excludedAiScan = json.optJSONArray("excludedAiScanPackages").toStringSet()
                 val vpnBypass = json.optJSONArray("curfewVpnBypassPackages").toStringSet()
                 val protectedApps = json.optJSONArray("protectedAppPackages").toStringSet()
                 val browserFilterMode = json.optInt("browserFilterMode", BROWSER_FILTER_OFF).coerceIn(0, 2)
@@ -397,6 +405,7 @@ data class DevicePolicyBundle(
                     customBlacklistPackages = blacklist,
                     customCurfewWhitelistPackages = whitelist,
                     customAiScanPackages = aiScan,
+                    excludedAiScanPackages = excludedAiScan,
                     curfewVpnBypassPackages = vpnBypass,
                     protectedAppPackages = protectedApps,
                     browserFilterMode = browserFilterMode,

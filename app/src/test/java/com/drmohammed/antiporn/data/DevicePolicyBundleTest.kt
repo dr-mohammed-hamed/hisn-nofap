@@ -65,6 +65,8 @@ class DevicePolicyBundleTest {
             isDateTimeLocked = true,
             customBlacklistPackages = setOf("com.bad.app1", "com.bad.app2"),
             customCurfewWhitelistPackages = setOf("com.work.app1"),
+            customAiScanPackages = setOf("com.target.ai1"),
+            excludedAiScanPackages = setOf("com.excluded.ai1"),
             curfewVpnBypassPackages = setOf("com.bypass.app1"),
             protectedAppPackages = setOf("com.vital.app1", "com.vital.app2"),
             browserFilterMode = DevicePolicyBundle.BROWSER_FILTER_BLOCKLIST,
@@ -105,6 +107,8 @@ class DevicePolicyBundleTest {
         assertEquals(original.isDateTimeLocked, restored.isDateTimeLocked)
         assertEquals(original.customBlacklistPackages, restored.customBlacklistPackages)
         assertEquals(original.customCurfewWhitelistPackages, restored.customCurfewWhitelistPackages)
+        assertEquals(original.customAiScanPackages, restored.customAiScanPackages)
+        assertEquals(original.excludedAiScanPackages, restored.excludedAiScanPackages)
         assertEquals(original.curfewVpnBypassPackages, restored.curfewVpnBypassPackages)
         assertEquals(original.protectedAppPackages, restored.protectedAppPackages)
         assertEquals(original.browserFilterMode, restored.browserFilterMode)
@@ -145,6 +149,8 @@ class DevicePolicyBundleTest {
             isDateTimeLocked = true,
             customBlacklistPackages = setOf("pkg.a"),
             customCurfewWhitelistPackages = setOf("pkg.b"),
+            customAiScanPackages = setOf("pkg.ai.scan"),
+            excludedAiScanPackages = setOf("pkg.ai.excluded"),
             curfewVpnBypassPackages = setOf("pkg.vpn.bypass"),
             protectedAppPackages = setOf("pkg.c"),
             browserFilterMode = DevicePolicyBundle.BROWSER_FILTER_WHITELIST_ONLY,
@@ -185,6 +191,8 @@ class DevicePolicyBundleTest {
         assertEquals(original.isDateTimeLocked, restored.isDateTimeLocked)
         assertEquals(original.customBlacklistPackages, restored.customBlacklistPackages)
         assertEquals(original.customCurfewWhitelistPackages, restored.customCurfewWhitelistPackages)
+        assertEquals(original.customAiScanPackages, restored.customAiScanPackages)
+        assertEquals(original.excludedAiScanPackages, restored.excludedAiScanPackages)
         assertEquals(original.curfewVpnBypassPackages, restored.curfewVpnBypassPackages)
         assertEquals(original.protectedAppPackages, restored.protectedAppPackages)
         assertEquals(original.browserFilterMode, restored.browserFilterMode)

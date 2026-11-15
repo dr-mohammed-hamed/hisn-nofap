@@ -111,16 +111,19 @@ internal object KltMathHelper {
             return true
         }
 
-        if (horizOverlapRatio >= 0.50f) {
-            val verticalGap = if (a.bottom <= b.top) {
-                b.top - a.bottom
-            } else if (b.bottom <= a.top) {
-                a.top - b.bottom
-            } else {
-                0f
-            }
-            if (verticalGap <= maxGapNorm) {
-                return true
+        if (horizOverlapRatio >= 0.70f) {
+            val widthRatio = minW / maxOf(wA, wB)
+            if (widthRatio >= 0.60f) {
+                val verticalGap = if (a.bottom <= b.top) {
+                    b.top - a.bottom
+                } else if (b.bottom <= a.top) {
+                    a.top - b.bottom
+                } else {
+                    0f
+                }
+                if (verticalGap <= (maxGapNorm * 0.5f)) {
+                    return true
+                }
             }
         }
 

@@ -151,9 +151,24 @@ class ContextualGatingWatcher(
         lastQueryFailed = false
         lastQueryTimeMs = System.currentTimeMillis()
 
-        if (pkg != currentForegroundPackage) {
+        // فحص النوافذ المتعددة والنافذة داخل نافذة (Split-screen & PiP Aware)
+        val a11y = com.drmohammed.antiporn.accessibility.HisnAccessibilityService.instance
+        var hasVisibleTargetWindow = false
+        if (a11y != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            try {
+                hasVisibleTargetWindow = a11y.windows.any { win ->
+                    if (win.type != android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION) return@any false
+                    val root = win.root
+                    val winPkg = root?.packageName?.toString()
+                    try { root?.recycle() } catch (_: Exception) {}
+                    winPkg != null && isTargetPackage(winPkg)
+                }
+            } catch (_: Exception) {}
+        }
+
+        if (pkg != currentForegroundPackage || (hasVisibleTargetWindow && !isTargetAppForeground)) {
             currentForegroundPackage = pkg
-            val isTarget = try {
+            val isTarget = hasVisibleTargetWindow || try {
                 isTargetPackage(pkg)
             } catch (e: Exception) {
                 Timber.tag(TAG).e(e, "Policy check failed, fail-closed")
@@ -162,7 +177,7 @@ class ContextualGatingWatcher(
 
             if (isTarget != isTargetAppForeground) {
                 isTargetAppForeground = isTarget
-                Timber.tag(TAG).d("Foreground changed (0ms A11y) -> Target: $isTarget (pkg: $pkg)")
+                Timber.tag(TAG).d("Foreground changed (0ms A11y) -> Target: $isTarget (pkg: $pkg, multiWindowTarget=$hasVisibleTargetWindow)")
                 onStateChanged?.invoke(isTarget, pkg)
             }
         }
@@ -242,8 +257,10 @@ class ContextualGatingWatcher(
             null
         }
 
-        if (policy != null && policy.customAiScanPackages.contains(pkg)) {
-            return true
+        if (policy != null) {
+            if (!policy.isScreenAiEnabledGlobally) return false
+            if (policy.excludedAiScanPackages.contains(pkg)) return false
+            if (policy.customAiScanPackages.contains(pkg)) return true
         }
 
         return AiExemptionRegistry.isTarget(pkg)

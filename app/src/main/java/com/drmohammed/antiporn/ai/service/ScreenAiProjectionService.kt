@@ -71,7 +71,7 @@ class ScreenAiProjectionService : Service() {
             internal set
 
         @Volatile
-        var modelName: String = "Halalify v2 + NudeNet v3"
+        var modelName: String = "Halalify v2"
             private set
 
         @Volatile
@@ -81,6 +81,7 @@ class ScreenAiProjectionService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        initError = ""
         Log.i(TAG, "ScreenAiProjectionService onCreate")
 
         inferenceCoordinator = AiInferenceCoordinator(
@@ -222,7 +223,14 @@ class ScreenAiProjectionService : Service() {
 
             val callback = object : MediaProjection.Callback() {
                 override fun onStop() {
-                    Log.w(TAG, "MediaProjection stopped by system")
+                    Log.w(TAG, "MediaProjection stopped by system (e.g. screen lock on Android 15+)")
+                    com.drmohammed.antiporn.telemetry.BlackBoxRecorder.recordShield(
+                        context = applicationContext,
+                        shieldId = "SCREEN_AI_PROJECTION",
+                        isSuccess = false,
+                        details = "MediaProjection stopped by system"
+                    )
+                    showResumeNotificationOnUnlock()
                     stopSelf()
                 }
             }
@@ -236,6 +244,35 @@ class ScreenAiProjectionService : Service() {
             isRunning = false
             isStopping = false
             stopSelf()
+        }
+    }
+
+    private fun showResumeNotificationOnUnlock() {
+        try {
+            val notifyIntent = Intent(applicationContext, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra("EXTRA_REQUEST_AI_TOGGLE", true)
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                applicationContext,
+                1002,
+                notifyIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_ai_shield)
+                .setContentTitle(getString(R.string.ai_service_notification_title))
+                .setContentText(getString(R.string.ai_service_resume_prompt))
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
+                .build()
+
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            nm?.notify(1002, notification)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to show resume notification: ${e.message}")
         }
     }
 
