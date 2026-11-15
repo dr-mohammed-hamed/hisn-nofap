@@ -1,11 +1,11 @@
 {
-  "versionCode": 22,
-  "versionName": "1.83",
+  "versionCode": 23,
+  "versionName": "1.84",
   "minSupportedVersion": 1,
   "apkFileName": "antiporn-release.apk",
   "downloadUrl": "https://pub-e568dc85c0ec4f2fb3d1b90e310b4310.r2.dev/antiporn-release.apk",
-  "fileSizeBytes": 35566184,
+  "fileSizeBytes": 35611576,
   "sha256CertificateChecksum": "Cxi7DKn3ddcJXYIuDNXdlKN84EuKu8Bf0L0SkSPCOMk",
-  "releaseNotes": "إصدار 1.83 (كود البناء 22): حماية المعاملات البنكية Safe Banking Cloak واختصار InstaPay، تسريع تتبع الذكاء الاصطناعي KLT وخفض استهلاك الذاكرة، لوحة مفاتيح عائمة للاقتران اللاسلكي، وجعل تجميد التطبيقات اختيارياً مع تحسينات التحديث الهوائي OTA.",
+  "releaseNotes": "إصدار 1.84 (كود البناء 23): إضافة درع الصفحات Page Shield إلى صلاحيات المشرف، تفعيل الحفظ الفوري عند النقر على البطاقات، وتأمين السياسات بالوضع الافتراضي المشدد، مع دمج اتفاقية المساهمين CLA وتحسينات التحديث الهوائي OTA.",
   "releaseDate": "2026-11-15"
 }
