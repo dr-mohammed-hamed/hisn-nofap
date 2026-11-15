@@ -1,11 +1,11 @@
 {
-  "versionCode": 21,
-  "versionName": "1.82",
+  "versionCode": 22,
+  "versionName": "1.83",
   "minSupportedVersion": 1,
   "apkFileName": "antiporn-release.apk",
   "downloadUrl": "https://pub-e568dc85c0ec4f2fb3d1b90e310b4310.r2.dev/antiporn-release.apk",
-  "fileSizeBytes": 35541496,
+  "fileSizeBytes": 35566184,
   "sha256CertificateChecksum": "Cxi7DKn3ddcJXYIuDNXdlKN84EuKu8Bf0L0SkSPCOMk",
-  "releaseNotes": "إصدار 1.82 (كود البناء 21): ميزات جديدة لنظام 'وقفة' (جلسات مفتوحة ومدد مخصصة وإشعارات حية)، تحصين حاجز رمز الاستجابة السريعة QR ضد التلاعب، وتحديثات استقرار لدرع الذكاء الاصطناعي وتتبع الشاشة.",
-  "releaseDate": "2026-11-14"
+  "releaseNotes": "إصدار 1.83 (كود البناء 22): حماية المعاملات البنكية Safe Banking Cloak واختصار InstaPay، تسريع تتبع الذكاء الاصطناعي KLT وخفض استهلاك الذاكرة، لوحة مفاتيح عائمة للاقتران اللاسلكي، وجعل تجميد التطبيقات اختيارياً مع تحسينات التحديث الهوائي OTA.",
+  "releaseDate": "2026-11-15"
 }
