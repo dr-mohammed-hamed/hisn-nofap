@@ -1352,13 +1352,21 @@
     <string name="notif_self_control_qr_reset_by_guardian_msg">قام المشرف بإلغاء قفل الـ QR وحذف التوكن عن بُعد بنجاح.</string>
 
     <!-- Safe Banking Cloak -->
-    <string name="banking_app_not_installed">تطبيق إنستاباي غير مثبت على الهاتف</string>
-    <string name="banking_shortcut_label">إنستاباي</string>
-    <string name="banking_shortcut_long_label">إنستاباي الآمن</string>
-    <string name="card_banking_title">المعاملات البنكية وإنستاباي</string>
-    <string name="card_banking_desc">تشغيل إنستاباي بنقرة واحدة دون تعارض مع الحماية، واستئنافها تلقائياً عند الخروج</string>
-    <string name="btn_pin_instapay_shortcut">تثبيت الاختصار على الشاشة الرئيسية</string>
-    <string name="btn_launch_instapay_now">تشغيل إنستاباي الآن</string>
+    <string name="banking_app_not_installed">تطبيق البنك غير مثبت على الهاتف</string>
+    <string name="banking_shortcut_label">تطبيق بنكي</string>
+    <string name="banking_shortcut_long_label">تطبيق بنكي آمن</string>
+    <string name="banking_shortcut_custom_long_label_format">%1$s (آمن)</string>
+    <string name="card_banking_list_title">تطبيقات البنوك</string>
+    <string name="card_banking_list_desc">التشغيل الآمن لإنستاباي والتطبيقات المصرفية</string>
+    <string name="bottom_sheet_banking_title">تطبيقات البنوك والمصارف</string>
+    <string name="bottom_sheet_banking_subtitle">تشغيل آمن بدون تعارض مع منظومة الحماية</string>
+    <string name="btn_safe_launch">تشغيل آمن</string>
+    <string name="btn_pin_shortcut">اختصار</string>
+    <string name="no_banking_apps_installed">لا توجد تطبيقات بنكية مثبتة</string>
+    <string name="bottom_sheet_do_title">صلاحية مسؤول الجهاز</string>
+    <string name="bottom_sheet_do_subtitle">إدارة الصلاحية السيادية والتفكيك الآمن</string>
+    <string name="card_do_status_active_title">الصلاحية نشطة ومحمية</string>
+    <string name="card_do_status_active_desc">التطبيق يمتلك صلاحية مسؤول الجهاز المالك (Device Owner) لتأمين النظام ضد التخطي.</string>
     <string name="shortcut_pin_success">تم إرسال طلب إضافة الاختصار إلى الشاشة الرئيسية</string>
     <string name="shortcut_not_supported">مشغل الشاشة لا يدعم إضافة الاختصارات تلقائياً</string>
 </resources>

@@ -62,6 +62,11 @@ object BankingCloakManager {
      */
     @Synchronized
     fun launchSafely(context: Context, targetPackage: String = INSTAPAY_PACKAGE): Boolean {
+        if (!BankingAppRegistry.isAllowed(targetPackage)) {
+            Timber.tag(TAG).e("Security violation: Rejecting banking cloak request for non-whitelisted package: $targetPackage")
+            return false
+        }
+
         val appContext = context.applicationContext ?: context
         val pm = try {
             appContext.packageManager
@@ -162,10 +167,8 @@ object BankingCloakManager {
                 } else {
                     alarmManager.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMillis, pendingIntent)
                 }
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                alarmManager.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMillis, pendingIntent)
             } else {
-                alarmManager.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMillis, pendingIntent)
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMillis, pendingIntent)
             }
             Timber.tag(TAG).d("Scheduled restore alarm for +${timeoutMs}ms")
         } catch (e: Exception) {
@@ -194,11 +197,7 @@ object BankingCloakManager {
             val intent = Intent(context, BankingRestoreReceiver::class.java).apply {
                 action = ACTION_RESTORE_BANKING_CLOAK
             }
-            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            } else {
-                PendingIntent.FLAG_UPDATE_CURRENT
-            }
+            val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             PendingIntent.getBroadcast(context, RESTORE_ALARM_REQUEST_CODE, intent, flags)
         } catch (e: Exception) {
             Timber.tag(TAG).w(e, "Failed to create PendingIntent for BankingRestoreReceiver")

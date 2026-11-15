@@ -171,6 +171,17 @@ class BankingCloakManagerTest {
     }
 
     @Test
+    fun testLaunchSafely_whenPackageNotWhitelisted_returnsFalseAndDoesNotCloak() {
+        dummyContext.installedPackages.add("com.android.chrome")
+
+        val result = BankingCloakManager.launchSafely(dummyContext, "com.android.chrome")
+
+        assertFalse(result)
+        assertFalse(AccessibilitySelfActivator.isTemporarilyCloaked)
+        assertFalse(BankingCloakManager.isCloaked)
+    }
+
+    @Test
     fun testLaunchSafely_whenPackageNotInstalled_returnsFalseAndDoesNotCloak() {
         dummyContext.installedPackages.clear()
 

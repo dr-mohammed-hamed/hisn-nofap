@@ -1075,13 +1075,21 @@
     <string name="notif_self_control_qr_reset_by_guardian_msg">Your guardian has remotely reset and removed the Self-Control QR lock.</string>
 
     <!-- Safe Banking Cloak -->
-    <string name="banking_app_not_installed">InstaPay app is not installed on this device</string>
-    <string name="banking_shortcut_label">InstaPay</string>
-    <string name="banking_shortcut_long_label">Safe InstaPay</string>
-    <string name="card_banking_title">Banking &amp; InstaPay</string>
-    <string name="card_banking_desc">One-tap launch for InstaPay without protection conflicts, with auto-restore upon exit.</string>
-    <string name="btn_pin_instapay_shortcut">Pin to Home Screen</string>
-    <string name="btn_launch_instapay_now">Launch InstaPay Now</string>
+    <string name="banking_app_not_installed">Banking application is not installed on this device</string>
+    <string name="banking_shortcut_label">Banking App</string>
+    <string name="banking_shortcut_long_label">Safe Banking App</string>
+    <string name="banking_shortcut_custom_long_label_format">%1$s (Safe)</string>
+    <string name="card_banking_list_title">Banking Apps</string>
+    <string name="card_banking_list_desc">Safe launch for InstaPay and banking applications</string>
+    <string name="bottom_sheet_banking_title">Banking &amp; Financial Apps</string>
+    <string name="bottom_sheet_banking_subtitle">Secure launch without protection conflicts</string>
+    <string name="btn_safe_launch">Safe Launch</string>
+    <string name="btn_pin_shortcut">Shortcut</string>
+    <string name="no_banking_apps_installed">No banking apps installed</string>
+    <string name="bottom_sheet_do_title">Device Owner Authority</string>
+    <string name="bottom_sheet_do_subtitle">Sovereign authority management &amp; safe teardown</string>
+    <string name="card_do_status_active_title">Authority Active &amp; Protected</string>
+    <string name="card_do_status_active_desc">The application holds Device Owner authority securing the system against tampering.</string>
     <string name="shortcut_pin_success">Shortcut pin request sent to home screen</string>
     <string name="shortcut_not_supported">Home launcher does not support pinned shortcuts</string>
 </resources>

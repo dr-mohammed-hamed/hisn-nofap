@@ -71,6 +71,13 @@ class BankingShortcutHelperTest {
         assertFalse("Should return false immediately if InstaPay is not installed", result)
     }
 
+    @Test
+    fun testPinBankingShortcut_whenPackageNotWhitelisted_returnsFalseImmediately() {
+        val context = DummyTestContext(installedPackages = setOf("com.android.chrome"))
+        val result = BankingShortcutHelper.pinBankingShortcut(context, "com.android.chrome")
+        assertFalse("Should return false immediately if target package is not in banking whitelist", result)
+    }
+
     // =========================================================================
     // Test Doubles
     // =========================================================================
