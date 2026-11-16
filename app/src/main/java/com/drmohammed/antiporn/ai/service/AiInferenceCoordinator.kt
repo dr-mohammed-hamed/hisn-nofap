@@ -45,11 +45,32 @@ class AiInferenceCoordinator(
         private set
 
     private val isHalalifyInferring = AtomicBoolean(false)
+    private val isCaptureInFlight = AtomicBoolean(false)
+    private var adaptiveIntervalMs: Long = BASE_ADAPTIVE_INTERVAL_MS
     private var lastAnchorCheckTimeMs: Long = 0L
     private var lastA11yScreenshotAttemptMs: Long = 0L
     private var consecutiveA11yFailures: Int = 0
     private var lastA11yFailureTimeMs: Long = 0L
     private var a11yStageIndex: Int = 0
+
+    private val a11yCaptureRunnable = Runnable { triggerAdaptiveA11yCapture() }
+    private val postScrollSettleRunnable = Runnable { executePostScrollSettleSweep() }
+    private val heartbeatRunnable = object : Runnable {
+        override fun run() {
+            if (!isRunning) return
+            try {
+                if (contextualWatcher.isTargetAppForeground) {
+                    triggerHeartbeatCheck()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Heartbeat check error", e)
+            } finally {
+                if (isRunning) {
+                    inferenceHandler?.postDelayed(this, HEARTBEAT_INTERVAL_MS)
+                }
+            }
+        }
+    }
 
     private var inferenceBitmap: Bitmap? = null
     private var scratchPixels: IntArray? = null
@@ -111,8 +132,15 @@ class AiInferenceCoordinator(
             onStateChanged = { isTarget, _ ->
                 consecutiveA11yFailures = 0
                 if (!isTarget) {
+                    inferenceHandler?.removeCallbacks(a11yCaptureRunnable)
+                    inferenceHandler?.removeCallbacks(postScrollSettleRunnable)
+                    isCaptureInFlight.set(false)
                     if (::kltTracker.isInitialized) kltTracker.flush()
                     if (::blurOverlayManager.isInitialized) blurOverlayManager.dismissFast()
+                } else {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                        scheduleNextA11yCapture(0L)
+                    }
                 }
             }
         )
@@ -142,10 +170,22 @@ class AiInferenceCoordinator(
 
     fun start() {
         isRunning = true
+        activeInstance = this
         isHalalifyInferring.set(false)
+        isCaptureInFlight.set(false)
+        adaptiveIntervalMs = BASE_ADAPTIVE_INTERVAL_MS
         lastAnchorCheckTimeMs = 0L
         consecutiveA11yFailures = 0
         if (::kltTracker.isInitialized) kltTracker.flush()
+
+        // بدء حلقة النبضات المستقلة Heartbeat كل 900ms
+        inferenceHandler?.removeCallbacks(heartbeatRunnable)
+        inferenceHandler?.postDelayed(heartbeatRunnable, HEARTBEAT_INTERVAL_MS)
+
+        // على أندرويد 14+، بدء حلقة الالتقاط التكيفية المستقلة فوراً عند وجود تطبيق مستهدف
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && contextualWatcher.isTargetAppForeground) {
+            scheduleNextA11yCapture(0L)
+        }
     }
 
     fun processFrame(image: Image, width: Int, height: Int) {
@@ -206,70 +246,21 @@ class AiInferenceCoordinator(
             }
         }
 
-        // 2. Async Anchor Path: Clean A11y Screenshot OR 4-Stage Rotation (FullFrame + 3 Slices) (4-5 FPS)
-        val a11y = HisnAccessibilityService.instance
-        val isA11ySupported = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) && (a11y != null)
-        val isCooldownPassed = (now - lastA11yFailureTimeMs) >= 3000L
-        val isA11yActive = isA11ySupported && (consecutiveA11yFailures < 3 || isCooldownPassed)
+        // 2. Async Anchor Path: Clean A11y Screenshot (API 34+) OR 4-Stage Rotation (API < 34)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            // فصل أندرويد 14+ بالكامل عن MediaProjection عبر حلقة الالتقاط التكيفية المستقلة
+            val shouldTrigger = !isCaptureInFlight.get() &&
+                    ((now - lastAnchorCheckTimeMs >= adaptiveIntervalMs) || (::kltTracker.isInitialized && !kltTracker.hasActiveTracks() && (now - lastAnchorCheckTimeMs >= 50L)))
+            if (shouldTrigger) {
+                scheduleNextA11yCapture(0L)
+            }
+        } else {
+            val anchorInterval = ANCHOR_INTERVAL_MS
+            val shouldTriggerAnchor = !isHalalifyInferring.get() &&
+                    ((now - lastAnchorCheckTimeMs >= anchorInterval) || (::kltTracker.isInitialized && !kltTracker.hasActiveTracks() && (now - lastAnchorCheckTimeMs >= 50L)))
 
-        val anchorInterval = if (isA11yActive) 350L else ANCHOR_INTERVAL_MS
-        val shouldTriggerAnchor = !isHalalifyInferring.get() &&
-                ((now - lastAnchorCheckTimeMs >= anchorInterval) || (::kltTracker.isInitialized && !kltTracker.hasActiveTracks() && (now - lastAnchorCheckTimeMs >= (if (isA11yActive) 350L else 50L))))
-
-        if (shouldTriggerAnchor && isHalalifyInferring.compareAndSet(false, true)) {
-            val canTryA11y = isA11yActive && (now - lastA11yScreenshotAttemptMs >= 350L)
-
-            if (canTryA11y) {
-                lastA11yScreenshotAttemptMs = now
-                val captureTimestamp = now
-                val captureGen = sceneGenerationId
-                val startScrollX = accumulatedScrollDx
-                val startScrollY = accumulatedScrollDy
-
-                a11y?.captureCleanWindowBitmap { cleanBitmap, windowBounds ->
-                    if (cleanBitmap != null) {
-                        consecutiveA11yFailures = 0
-                        if (isRunning && captureGen == sceneGenerationId) {
-                            val posted = inferenceHandler?.post {
-                                try {
-                                    runHalalifyOnCleanBitmap(
-                                        cleanBitmap = cleanBitmap,
-                                        windowBounds = windowBounds,
-                                        captureGen = captureGen,
-                                        captureTimestamp = captureTimestamp,
-                                        startScrollX = startScrollX,
-                                        startScrollY = startScrollY,
-                                        frameWidth = width,
-                                        frameHeight = height
-                                    )
-                                } finally {
-                                    try { cleanBitmap.recycle() } catch (_: Exception) {}
-                                    lastAnchorCheckTimeMs = SystemClock.elapsedRealtime()
-                                    isHalalifyInferring.set(false)
-                                }
-                            } ?: false
-                            if (!posted) {
-                                try { cleanBitmap.recycle() } catch (_: Exception) {}
-                                lastAnchorCheckTimeMs = SystemClock.elapsedRealtime()
-                                isHalalifyInferring.set(false)
-                            }
-                        } else {
-                            try { cleanBitmap.recycle() } catch (_: Exception) {}
-                            lastAnchorCheckTimeMs = SystemClock.elapsedRealtime()
-                            isHalalifyInferring.set(false)
-                        }
-                    } else {
-                        consecutiveA11yFailures++
-                        lastA11yFailureTimeMs = now
-                        Log.d(TAG, "A11y clean capture returned null (consecutive failures: $consecutiveA11yFailures)")
-                        lastAnchorCheckTimeMs = SystemClock.elapsedRealtime()
-                        isHalalifyInferring.set(false)
-                    }
-                }
-            } else if (!isA11yActive) {
+            if (shouldTriggerAnchor && isHalalifyInferring.compareAndSet(false, true)) {
                 dispatchMediaProjectionAnchor(image, width, height, now)
-            } else {
-                isHalalifyInferring.set(false)
             }
         }
     }
@@ -675,6 +666,247 @@ class AiInferenceCoordinator(
         }
     }
 
+    /**
+     * يُستدعى عند حدوث تمرير في التطبيق النشط (TYPE_VIEW_SCROLLED).
+     * يعيد ضبط مؤقت الاستقرار Post-Scroll Settle Sweep ليعمل بعد 150ms من لحظة توقف التمرير.
+     */
+    fun onViewScrolled() {
+        if (!isRunning || !contextualWatcher.isTargetAppForeground) return
+        inferenceHandler?.removeCallbacks(postScrollSettleRunnable)
+        inferenceHandler?.postDelayed(postScrollSettleRunnable, POST_SCROLL_SETTLE_DELAY_MS)
+    }
+
+    /**
+     * فحص استقرار ما بعد التمرير (Post-Scroll Settle Sweep):
+     * يعمل بعد 150ms من توقف التمرير ويفحص جميع الشرائح المتبقية للشاشة المستقرة بغض النظر عن وصول إطارات جديدة.
+     */
+    private fun executePostScrollSettleSweep() {
+        if (!isRunning || !contextualWatcher.isTargetAppForeground) return
+
+        val a11y = HisnAccessibilityService.instance
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && a11y != null && a11y.isCleanWindowCaptureSupported()) {
+            if (isCaptureInFlight.compareAndSet(false, true)) {
+                val captureTimestamp = SystemClock.elapsedRealtime()
+                val captureGen = sceneGenerationId
+                val startScrollX = accumulatedScrollDx
+                val startScrollY = accumulatedScrollDy
+
+                a11y.captureCleanWindowBitmap { cleanBitmap, windowBounds, _ ->
+                    try {
+                        if (cleanBitmap != null && isRunning && captureGen == sceneGenerationId) {
+                            val (physW, physH) = getPhysicalScreenSize()
+                            runHalalifySweepOnCleanBitmap(
+                                cleanBitmap = cleanBitmap,
+                                windowBounds = windowBounds,
+                                captureGen = captureGen,
+                                captureTimestamp = captureTimestamp,
+                                startScrollX = startScrollX,
+                                startScrollY = startScrollY,
+                                frameWidth = physW,
+                                frameHeight = physH
+                            )
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error in post-scroll settle sweep", e)
+                    } finally {
+                        try { cleanBitmap?.recycle() } catch (_: Exception) {}
+                        isCaptureInFlight.set(false)
+                        lastAnchorCheckTimeMs = SystemClock.elapsedRealtime()
+                    }
+                }
+            }
+        } else {
+            onStaticScreen()
+        }
+    }
+
+    private fun runHalalifySweepOnCleanBitmap(
+        cleanBitmap: Bitmap,
+        windowBounds: Rect,
+        captureGen: Long,
+        captureTimestamp: Long,
+        startScrollX: Float,
+        startScrollY: Float,
+        frameWidth: Int,
+        frameHeight: Int
+    ) {
+        if (!isRunning || captureGen != sceneGenerationId) return
+        if (!::halalifyDetector.isInitialized || !halalifyDetector.isInitialized) return
+
+        val cleanAspect = cleanBitmap.height.toFloat() / cleanBitmap.width.toFloat().coerceAtLeast(1f)
+        val shouldTileClean = cleanAspect >= 1.4f
+
+        val stagesToSweep = if (shouldTileClean) listOf(0, 1, 2) else listOf(0)
+        val allFemaleDetections = mutableListOf<com.drmohammed.antiporn.ai.core.model.HalalifyDetection>()
+
+        val (physicalW, physicalH) = getPhysicalScreenSize()
+        val scaleX = frameWidth.toFloat() / physicalW.toFloat().coerceAtLeast(1f)
+        val scaleY = frameHeight.toFloat() / physicalH.toFloat().coerceAtLeast(1f)
+
+        val scaledWinLeft = windowBounds.left * scaleX
+        val scaledWinTop = windowBounds.top * scaleY
+        val scaledWinWidth = (windowBounds.right - windowBounds.left) * scaleX
+        val scaledWinHeight = (windowBounds.bottom - windowBounds.top) * scaleY
+
+        val dtX = accumulatedScrollDx - startScrollX
+        val dtY = accumulatedScrollDy - startScrollY
+
+        val allMappedBoxes = mutableListOf<RectF>()
+
+        for (stage in stagesToSweep) {
+            val (inputToDetect, cropOffsetY, cropH) = when (stage) {
+                1 -> {
+                    val h = (cleanBitmap.height * 0.60f).toInt().coerceAtLeast(1)
+                    Triple(Bitmap.createBitmap(cleanBitmap, 0, 0, cleanBitmap.width, h), 0, h)
+                }
+                2 -> {
+                    val h = (cleanBitmap.height * 0.60f).toInt().coerceAtLeast(1)
+                    val topY = (cleanBitmap.height - h).coerceAtLeast(0)
+                    Triple(Bitmap.createBitmap(cleanBitmap, 0, topY, cleanBitmap.width, h), topY, h)
+                }
+                else -> {
+                    Triple(cleanBitmap, 0, cleanBitmap.height)
+                }
+            }
+
+            try {
+                val detections = halalifyDetector.detect(inputToDetect)
+                allFemaleDetections.addAll(detections.filter { it.isFemale })
+
+                val boxes = detections.filter { it.isFemale }.map { det ->
+                    val boxLeftNorm = det.boundingBox.left
+                    val boxRightNorm = det.boundingBox.right
+                    val boxTopNorm = (cropOffsetY + det.boundingBox.top * cropH) / cleanBitmap.height.toFloat()
+                    val boxBottomNorm = (cropOffsetY + det.boundingBox.bottom * cropH) / cleanBitmap.height.toFloat()
+
+                    val pxL = scaledWinLeft + (boxLeftNorm * scaledWinWidth) + dtX
+                    val pxT = scaledWinTop + (boxTopNorm * scaledWinHeight) + dtY
+                    val pxR = scaledWinLeft + (boxRightNorm * scaledWinWidth) + dtX
+                    val pxB = scaledWinTop + (boxBottomNorm * scaledWinHeight) + dtY
+
+                    val normL = (pxL / frameWidth).coerceIn(0f, 1f)
+                    val normT = (pxT / frameHeight).coerceIn(0f, 1f)
+                    val normR = (pxR / frameWidth).coerceIn(normL + 0.001f, 1f)
+                    val normB = (pxB / frameHeight).coerceIn(normT + 0.001f, 1f)
+                    TrackedModestyBox.createRectF(normL, normT, normR, normB)
+                }
+                allMappedBoxes.addAll(boxes)
+            } finally {
+                if (inputToDetect !== cleanBitmap) {
+                    try { inputToDetect.recycle() } catch (_: Exception) {}
+                }
+            }
+        }
+
+        notifyDetectionUpdated(allFemaleDetections)
+
+        val mergedBoxes = KltMathHelper.mergeBoxesSpatially(allMappedBoxes, 40f / frameHeight)
+        val tileNormRect = TrackedModestyBox.createRectF(0f, 0f, 1f, 1f)
+
+        if (::kltTracker.isInitialized) {
+            kltTracker.updateAnchorsCrossTile(
+                detections = mergedBoxes,
+                tileNormRect = tileNormRect,
+                frameWidth = frameWidth,
+                frameHeight = frameHeight,
+                timestampMs = captureTimestamp,
+                isCleanSource = true
+            )
+        }
+
+        renderOverlayAfterAnchor(0L)
+        blurOverlayManager.retainActiveRegions()
+    }
+
+    /**
+     * جدولة الالتقاط التكيفي المستقل لأندرويد 14+.
+     */
+    fun scheduleNextA11yCapture(delayMs: Long) {
+        if (!isRunning || !contextualWatcher.isTargetAppForeground) return
+        inferenceHandler?.removeCallbacks(a11yCaptureRunnable)
+        if (delayMs <= 0L) {
+            inferenceHandler?.post(a11yCaptureRunnable)
+        } else {
+            inferenceHandler?.postDelayed(a11yCaptureRunnable, delayMs)
+        }
+    }
+
+    private fun triggerAdaptiveA11yCapture() {
+        if (!isRunning || !contextualWatcher.isTargetAppForeground) return
+
+        val a11y = HisnAccessibilityService.instance ?: return
+        if (!a11y.isCleanWindowCaptureSupported()) return
+
+        if (!isCaptureInFlight.compareAndSet(false, true)) {
+            return
+        }
+
+        val captureTimestamp = SystemClock.elapsedRealtime()
+        val captureGen = sceneGenerationId
+        val startScrollX = accumulatedScrollDx
+        val startScrollY = accumulatedScrollDy
+
+        a11y.captureCleanWindowBitmap { cleanBitmap, windowBounds, errorCode ->
+            try {
+                if (cleanBitmap != null) {
+                    // نجاح اللقطة: إعادة الفاصل للقيمة الأساسية 380ms
+                    adaptiveIntervalMs = BASE_ADAPTIVE_INTERVAL_MS
+                    consecutiveA11yFailures = 0
+
+                    if (isRunning && captureGen == sceneGenerationId) {
+                        val (physW, physH) = getPhysicalScreenSize()
+                        runHalalifyOnCleanBitmap(
+                            cleanBitmap = cleanBitmap,
+                            windowBounds = windowBounds,
+                            captureGen = captureGen,
+                            captureTimestamp = captureTimestamp,
+                            startScrollX = startScrollX,
+                            startScrollY = startScrollY,
+                            frameWidth = physW,
+                            frameHeight = physH
+                        )
+                    }
+                } else {
+                    if (errorCode == 3) {
+                        // تمديد الفاصل لـ 550ms عند الخطأ رقم 3
+                        adaptiveIntervalMs = CONSTRAINED_ADAPTIVE_INTERVAL_MS
+                        Log.d(TAG, "A11y capture constrained (error 3), adaptive interval increased to ${adaptiveIntervalMs}ms")
+                    } else {
+                        // تجاهل أخطاء FLAG_SECURE بصمت تام دون السقوط إلى MediaProjection
+                        Log.d(TAG, "A11y capture null (code $errorCode), ignoring silently")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in adaptive A11y capture", e)
+            } finally {
+                try { cleanBitmap?.recycle() } catch (_: Exception) {}
+                isCaptureInFlight.set(false)
+                lastAnchorCheckTimeMs = SystemClock.elapsedRealtime()
+                if (isRunning && contextualWatcher.isTargetAppForeground) {
+                    scheduleNextA11yCapture(adaptiveIntervalMs)
+                }
+            }
+        }
+    }
+
+    private fun triggerHeartbeatCheck() {
+        val now = SystemClock.elapsedRealtime()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val a11y = HisnAccessibilityService.instance
+            if (a11y != null && a11y.isCleanWindowCaptureSupported()) {
+                if (!isCaptureInFlight.get() && !isHalalifyInferring.get()) {
+                    if (now - lastAnchorCheckTimeMs >= (HEARTBEAT_INTERVAL_MS - 100L)) {
+                        scheduleNextA11yCapture(0L)
+                    }
+                }
+            }
+        } else {
+            if (::blurOverlayManager.isInitialized && blurOverlayManager.hasActiveRegions) {
+                blurOverlayManager.retainActiveRegions()
+            }
+        }
+    }
+
     private fun copyTileToBitmap(
         image: Image,
         offsetX: Int,
@@ -792,7 +1024,16 @@ class AiInferenceCoordinator(
 
     fun stop() {
         isRunning = false
+        if (activeInstance === this) {
+            activeInstance = null
+        }
         isHalalifyInferring.set(false)
+        isCaptureInFlight.set(false)
+
+        val handler = inferenceHandler
+        handler?.removeCallbacks(a11yCaptureRunnable)
+        handler?.removeCallbacks(postScrollSettleRunnable)
+        handler?.removeCallbacks(heartbeatRunnable)
 
         if (::contextualWatcher.isInitialized) {
             contextualWatcher.stop()
@@ -812,7 +1053,6 @@ class AiInferenceCoordinator(
         }
 
         val worker = inferenceThread
-        val handler = inferenceHandler
         inferenceThread = null
         inferenceHandler = null
 
@@ -863,5 +1103,13 @@ class AiInferenceCoordinator(
         private const val TAG = "AiInferenceCoord"
         private const val ENABLE_NUDENET = false
         const val ANCHOR_INTERVAL_MS = 200L
+        const val BASE_ADAPTIVE_INTERVAL_MS = 380L
+        const val CONSTRAINED_ADAPTIVE_INTERVAL_MS = 550L
+        const val POST_SCROLL_SETTLE_DELAY_MS = 150L
+        const val HEARTBEAT_INTERVAL_MS = 900L
+
+        @Volatile
+        var activeInstance: AiInferenceCoordinator? = null
+            private set
     }
 }

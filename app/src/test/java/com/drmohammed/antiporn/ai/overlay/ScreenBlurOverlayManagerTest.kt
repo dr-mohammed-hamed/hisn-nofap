@@ -782,4 +782,70 @@ class ScreenBlurOverlayManagerTest {
         assertEquals(600f, current.right, 0.001f)
         assertEquals(900f, current.bottom, 0.001f)
     }
+
+    // =========================================================================
+    // 7. اختبارات سد الثغرات (Dead Window & Solid Alpha 1.0f Tests - P0)
+    // =========================================================================
+
+    @Test
+    fun testLayoutParams_solidAlpha_alwaysOnePointZero() {
+        val scheduler = TestOverlayScheduler()
+        val manager = ScreenBlurOverlayManager(
+            context = stubContext,
+            scheduler = scheduler,
+            canDrawOverlaysChecker = { false }
+        )
+
+        val a11yParams = manager.createLayoutParams(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+        assertEquals("Accessibility overlay must have solid alpha 1.0f", 1.0f, a11yParams.alpha, 0.001f)
+
+        val appParams = manager.createLayoutParams(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
+        assertEquals("Application overlay must have solid alpha 1.0f to eliminate transparency leak", 1.0f, appParams.alpha, 0.001f)
+    }
+
+    @Test
+    fun testDetachOverlay_resetsAttachedStateAndNullsViews() {
+        val scheduler = TestOverlayScheduler()
+        val manager = ScreenBlurOverlayManager(
+            context = stubContext,
+            scheduler = scheduler,
+            canDrawOverlaysChecker = { false }
+        )
+
+        val attachField = ScreenBlurOverlayManager::class.java.getDeclaredField("isAttached")
+        attachField.isAccessible = true
+        attachField.set(manager, true)
+
+        assertTrue("isAttached must be true initially for test", manager.isAttached)
+
+        manager.detachOverlay()
+        assertFalse("isAttached must be false after detachOverlay", manager.isAttached)
+    }
+
+    @Test
+    fun testOnServiceDetached_whenWeakRefCollected_stillDetachesDeadOverlay() {
+        val scheduler = TestOverlayScheduler()
+        val manager = ScreenBlurOverlayManager(
+            context = stubContext,
+            scheduler = scheduler,
+            canDrawOverlaysChecker = { false }
+        )
+
+        val attachField = ScreenBlurOverlayManager::class.java.getDeclaredField("isAttached")
+        attachField.isAccessible = true
+        attachField.set(manager, true)
+
+        val typeField = ScreenBlurOverlayManager::class.java.getDeclaredField("currentAttachedType")
+        typeField.isAccessible = true
+        typeField.set(manager, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+
+        val refField = ScreenBlurOverlayManager::class.java.getDeclaredField("attachedA11yServiceRef")
+        refField.isAccessible = true
+        refField.set(manager, java.lang.ref.WeakReference<com.drmohammed.antiporn.accessibility.HisnAccessibilityService>(null))
+
+        val service = com.drmohammed.antiporn.accessibility.HisnAccessibilityService()
+        manager.onServiceDetached(service)
+
+        assertFalse("Overlay must be detached even if weak reference was GC-collected", manager.isAttached)
+    }
 }

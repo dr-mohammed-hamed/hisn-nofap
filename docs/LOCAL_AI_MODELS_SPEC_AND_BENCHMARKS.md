@@ -44,7 +44,7 @@ flowchart TD
     subgraph DeepPath ["3. مسار الاستدلال الشبكي الدوري (Periodic Neural Inference)"]
         COORD["AiInferenceCoordinator<br/>(مجدول زمني: 200ms بنظام الشرائح المتناوبة)"]
         TILER["3-Tile Slicing Engine<br/>شرائح 416x416 بتداخل 162px"]
-        HALALIFY["Halalify v2 TFLite Engine<br/>تنسور [1, 7, 14365] - كشف الإناث"]
+        HALALIFY["Halalify v2 (YOLO26n-P2 Engine)<br/>تنسور [1, 7, 14365] - كشف الإناث"]
         NUDENET["NudeNet v3 YOLOv8n ONNX<br/>تنسور [1, 22, 2100] - كشف العري"]
         TTC["Time-Travel Compensator<br/>تعويض إزاحة المتجه التراكمي (dtX, dtY)"]
 
@@ -60,9 +60,26 @@ flowchart TD
 
 ---
 
-## 2. المواصفة الرياضية والتنفيذية لنموذج `Halalify v2` (Gaze-Shielding Detector)
+## 2. المواصفة الرياضية والتنفيذية لنموذج `Halalify v2` (معمارية YOLO26n-P2)
 
-### أ) المواصفات الفيزيائية والحسابية للتنسور (Tensor Ground Truth)
+### أ) الأصل المعماري والنسب لعائلة YOLO26 (YOLO26n-P2 Lineage & Provenance)
+* **المعمارية الأساسية (Base Architecture):** شبكة **YOLO26 Nano مع طبقة P2 عالية الدقة (`YOLO26n-P2`)** التابعة لعائلة Ultralytics YOLO26 (التي تم إطلاقها بترقيم عام 2026).
+* **المشروع والمستودع الأم:** مستودع [Halalify-Team/Halalify-kotlin](https://github.com/Halalify-Team/Halalify-kotlin) (ترخيص Apache 2.0).
+* **ملفات التدريب المرجعية:** دُرّب النموذج مصدرياً باستخدام ملف التهيئة `yolo26n.yaml` واستخرجت أوزانه من `yolo26n.pt` (المتطابق مع الـ Checkpoint الرسمي `yolo26n-objv1-150.pt`).
+* **التوثيق البرمجي في محرك C++ الرسمي:** موثق في الشيفرة المصدرية للمشروع المصدري داخل ملف `native/backends/litert_backend.h#L42`:
+  ```cpp
+  // The converted YOLO26 P2 float model is exported as a single raw [1, 7, N]
+  // tensor. onnx2tf's layout rewrite stores its box channels as
+  // [x2/2, y2/2, 2*x1, 2*y1]; normalize that layout before the shared decoder.
+  bool single_raw_v5_output_ = false;
+  ```
+* **التطابق الثنائي التام (100% Binary SHA-256 Match):**
+  $$\text{SHA-256: } \texttt{44F0CEE3A5AABE2074042DC1D8AA50A02C703D9B0EB97D32082C78DC6A2C8945}$$
+  وهي البصمة المطابقة تماماً لملف النموذج في مستودع Halalify الأصلي.
+
+---
+
+### ب) المواصفات الفيزيائية والحسابية للتنسور (Tensor Ground Truth)
 * **المسار في حزمة التطبيق:** `app/src/main/assets/halalify_v2.tflite`
 * **الحجم الثنائي:** `2,849,880 بايت` ($2.717\text{ MiB}$)
 * **النوع والحسابات:** Floating Point 32-bit (`Float32`)
@@ -74,9 +91,22 @@ flowchart TD
 
 ---
 
-### ب) التفكيك الرياضي لقنوات الإخراج السبع (Empirical Output Decoding)
+### ج) فك لغز الـ 14,365 مرشحاً (الرأس الرباعي P2 في YOLO26)
+في شبكات YOLO التقليدية ثلاثية الرؤوس ($P3, P4, P5$) عند إدخال $416 \times 416$، يكون عدد نقاط الكشف الإجمالي:
+$$52^2 + 26^2 + 13^2 = 2704 + 676 + 169 = 3549 \text{ نقطة}$$
+بينما في معمارية **YOLO26 P2** المخصصة في هذا النموذج، تم تزويد الشبكة برأس رابع فائق الدقة (**P2 Head**) يعمل على مقياس خطوة $Stride = 4$:
+1. **رأس P2 (مقياس $104 \times 104$):** يُنتج **$10,816$** مرشحاً (يمثل $75.3\%$ من قدرة النموذج) ومخصص حصرياً لاكتشاف الوجوه والأشخاص الدقيقة والبعيدة في الخلفية.
+2. **رأس P3 (مقياس $52 \times 52$):** يُنتج **$2,704$** مرشحاً للأجسام متوسطة الحجم.
+3. **رأس P4 (مقياس $26 \times 26$):** يُنتج **$676$** مرشحاً للأجسام الكبيرة.
+4. **رأس P5 (مقياس $13 \times 13$):** يُنتج **$169$** مرشحاً للأجسام القريبة جداً أو التي تملأ معظم الشاشة.
 
-أثبت التحليل الجنائي لأوزان الشبكة العصبية أن مخرجات النموذج تعتمد ترتيباً حسابياً غير قياسي يختلف جذرياً عن مخرجات شبكات YOLO التقليدية $[cx, cy, w, h]$:
+$$\text{Total Candidates} = 10,816 + 2,704 + 676 + 169 = \mathbf{14,365} \text{ مرشح}$$
+
+---
+
+### د) التفكيك الرياضي لقنوات الإخراج السبع ومحول `onnx2tf` (Empirical Output Decoding)
+
+تم تصدير النموذج من PyTorch عبر ONNX ثم تحويله إلى TensorFlow Lite بواسطة أداة `onnx2tf` مفتوحة المصدر (المطوّرة بواسطة PINTO0309). أدت عملية إعادة تشكيل المخطط الحسابي (Layout Rewrite) إلى ترتيب مصفوفة الإخراج السبعة في التنسور `[1, 7, 14365]` بالترتيب الحسابي التالي:
 
 | القناة ($k$) | الدلالة الفيزيائية | وحدة القياس والمجال العددي | المعنى الحسابي |
 | :---: | :--- | :--- | :--- |

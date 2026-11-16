@@ -213,4 +213,12 @@ class AiInferenceCoordinatorTest {
         val shouldEvict = track.ageFrames >= 8
         assertTrue("Track should only be evicted after exceeding 8 frames of disruption", shouldEvict)
     }
+
+    @Test
+    fun testP0_coordinatorTimingConstants_matchSpecification() {
+        assertEquals("Base adaptive interval must be 380ms", 380L, AiInferenceCoordinator.BASE_ADAPTIVE_INTERVAL_MS)
+        assertEquals("Constrained adaptive interval must be 550ms on error 3", 550L, AiInferenceCoordinator.CONSTRAINED_ADAPTIVE_INTERVAL_MS)
+        assertEquals("Post-scroll settle sweep delay must be 150ms", 150L, AiInferenceCoordinator.POST_SCROLL_SETTLE_DELAY_MS)
+        assertEquals("Independent heartbeat interval must be 900ms", 900L, AiInferenceCoordinator.HEARTBEAT_INTERVAL_MS)
+    }
 }

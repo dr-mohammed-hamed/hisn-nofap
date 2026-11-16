@@ -16,6 +16,8 @@ import android.view.View
 import android.view.WindowManager
 import androidx.annotation.MainThread
 import androidx.annotation.VisibleForTesting
+import com.drmohammed.antiporn.accessibility.HisnAccessibilityService
+import java.lang.ref.WeakReference
 import timber.log.Timber
 
 /**
@@ -54,6 +56,12 @@ class ScreenBlurOverlayManager(
 
     private var activeWm: WindowManager? = null
     private var currentAttachedType: Int = 0
+    private var attachedA11yServiceRef: WeakReference<HisnAccessibilityService>? = null
+    private var currentLayoutParams: WindowManager.LayoutParams? = null
+
+    init {
+        registerActiveManager(this)
+    }
 
     private val wmInstance: WindowManager? by lazy {
         windowManager ?: (context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager)
@@ -259,6 +267,38 @@ class ScreenBlurOverlayManager(
                 // Ignore fallback in unmocked environments
             }
         }
+
+        private val activeManagers = java.util.concurrent.CopyOnWriteArrayList<WeakReference<ScreenBlurOverlayManager>>()
+
+        fun registerActiveManager(manager: ScreenBlurOverlayManager) {
+            activeManagers.add(WeakReference(manager))
+        }
+
+        fun unregisterActiveManager(manager: ScreenBlurOverlayManager) {
+            activeManagers.removeAll { it.get() == null || it.get() === manager }
+        }
+
+        /**
+         * إشعار عند فك ارتباط أو تدمير خدمة الوصول لفصل النوافذ القديمة فوراً وسد ثغرة النافذة الميتة.
+         */
+        fun notifyServiceDestroyed(service: HisnAccessibilityService) {
+            for (ref in activeManagers) {
+                ref.get()?.onServiceDetached(service)
+            }
+        }
+    }
+
+    /**
+     * يُستدعى عند تدمير أو فك ارتباط خدمة الوصول المرتبطة بالنافذة.
+     */
+    fun onServiceDetached(service: HisnAccessibilityService) {
+        postToMainThread {
+            val attached = attachedA11yServiceRef?.get()
+            if (attached === service || (attached == null && currentAttachedType == WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)) {
+                logI(TAG, "Attached A11y service detached/destroyed; detaching overlay window to prevent dead window.")
+                detachOverlay()
+            }
+        }
     }
 
     /**
@@ -407,13 +447,54 @@ class ScreenBlurOverlayManager(
             WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
         }
 
+        if (isAttached && currentAttachedType == WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY) {
+            if (a11y == null || attachedA11yServiceRef?.get() !== a11y) {
+                logW(TAG, "A11y service instance changed during update, detaching dead window")
+                detachOverlay()
+            }
+        }
+
         if (!isAttached || currentAttachedType != desiredType) {
             val attached = attachOverlay()
             if (!attached) return
         }
 
-        // تحديث الرسم في الـ View
-        overlayView?.updateRegions(activeRegions)
+        // تحديث الرسم في الـ View وحصر النافذة إذا كانت TYPE_APPLICATION_OVERLAY على أندرويد 12+
+        if (currentAttachedType == WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (activeRegions.isNotEmpty()) {
+                val minL = activeRegions.minOf { it.left }
+                val minT = activeRegions.minOf { it.top }
+                val maxR = activeRegions.maxOf { it.right }
+                val maxB = activeRegions.maxOf { it.bottom }
+                val boxX = minL.toInt().coerceAtLeast(0)
+                val boxY = minT.toInt().coerceAtLeast(0)
+                val boxW = (maxR - minL).toInt().coerceAtLeast(1)
+                val boxH = (maxB - minT).toInt().coerceAtLeast(1)
+
+                val params = currentLayoutParams ?: createLayoutParams(currentAttachedType).also { currentLayoutParams = it }
+                params.x = boxX
+                params.y = boxY
+                params.width = boxW
+                params.height = boxH
+                params.alpha = 1.0f
+                try {
+                    activeWm?.updateViewLayout(overlayView, params)
+                } catch (e: Exception) {
+                    logW(TAG, "Failed to update view layout for bounded overlay: ${e.message}")
+                }
+
+                val relativeRegions = activeRegions.map {
+                    val r = RectF(it)
+                    r.offset(-boxX.toFloat(), -boxY.toFloat())
+                    r
+                }
+                overlayView?.updateRegions(relativeRegions)
+            } else {
+                overlayView?.clearRegions()
+            }
+        } else {
+            overlayView?.updateRegions(activeRegions)
+        }
         logI(TAG, "[Shield] Rendered on screen: ${activeRegions.size} region(s) -> ${activeRegions.joinToString { "[L:${it.left.toInt()} T:${it.top.toInt()} R:${it.right.toInt()} B:${it.bottom.toInt()}]" }}")
     }
 
@@ -546,9 +627,8 @@ class ScreenBlurOverlayManager(
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 this.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
             }
-            if (windowType != WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                this.alpha = 0.8f
-            }
+            // شفافية صلبة 1.0f دائماً لمنع أي تسريب بصري للمناطق الحساسة
+            this.alpha = 1.0f
         }
         try {
             params.gravity = Gravity.TOP or Gravity.START
@@ -582,10 +662,19 @@ class ScreenBlurOverlayManager(
         }
 
         if (isAttached) {
-            if (currentAttachedType == desiredType) {
+            if (currentAttachedType == WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY) {
+                val attachedA11y = attachedA11yServiceRef?.get()
+                if (a11y != null && attachedA11y === a11y) {
+                    return true
+                }
+                // تغيرت نسخة الخدمة (مثل بعد استعادة وضع التخفي البنكي) أو تم فك ارتباطها
+                logW(TAG, "A11y instance changed (old=$attachedA11y, new=$a11y); detaching dead window")
+                detachOverlay()
+            } else if (currentAttachedType == desiredType) {
                 return true
+            } else {
+                detachOverlay()
             }
-            detachOverlay()
         }
 
         if (a11y == null && !canDrawOverlays(context)) {
@@ -600,11 +689,17 @@ class ScreenBlurOverlayManager(
         }
 
         return try {
-            val view = overlayView ?: BlurOverlayView(targetContext).also { overlayView = it }
+            val view = BlurOverlayView(targetContext).also { overlayView = it }
             val params = createLayoutParams(desiredType)
             wm.addView(view, params)
             activeWm = wm
             currentAttachedType = desiredType
+            currentLayoutParams = params
+            attachedA11yServiceRef = if (desiredType == WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY && a11y != null) {
+                WeakReference(a11y)
+            } else {
+                null
+            }
             isAttached = true
             logI(TAG, "ScreenBlurOverlay attached successfully with type: $desiredType (A11yActive=${a11y != null})")
             true
@@ -614,6 +709,8 @@ class ScreenBlurOverlayManager(
             isAttached = false
             activeWm = null
             currentAttachedType = 0
+            currentLayoutParams = null
+            attachedA11yServiceRef = null
             false
         }
     }
@@ -624,7 +721,7 @@ class ScreenBlurOverlayManager(
     @MainThread
     fun detachOverlay() {
         overlayScheduler.removeCallbacks(clearRunnable)
-        if (!isAttached) return
+        if (!isAttached && overlayView == null) return
 
         try {
             overlayView?.let { view ->
@@ -639,6 +736,8 @@ class ScreenBlurOverlayManager(
             overlayView = null
             activeWm = null
             currentAttachedType = 0
+            currentLayoutParams = null
+            attachedA11yServiceRef = null
         }
     }
 
@@ -648,6 +747,7 @@ class ScreenBlurOverlayManager(
     fun destroy() {
         if (isClosed) return
         isClosed = true
+        unregisterActiveManager(this)
         isStaticLatch = false
         isPendingClear = false
         synchronized(lock) {

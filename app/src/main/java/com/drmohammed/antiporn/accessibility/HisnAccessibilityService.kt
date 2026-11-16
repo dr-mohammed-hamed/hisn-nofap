@@ -25,6 +25,7 @@ class HisnAccessibilityService : AccessibilityService() {
     private val screenshotExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
     private lateinit var eventBus: ForegroundAppEventBus
     private lateinit var windowFilter: TransientWindowEventFilter
+    private var standaloneCoordinator: com.drmohammed.antiporn.ai.service.AiInferenceCoordinator? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -44,13 +45,20 @@ class HisnAccessibilityService : AccessibilityService() {
                 android.accessibilityservice.AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
             info.eventTypes = info.eventTypes or
                 AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
-                AccessibilityEvent.TYPE_WINDOWS_CHANGED
+                AccessibilityEvent.TYPE_WINDOWS_CHANGED or
+                AccessibilityEvent.TYPE_VIEW_SCROLLED
             serviceInfo = info
             com.drmohammed.antiporn.pageshield.engine.PageShieldAccessibilityHook.getInstance()
         } catch (e: Exception) {
             Timber.tag(TAG).w("Error updating serviceInfo: ${e.message}")
         }
         eventBus.setAccessibilityActive(true)
+
+        // تشغيل محرك حارس غض البصر المستقل على أندرويد 14+ بدون الحاجة لـ MediaProjection
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            initStandaloneAiEngine()
+        }
+
         Timber.tag(TAG).i("HisnAccessibilityService connected to Android Framework (Instant 0ms Engine Active)")
         com.drmohammed.antiporn.telemetry.BlackBoxRecorder.recordA11y(
             context = applicationContext,
@@ -67,6 +75,10 @@ class HisnAccessibilityService : AccessibilityService() {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
             AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
                 handleWindowStateChanged(evt)
+            }
+            AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
+                standaloneCoordinator?.onViewScrolled()
+                    ?: com.drmohammed.antiporn.ai.service.AiInferenceCoordinator.activeInstance?.onViewScrolled()
             }
             else -> {
                 // إتاحة معالجة الأحداث المتقدمة لخطافات المرحلة القادمة (Phase 2)
@@ -110,6 +122,9 @@ class HisnAccessibilityService : AccessibilityService() {
 
     override fun onUnbind(intent: Intent?): Boolean {
         Timber.tag(TAG).w("HisnAccessibilityService unbinding from system")
+        // فصل نوافذ التعتيم المرتبطة بهذه النسخة لمنع ثغرة النافذة الميتة
+        com.drmohammed.antiporn.ai.overlay.ScreenBlurOverlayManager.notifyServiceDestroyed(this)
+        stopStandaloneAiEngine()
         if (instance === this) {
             instance = null
         }
@@ -127,6 +142,8 @@ class HisnAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         Timber.tag(TAG).i("HisnAccessibilityService destroyed")
+        com.drmohammed.antiporn.ai.overlay.ScreenBlurOverlayManager.notifyServiceDestroyed(this)
+        stopStandaloneAiEngine()
         try {
             screenshotExecutor.shutdown()
         } catch (_: Exception) {}
@@ -151,9 +168,10 @@ class HisnAccessibilityService : AccessibilityService() {
 
     /**
      * أخذ لقطة شاشة نظيفة 100% للنافذة التفاعلية بدون طبقة التعتيم (TYPE_ACCESSIBILITY_OVERLAY).
-     * متاح على نظام أندرويد 14+ (API 34+) عبر takeScreenshotOfWindow مع استخراج حدود الشباك بدقة.
+     * متاح على نظام أندرويد 14+ (API 34+) عبر takeScreenshotOfWindow مع استخراج حدود الشباك بدقة
+     * وإرجاع كود الخطأ errorCode للجدولة التكيفية وتجاهل أخطاء FLAG_SECURE بصمت.
      */
-    fun captureCleanWindowBitmap(onResult: (Bitmap?, Rect) -> Unit) {
+    fun captureCleanWindowBitmap(onResult: (Bitmap?, Rect, Int) -> Unit) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             val interactiveWindow = try {
                 windows.mapNotNull { win ->
@@ -215,12 +233,13 @@ class HisnAccessibilityService : AccessibilityService() {
                                 } finally {
                                     try { hwBuffer.close() } catch (_: Exception) {}
                                 }
-                                onResult(bitmap, windowBounds)
+                                onResult(bitmap, windowBounds, 0)
                             }
 
                             override fun onFailure(errorCode: Int) {
-                                Timber.tag(TAG).d("takeScreenshotOfWindow failed (code: $errorCode), fallback to projection")
-                                onResult(null, windowBounds)
+                                // تجاهل أخطاء FLAG_SECURE وأخطاء النافذة بصمت دون السقوط لـ MediaProjection
+                                Timber.tag(TAG).d("takeScreenshotOfWindow failed (code: $errorCode)")
+                                onResult(null, windowBounds, errorCode)
                             }
                         }
                     )
@@ -232,7 +251,42 @@ class HisnAccessibilityService : AccessibilityService() {
         }
 
         // على الأنظمة الأقدم من أندرويد 14، لا يوجد التقاط نافذة معزول بدون حجب ذاتي
-        onResult(null, Rect())
+        onResult(null, Rect(), -1)
+    }
+
+    fun captureCleanWindowBitmap(onResult: (Bitmap?, Rect) -> Unit) {
+        captureCleanWindowBitmap { bitmap, bounds, _ -> onResult(bitmap, bounds) }
+    }
+
+    private fun initStandaloneAiEngine() {
+        if (standaloneCoordinator == null) {
+            try {
+                standaloneCoordinator = com.drmohammed.antiporn.ai.service.AiInferenceCoordinator(
+                    context = applicationContext
+                ).apply {
+                    initialize { success ->
+                        if (success) {
+                            start()
+                            Timber.tag(TAG).i("Standalone Vision Guard engine active inside HisnAccessibilityService on API 34+")
+                        } else {
+                            Timber.tag(TAG).w("Failed to initialize standalone Vision Guard engine")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Timber.tag(TAG).e(e, "Error starting standalone Vision Guard engine in A11y service")
+            }
+        }
+    }
+
+    private fun stopStandaloneAiEngine() {
+        try {
+            standaloneCoordinator?.stop()
+        } catch (e: Exception) {
+            Timber.tag(TAG).w("Error stopping standalone Vision Guard: ${e.message}")
+        } finally {
+            standaloneCoordinator = null
+        }
     }
 
     companion object {
