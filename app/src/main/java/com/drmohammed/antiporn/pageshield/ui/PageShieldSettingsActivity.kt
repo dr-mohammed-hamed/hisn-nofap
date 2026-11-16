@@ -3,19 +3,16 @@ package com.drmohammed.antiporn.pageshield.ui
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
-import android.view.View
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.view.isVisible
-import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.recyclerview.widget.LinearLayoutManager
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.databinding.ActivityPageShieldSettingsBinding
-import com.drmohammed.antiporn.pageshield.model.AppPageShieldPolicy
-import com.drmohammed.antiporn.pageshield.model.PageShieldReaction
 import com.drmohammed.antiporn.pageshield.registry.PageShieldRegistry
+import com.drmohammed.antiporn.pageshield.ui.adapter.PageShieldAppsAdapter
 import com.drmohammed.antiporn.ui.control.gate.SelfControlAccessGateRegistry
 import com.drmohammed.antiporn.ui.control.gate.SelfControlSection
 import kotlinx.coroutines.launch
@@ -24,11 +21,13 @@ import org.koin.androidx.viewmodel.ext.android.viewModel
 /**
  * شاشة إعدادات «درع الصفحات».
  * تدعم وضع التحكم الذاتي المحلي ووضع المشرف عن بعد بتجانس بصري كامل وسلاسة مطلقة.
+ * أصبحت ديناميكية بالكامل وتعتمد على [PageShieldRegistry] لعرض كافة التطبيقات المسجلة.
  */
 class PageShieldSettingsActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityPageShieldSettingsBinding
     private val viewModel: PageShieldSettingsViewModel by viewModel()
+    private lateinit var appsAdapter: PageShieldAppsAdapter
     private var isBindingUi = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -48,6 +47,7 @@ class PageShieldSettingsActivity : AppCompatActivity() {
         }
 
         setupToolbar(isRemote)
+        setupRecyclerView()
         setupListeners()
         observeUiState()
 
@@ -63,60 +63,32 @@ class PageShieldSettingsActivity : AppCompatActivity() {
         }
     }
 
+    private fun setupRecyclerView() {
+        appsAdapter = PageShieldAppsAdapter(
+            onToggleExpand = { packageName ->
+                viewModel.toggleAppExpanded(packageName)
+            },
+            onPageToggled = { packageName, pageId, isChecked ->
+                viewModel.setPageEnabled(packageName, pageId, isChecked)
+            },
+            onReactionChanged = { packageName, reaction ->
+                viewModel.setReaction(packageName, reaction)
+            },
+            onFreezeDurationChanged = { packageName, minutes ->
+                viewModel.setFreezeDurationMinutes(packageName, minutes)
+            }
+        )
+        binding.rvProtectedApps.layoutManager = LinearLayoutManager(this)
+        binding.rvProtectedApps.adapter = appsAdapter
+    }
+
     private fun setupListeners() {
         binding.swPageShieldMaster.setOnCheckedChangeListener { _, isChecked ->
             if (isBindingUi) return@setOnCheckedChangeListener
             viewModel.setMasterEnabled(isChecked)
         }
 
-        binding.layoutAppHeader.setOnClickListener {
-            viewModel.toggleAppExpanded()
-        }
-
-        binding.cbShortsPage.setOnCheckedChangeListener { _, isChecked ->
-            if (isBindingUi) return@setOnCheckedChangeListener
-            viewModel.setPageEnabled(
-                packageName = PageShieldRegistry.PACKAGE_YOUTUBE,
-                pageId = PageShieldRegistry.PAGE_YOUTUBE_SHORTS,
-                enabled = isChecked
-            )
-        }
-
-        binding.rgReaction.setOnCheckedChangeListener { _, checkedId ->
-            if (isBindingUi) return@setOnCheckedChangeListener
-            when (checkedId) {
-                R.id.rbExitOnly -> {
-                    viewModel.setReaction(PageShieldRegistry.PACKAGE_YOUTUBE, PageShieldReaction.EXIT_ONLY)
-                    binding.layoutFreezeDuration.isVisible = false
-                }
-                R.id.rbExitAndFreeze -> {
-                    viewModel.setReaction(PageShieldRegistry.PACKAGE_YOUTUBE, PageShieldReaction.EXIT_AND_FREEZE)
-                    binding.layoutFreezeDuration.isVisible = true
-                }
-            }
-        }
-
-        binding.etFreezeDuration.doAfterTextChanged { text ->
-            if (isBindingUi) return@doAfterTextChanged
-            val str = text?.toString()?.trim().orEmpty()
-            if (str.isEmpty()) {
-                binding.etFreezeDuration.error = getString(R.string.page_shield_freeze_range_error)
-                return@doAfterTextChanged
-            }
-            val mins = str.toIntOrNull()
-            if (mins == null || mins !in AppPageShieldPolicy.MIN_FREEZE_MINUTES..AppPageShieldPolicy.MAX_FREEZE_MINUTES) {
-                binding.etFreezeDuration.error = getString(R.string.page_shield_freeze_range_error)
-            } else {
-                binding.etFreezeDuration.error = null
-                viewModel.setFreezeDurationMinutes(PageShieldRegistry.PACKAGE_YOUTUBE, mins)
-            }
-        }
-
         binding.btnSavePageShieldSettings.setOnClickListener {
-            if (binding.rbExitAndFreeze.isChecked && binding.etFreezeDuration.error != null) {
-                binding.etFreezeDuration.requestFocus()
-                return@setOnClickListener
-            }
             binding.btnSavePageShieldSettings.isEnabled = false
             viewModel.saveSettings { success, updatedPolicy ->
                 if (isFinishing || isDestroyed) return@saveSettings
@@ -156,37 +128,11 @@ class PageShieldSettingsActivity : AppCompatActivity() {
                 binding.swPageShieldMaster.isChecked = config.isEnabled
             }
 
-            // Accordion expand/collapse
-            binding.layoutAppDetails.isVisible = state.isAppExpanded
-            binding.ivExpandChevron.rotation = if (state.isAppExpanded) 180f else 0f
-
-            val ytPolicy = config.appPolicies[PageShieldRegistry.PACKAGE_YOUTUBE]
-            val isShortsEnabled = ytPolicy?.enabledPageIds?.contains(PageShieldRegistry.PAGE_YOUTUBE_SHORTS) ?: false
-            if (binding.cbShortsPage.isChecked != isShortsEnabled) {
-                binding.cbShortsPage.isChecked = isShortsEnabled
-            }
-
-            val reaction = ytPolicy?.reaction ?: PageShieldReaction.EXIT_ONLY
-            when (reaction) {
-                PageShieldReaction.EXIT_ONLY -> {
-                    if (binding.rgReaction.checkedRadioButtonId != R.id.rbExitOnly) {
-                        binding.rgReaction.check(R.id.rbExitOnly)
-                    }
-                    binding.layoutFreezeDuration.isVisible = false
-                }
-                PageShieldReaction.EXIT_AND_FREEZE -> {
-                    if (binding.rgReaction.checkedRadioButtonId != R.id.rbExitAndFreeze) {
-                        binding.rgReaction.check(R.id.rbExitAndFreeze)
-                    }
-                    binding.layoutFreezeDuration.isVisible = true
-                }
-            }
-
-            val freezeMins = ytPolicy?.freezeDurationMinutes ?: state.freezeDurationMinutes
-            val currentText = binding.etFreezeDuration.text?.toString()
-            if (!binding.etFreezeDuration.isFocused && currentText != freezeMins.toString()) {
-                binding.etFreezeDuration.setText(freezeMins.toString())
-            }
+            appsAdapter.submitData(
+                newApps = PageShieldRegistry.registeredApps,
+                newExpanded = state.expandedPackages,
+                newConfig = config
+            )
 
             binding.btnSavePageShieldSettings.isEnabled = !state.isLoading
         } finally {

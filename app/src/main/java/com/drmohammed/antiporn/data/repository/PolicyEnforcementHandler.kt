@@ -111,7 +111,13 @@ internal class PolicyEnforcementHandler(
                 }
 
                 ZeroTrustForegroundWatcher.syncWatcherState(appContext)
-                AppInventoryManager.getInstance(appContext).syncInventoryToCloud()
+                val blacklistChanged = bundle.customBlacklistPackages != effectivePreviousPolicy.customBlacklistPackages
+                val whitelistChanged = bundle.customCurfewWhitelistPackages != effectivePreviousPolicy.customCurfewWhitelistPackages
+                if (blacklistChanged || whitelistChanged) {
+                    AppInventoryManager.getInstance(appContext).syncInventoryToCloudAsync(force = true)
+                } else {
+                    AppInventoryManager.getInstance(appContext).syncInventoryToCloud()
+                }
                 WaqfaSessionManager.getInstance(appContext).updateConfig(bundle.waqfaConfig)
                 com.drmohammed.antiporn.pageshield.engine.PageShieldAccessibilityHook.getInstance().updateConfig(bundle.pageShieldConfig)
 

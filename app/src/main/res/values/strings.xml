@@ -1379,6 +1379,11 @@
     <string name="page_shield_app_youtube">YouTube</string>
     <string name="page_shield_yt_shorts_title">مقاطع Shorts والريلز</string>
     <string name="page_shield_yt_shorts_desc">حجب مشغل الفيديوهات القصيرة داخل يوتيوب فور الدخول إليه</string>
+    <string name="page_shield_app_facebook">فيسبوك</string>
+    <string name="page_shield_fb_reels_title">ريلز فيسبوك (Facebook Reels)</string>
+    <string name="page_shield_fb_reels_desc">حجب مشغل مقاطع الفيديو القصيرة (Reels) داخل فيسبوك فور فتحه</string>
+    <string name="page_shield_app_pages_count">%1$d من %2$d صفحات محجوبة</string>
+    <string name="page_shield_app_pages_none">لا توجد صفحات محجوبة</string>
     <string name="page_shield_target_pages_label">الصفحات المستهدفة للحجب</string>
     <string name="page_shield_reaction_label">رد الفعل عند دخول الصفحة</string>
     <string name="page_shield_reaction_exit_only">الإخراج من التطبيق فقط (Exit Only)</string>

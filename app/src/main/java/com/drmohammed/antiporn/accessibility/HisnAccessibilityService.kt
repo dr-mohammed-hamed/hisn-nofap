@@ -79,6 +79,7 @@ class HisnAccessibilityService : AccessibilityService() {
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                 standaloneCoordinator?.onViewScrolled()
                     ?: com.drmohammed.antiporn.ai.service.AiInferenceCoordinator.activeInstance?.onViewScrolled()
+                AccessibilityHookRegistry.dispatchRawEvent(this, evt)
             }
             else -> {
                 // إتاحة معالجة الأحداث المتقدمة لخطافات المرحلة القادمة (Phase 2)

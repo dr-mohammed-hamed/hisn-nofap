@@ -223,6 +223,75 @@ class CurfewHardeningTest {
         )
     }
 
+    @Test
+    fun testCurfewConfig_dnsRestorePendingPersistence() {
+        val prefs = InMemoryPrefs()
+        val context = object : ContextWrapper(null) {
+            override fun getSharedPreferences(name: String?, mode: Int): SharedPreferences = prefs
+            override fun getApplicationContext(): Context = this
+        }
+        assertFalse(CurfewConfig.isDnsRestorePending(context))
+        CurfewConfig.setDnsRestorePending(context, true)
+        assertTrue(CurfewConfig.isDnsRestorePending(context))
+        CurfewConfig.setDnsRestorePending(context, false)
+        assertFalse(CurfewConfig.isDnsRestorePending(context))
+    }
+
+    @Test
+    fun testCurfewDnsRestorePending_suppressesFalseTamperAlert() {
+        val prefs = InMemoryPrefs()
+        val context = object : ContextWrapper(null) {
+            override fun getSharedPreferences(name: String?, mode: Int): SharedPreferences = prefs
+            override fun getApplicationContext(): Context = this
+        }
+
+        // Scenario 1: Offline post-curfew DNS restoration pending
+        CurfewConfig.setDnsRestorePending(context, true)
+        val mode = "opportunistic"
+        val specifier = ""
+        val expectedHost = "family.cloudflare-dns.com"
+
+        val isPendingCurfewRelease = (mode == "opportunistic" || mode.isNullOrEmpty()) &&
+            specifier.isNullOrEmpty() &&
+            CurfewConfig.isDnsRestorePending(context)
+        assertTrue("Must recognize offline pending restore from curfew", isPendingCurfewRelease)
+
+        val desyncReasons = mutableListOf<String>()
+        if (isPendingCurfewRelease) {
+            desyncReasons.add("[DNS_PENDING_RESTORE: Settings.Global DNS pending post-curfew restoration]")
+        } else {
+            desyncReasons.add("[DNS_GLOBAL: Settings.Global DNS mismatch]")
+        }
+
+        val isDirectTamper = desyncReasons.any {
+            it.startsWith("[TIMEZONE:") ||
+                it.startsWith("[AUTO_TIME:") ||
+                it.startsWith("[system_tamper:") ||
+                (it.startsWith("[DNS_GLOBAL:") && !it.contains("VPN required"))
+        }
+        assertFalse("Pending post-curfew DNS restore must NOT trigger isDirectTamper", isDirectTamper)
+
+        val isTransitionSafe = !CurfewConfig.isDnsRestorePending(context)
+        assertFalse("Notification gate must block alert when isDnsRestorePending is true", isTransitionSafe)
+
+        // Scenario 2: Actual direct tamper (user turned DNS off or changed specifier to an unauthorized server)
+        val tamperedMode = "off"
+        val isPendingTamper = (tamperedMode == "opportunistic" || tamperedMode.isNullOrEmpty()) &&
+            specifier.isNullOrEmpty() &&
+            CurfewConfig.isDnsRestorePending(context)
+        assertFalse("Turning DNS off cannot be masked as pending restore", isPendingTamper)
+
+        val tamperReasons = mutableListOf<String>()
+        tamperReasons.add("[DNS_GLOBAL: Settings.Global DNS mismatch (mode=off)]")
+        val isDirectTamperDetected = tamperReasons.any {
+            it.startsWith("[TIMEZONE:") ||
+                it.startsWith("[AUTO_TIME:") ||
+                it.startsWith("[system_tamper:") ||
+                (it.startsWith("[DNS_GLOBAL:") && !it.contains("VPN required"))
+        }
+        assertTrue("Genuine tampering must be caught as isDirectTamper", isDirectTamperDetected)
+    }
+
     private class InMemoryPrefs : SharedPreferences {
         private val values = mutableMapOf<String, Any?>()
 

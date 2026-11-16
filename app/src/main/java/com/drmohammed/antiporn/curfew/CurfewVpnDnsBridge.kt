@@ -422,6 +422,10 @@ internal object CurfewVpnDnsBridge {
         } else {
             Log.d(TAG, "Private DNS already set to $targetHost via both DPM and Settings.Global, skipping redundant write")
         }
+        val isSuccess = dnsSetResult == DevicePolicyManager.PRIVATE_DNS_SET_NO_ERROR || usedFallback || (dpmMatches && globalMatches)
+        if (isSuccess && CurfewConfig.isDnsRestorePending(context)) {
+            CurfewConfig.setDnsRestorePending(context, false)
+        }
         return dnsSetResult to usedFallback
     }
 

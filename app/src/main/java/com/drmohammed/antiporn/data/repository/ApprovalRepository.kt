@@ -286,15 +286,7 @@ class ApprovalRepository(
 
         val policy = PolicyRepository.getInstance(appContext).getCurrentPolicy()
         if (policy.customBlacklistPackages.contains(packageName)) {
-            Log.w(TAG, "Security Alert: Cannot unsuspend $packageName - in custom blacklist!")
-            approvalDao.upsertApprovalStatusBlocking(
-                packageName = packageName,
-                status = PendingApprovalEntity.STATUS_REJECTED,
-                decidedBy = "CUSTOM_BLACKLIST",
-                decidedAt = com.drmohammed.antiporn.core.time.TrustedTimeProvider.currentTimeMillis(appContext),
-                isSynced = 1
-            )
-            ZeroTrustForegroundWatcher.syncWatcherState(appContext)
+            Log.w(TAG, "Security Alert: Cannot unsuspend $packageName - currently in custom blacklist! Skipping unsuspend without poisoning approval record.")
             return
         }
 
@@ -331,14 +323,17 @@ class ApprovalRepository(
                 Log.w(TAG, "Exception unhiding package $packageName on approval", e)
             }
 
-            val failed: Array<String>? = try {
-                com.drmohammed.antiporn.telemetry.SafeDpmGateway.setPackagesSuspendedBlocking(appContext, arrayOf(packageName), false).getOrNull()
+            val dpmResult = try {
+                com.drmohammed.antiporn.telemetry.SafeDpmGateway.setPackagesSuspendedBlocking(appContext, arrayOf(packageName), false)
             } catch (e: Exception) {
                 Log.w(TAG, "Exception calling setPackagesSuspended(false) for $packageName", e)
                 null
             }
 
-            if (failed?.contains(packageName) == true) {
+            val failed = dpmResult?.getOrNull()
+            val isDpmSuccess = dpmResult is com.drmohammed.antiporn.telemetry.DpmExecutionResult.Success && failed?.contains(packageName) != true
+
+            if (!isDpmSuccess) {
                 val isInstalled = try {
                     appContext.packageManager.getPackageInfo(packageName, 0)
                     true
@@ -361,7 +356,7 @@ class ApprovalRepository(
                     ZeroTrustForegroundWatcher.syncWatcherState(appContext)
                     syncApprovalDecisionToCloud(packageName, PendingApprovalEntity.STATUS_APPROVED, decidedBy)
                 } else {
-                    Log.e(TAG, "Failed unfreezing package $packageName: DPM returned failure for package")
+                    Log.e(TAG, "Failed unfreezing package $packageName: DPM returned failure ($dpmResult)")
                 }
             } else {
                 approvalDao.upsertApprovalStatusBlocking(
@@ -565,12 +560,13 @@ class ApprovalRepository(
                                     val local = pendingList.find { it.packageName == packageName }
 
                                     if (status == "APPROVED") {
-                                        if (local == null || local.isPending) {
-                                            Log.i(TAG, "Real-time approval received for $packageName from $decidedBy")
+                                        val isPhysicallySuspended = com.drmohammed.antiporn.telemetry.SafeDpmGateway.isPackageSuspendedBlocking(appContext, packageName).getOrNull() == true
+                                        if (local == null || !local.isApproved || isPhysicallySuspended) {
+                                            Log.i(TAG, "Real-time approval received for $packageName from $decidedBy (localApproved=${local?.isApproved}, suspended=$isPhysicallySuspended)")
                                             unsuspendAndApprove(packageName, decidedBy)
                                         }
                                     } else if (status == "REJECTED") {
-                                        if (local == null || local.isPending) {
+                                        if (local == null || !local.isRejected) {
                                             Log.i(TAG, "Real-time rejection received for $packageName from $decidedBy")
                                             recordRejection(packageName, decidedBy)
                                         }

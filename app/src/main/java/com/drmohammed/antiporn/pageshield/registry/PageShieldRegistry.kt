@@ -31,12 +31,16 @@ object PageShieldRegistry {
     const val PACKAGE_YOUTUBE = "com.google.android.youtube"
     const val PAGE_YOUTUBE_SHORTS = "youtube_shorts"
 
+    const val PACKAGE_FACEBOOK = "com.facebook.katana"
+    const val PAGE_FACEBOOK_REELS = "facebook_reels"
+
     /**
      * قائمة التطبيقات المعرفة برمجياً في السجل.
      */
     val registeredApps: List<ProtectedAppDefinition> by lazy {
         listOf(
-            createYouTubeDefinition()
+            createYouTubeDefinition(),
+            createFacebookDefinition()
         )
     }
 
@@ -90,6 +94,69 @@ object PageShieldRegistry {
             appNameResId = R.string.page_shield_app_youtube,
             appIconResId = R.drawable.ic_shield_page,
             pages = listOf(shortsPage)
+        )
+    }
+
+    private fun createFacebookDefinition(): ProtectedAppDefinition {
+        // 1. Activity Class Strategy: Matches dedicated full-screen Reels viewer Activities
+        val activityStrategy = ActivityClassStrategy(
+            targetClassNames = setOf(
+                "FbShortsViewerActivity",
+                "FbShortsUnifiedViewerActivity",
+                "FbShortsModalActivity",
+                "ReelsViewerActivity"
+            )
+        )
+
+        // 2. ViewId Strategy: Matches full-screen Reel containers with height and width constraints
+        val viewIdStrategy = ViewIdResourceStrategy(
+            viewIdResourceNames = listOf(
+                "com.facebook.katana:id/fb_shorts_viewer_container",
+                "com.facebook.katana:id/fb_shorts_container",
+                "com.facebook.katana:id/reel_viewer",
+                "com.facebook.katana:id/fb_shorts_video_view",
+                "com.facebook.katana:id/reels_viewer_root"
+            ),
+            minHeightRatio = 0.60f,
+            minWidthRatio = 0.80f,
+            requireVisibleToUser = true
+        )
+
+        // 3. Semantics Strategy: Matches selected Reels tab in navigation bar with keyword exclusion
+        val semanticsStrategy = SemanticsAndTreeStrategy(
+            targetKeywords = setOf("Reels", "ريلز"),
+            targetContentDescriptions = setOf("Reels", "ريلز", "Facebook Reels", "مقاطع ريلز"),
+            excludedKeywords = setOf("بحث", "Search", "مشاركة", "Share", "تعليق", "Comment", "منشور", "Post"),
+            requireSelected = true,
+            maxDepth = 8
+        )
+
+        // Combine: Activity || ViewId
+        val activityOrViewId = CompositePageStrategy(
+            primary = activityStrategy,
+            secondary = viewIdStrategy,
+            operator = StrategyOperator.ANY
+        )
+
+        // Combine: (Activity || ViewId) || Semantics
+        val fullCompositeStrategy = CompositePageStrategy(
+            primary = activityOrViewId,
+            secondary = semanticsStrategy,
+            operator = StrategyOperator.ANY
+        )
+
+        val reelsPage = ProtectedPageDefinition(
+            pageId = PAGE_FACEBOOK_REELS,
+            titleResId = R.string.page_shield_fb_reels_title,
+            descriptionResId = R.string.page_shield_fb_reels_desc,
+            detectorStrategy = fullCompositeStrategy
+        )
+
+        return ProtectedAppDefinition(
+            packageName = PACKAGE_FACEBOOK,
+            appNameResId = R.string.page_shield_app_facebook,
+            appIconResId = R.drawable.ic_shield_page,
+            pages = listOf(reelsPage)
         )
     }
 }

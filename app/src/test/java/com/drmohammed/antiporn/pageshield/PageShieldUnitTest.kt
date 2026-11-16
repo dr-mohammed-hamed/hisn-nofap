@@ -137,6 +137,19 @@ class PageShieldUnitTest {
         assertNotNull(shortsPage)
         assertEquals(PageShieldRegistry.PAGE_YOUTUBE_SHORTS, shortsPage?.pageId)
 
+        // Facebook App & Reels verification
+        val fbApp = PageShieldRegistry.findApp(PageShieldRegistry.PACKAGE_FACEBOOK)
+        assertNotNull(fbApp)
+        assertEquals(PageShieldRegistry.PACKAGE_FACEBOOK, fbApp?.packageName)
+
+        val reelsPage = PageShieldRegistry.findPage(
+            PageShieldRegistry.PACKAGE_FACEBOOK,
+            PageShieldRegistry.PAGE_FACEBOOK_REELS
+        )
+        assertNotNull(reelsPage)
+        assertEquals(PageShieldRegistry.PAGE_FACEBOOK_REELS, reelsPage?.pageId)
+        assertTrue(PageShieldRegistry.registeredApps.size >= 2)
+
         // Non-registered package should safely return null
         assertNull(PageShieldRegistry.findApp("com.unregistered.app"))
         assertNull(PageShieldRegistry.findPage("com.unregistered.app", "any_page"))

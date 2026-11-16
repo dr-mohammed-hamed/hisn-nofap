@@ -25,8 +25,7 @@ data class PageShieldSettingsUiState(
     val isLoading: Boolean = false,
     val isSaved: Boolean = false,
     val errorMessage: String? = null,
-    val isAppExpanded: Boolean = true,
-    val freezeDurationMinutes: Int = AppPageShieldPolicy.DEFAULT_FREEZE_MINUTES
+    val expandedPackages: Set<String> = emptySet()
 )
 
 class PageShieldSettingsViewModel(
@@ -53,15 +52,25 @@ class PageShieldSettingsViewModel(
 
         initialPolicy = policy
         val config = policy.pageShieldConfig
-        val ytPolicy = config.appPolicies[PageShieldRegistry.PACKAGE_YOUTUBE]
-            ?: AppPageShieldPolicy(packageName = PageShieldRegistry.PACKAGE_YOUTUBE)
+
+        // Ensure default policies exist for all registered apps in the UI state
+        val mergedPolicies = config.appPolicies.toMutableMap()
+        for (app in PageShieldRegistry.registeredApps) {
+            if (!mergedPolicies.containsKey(app.packageName)) {
+                mergedPolicies[app.packageName] = AppPageShieldPolicy(packageName = app.packageName)
+            }
+        }
+        val preparedConfig = config.copy(appPolicies = mergedPolicies)
+
+        // Expand all registered apps by default so the user sees all available protections
+        val allPackages = PageShieldRegistry.registeredApps.map { it.packageName }.toSet()
 
         _uiState.update {
             it.copy(
-                config = config,
+                config = preparedConfig,
                 isRemote = isRemote,
                 wardId = wardId,
-                freezeDurationMinutes = ytPolicy.freezeDurationMinutes
+                expandedPackages = allPackages
             )
         }
     }
@@ -72,56 +81,57 @@ class PageShieldSettingsViewModel(
         }
     }
 
-    fun toggleAppExpanded() {
-        _uiState.update { it.copy(isAppExpanded = !it.isAppExpanded) }
+    fun toggleAppExpanded(packageName: String) {
+        _uiState.update { current ->
+            val updated = if (current.expandedPackages.contains(packageName)) {
+                current.expandedPackages - packageName
+            } else {
+                current.expandedPackages + packageName
+            }
+            current.copy(expandedPackages = updated)
+        }
     }
 
     fun setPageEnabled(packageName: String, pageId: String, enabled: Boolean) {
-        val currentPolicies = _uiState.value.config.appPolicies.toMutableMap()
-        val currentAppPolicy = currentPolicies[packageName] ?: AppPageShieldPolicy(packageName = packageName)
+        _uiState.update { current ->
+            val currentPolicies = current.config.appPolicies.toMutableMap()
+            val currentAppPolicy = currentPolicies[packageName] ?: AppPageShieldPolicy(packageName = packageName)
 
-        val updatedPages = if (enabled) {
-            currentAppPolicy.enabledPageIds + pageId
-        } else {
-            currentAppPolicy.enabledPageIds - pageId
-        }
+            val updatedPages = if (enabled) {
+                currentAppPolicy.enabledPageIds + pageId
+            } else {
+                currentAppPolicy.enabledPageIds - pageId
+            }
 
-        val updatedPolicy = currentAppPolicy.copy(enabledPageIds = updatedPages)
-        currentPolicies[packageName] = updatedPolicy
-
-        _uiState.update {
-            it.copy(config = it.config.copy(appPolicies = currentPolicies))
+            currentPolicies[packageName] = currentAppPolicy.copy(enabledPageIds = updatedPages)
+            current.copy(config = current.config.copy(appPolicies = currentPolicies))
         }
     }
 
     fun setReaction(packageName: String, reaction: PageShieldReaction) {
-        val currentPolicies = _uiState.value.config.appPolicies.toMutableMap()
-        val currentAppPolicy = currentPolicies[packageName] ?: AppPageShieldPolicy(packageName = packageName)
-        val updatedPolicy = currentAppPolicy.copy(reaction = reaction)
-        currentPolicies[packageName] = updatedPolicy
-
-        _uiState.update {
-            it.copy(config = it.config.copy(appPolicies = currentPolicies))
+        _uiState.update { current ->
+            val currentPolicies = current.config.appPolicies.toMutableMap()
+            val currentAppPolicy = currentPolicies[packageName] ?: AppPageShieldPolicy(packageName = packageName)
+            currentPolicies[packageName] = currentAppPolicy.copy(reaction = reaction)
+            current.copy(config = current.config.copy(appPolicies = currentPolicies))
         }
     }
 
     fun setFreezeDurationMinutes(packageName: String, minutes: Int) {
         val coerced = minutes.coerceIn(AppPageShieldPolicy.MIN_FREEZE_MINUTES, AppPageShieldPolicy.MAX_FREEZE_MINUTES)
-        val currentPolicies = _uiState.value.config.appPolicies.toMutableMap()
-        val currentAppPolicy = currentPolicies[packageName] ?: AppPageShieldPolicy(packageName = packageName)
-        val updatedPolicy = currentAppPolicy.copy(freezeDurationMinutes = coerced)
-        currentPolicies[packageName] = updatedPolicy
-
-        _uiState.update {
-            it.copy(
-                config = it.config.copy(appPolicies = currentPolicies),
-                freezeDurationMinutes = coerced
-            )
+        _uiState.update { current ->
+            val currentPolicies = current.config.appPolicies.toMutableMap()
+            val currentAppPolicy = currentPolicies[packageName] ?: AppPageShieldPolicy(packageName = packageName)
+            currentPolicies[packageName] = currentAppPolicy.copy(freezeDurationMinutes = coerced)
+            current.copy(config = current.config.copy(appPolicies = currentPolicies))
         }
     }
 
     fun saveSettings(onComplete: (Boolean, DevicePolicyBundle?) -> Unit) {
-        if (_uiState.value.isLoading) return
+        if (_uiState.value.isLoading) {
+            onComplete(false, null)
+            return
+        }
         val state = _uiState.value
         _uiState.update { it.copy(isLoading = true, errorMessage = null) }
 

@@ -182,6 +182,7 @@ object CurfewConfig {
     const val KEY_CURFEW_VPN_BYPASS_PACKAGES = "key_curfew_vpn_bypass_packages"
     const val KEY_CURFEW_SNOOZE_END_WALL = "key_curfew_snooze_end_wall"
     private const val KEY_LAST_BLOCK_ENFORCED = "last_block_enforced"
+    private const val KEY_DNS_RESTORE_PENDING = "curfew_dns_restore_pending"
     const val ACTION_CURFEW_SNOOZE = "com.drmohammed.antiporn.ACTION_CURFEW_SNOOZE"
     const val ACTION_CURFEW_SNOOZE_END = "com.drmohammed.antiporn.ACTION_CURFEW_SNOOZE_END"
 
@@ -193,6 +194,16 @@ object CurfewConfig {
     fun setLastBlockEnforced(context: Context, enforced: Boolean) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit().putBoolean(KEY_LAST_BLOCK_ENFORCED, enforced).commit()
+    }
+
+    fun isDnsRestorePending(context: Context): Boolean {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getBoolean(KEY_DNS_RESTORE_PENDING, false)
+    }
+
+    fun setDnsRestorePending(context: Context, pending: Boolean) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putBoolean(KEY_DNS_RESTORE_PENDING, pending).commit()
     }
 
     fun getTrackedSuspendedPackages(context: Context): Set<String> {

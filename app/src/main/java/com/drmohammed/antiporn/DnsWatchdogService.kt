@@ -456,6 +456,12 @@ class DnsWatchdogService : Service() {
         if (shouldBlockBeActive != wasBlockEnforced) {
             Log.i(TAG, "Scheduled block state transition pending ($wasBlockEnforced -> $shouldBlockBeActive). Reconciling before audit.")
             CurfewEnforcer.syncBlockState(appContext)
+            if (com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isWithinSettleWindow()) {
+                Log.d(TAG, "Curfew block reconciliation triggered internal transition. Postponing watchdog audit...")
+                debounceHandler.removeCallbacks(checkRunnable)
+                debounceHandler.postDelayed(checkRunnable, 3500L)
+                return
+            }
         }
 
         val desyncReasons = mutableListOf<String>()
@@ -504,9 +510,22 @@ class DnsWatchdogService : Service() {
                     val expectedHost = DnsShield.getEffectiveDnsHost(appContext)
                     val isHostMatching = specifier?.equals(expectedHost, ignoreCase = true) == true
                     if (mode != "hostname" || !isHostMatching) {
-                        val reason = "Settings.Global DNS mismatch (mode=$mode, specifier=$specifier, expected=$expectedHost)"
-                        Log.w(TAG, reason)
-                        desyncReasons.add("[DNS_GLOBAL: $reason]")
+                        val isPendingCurfewRelease = (mode == "opportunistic" || mode.isNullOrEmpty()) &&
+                            specifier.isNullOrEmpty() &&
+                            CurfewConfig.isDnsRestorePending(appContext)
+
+                        if (isPendingCurfewRelease) {
+                            val reason = "Settings.Global DNS pending post-curfew restoration (mode=$mode, expected=$expectedHost)"
+                            Log.i(TAG, reason)
+                            desyncReasons.add("[DNS_PENDING_RESTORE: $reason]")
+                            com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge.restoreDnsShieldOnCurfewRelease(appContext)
+                        } else {
+                            val reason = "Settings.Global DNS mismatch (mode=$mode, specifier=$specifier, expected=$expectedHost)"
+                            Log.w(TAG, reason)
+                            desyncReasons.add("[DNS_GLOBAL: $reason]")
+                        }
+                    } else if (CurfewConfig.isDnsRestorePending(appContext)) {
+                        CurfewConfig.setDnsRestorePending(appContext, false)
                     }
                 }
             } catch (e: Exception) {
@@ -578,7 +597,13 @@ class DnsWatchdogService : Service() {
                     (it.startsWith("[DNS_GLOBAL:") && !it.contains("VPN required"))
             }
 
-            if (isDirectTamper && !com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isTeardownInProgress) {
+            val isCurfewStateSynchronized = CurfewEnforcer.isEffectiveBlockActive(appContext) == CurfewConfig.isLastBlockEnforced(appContext)
+            val isTransitionSafe = !com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isWithinSettleWindow() &&
+                !com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isTeardownInProgress &&
+                isCurfewStateSynchronized &&
+                !CurfewConfig.isDnsRestorePending(appContext)
+
+            if (isDirectTamper && isTransitionSafe) {
                 try {
                     AppNotificationManager.getInstance(appContext).postEventNotification(
                         category = NotificationCategory.SHIELDS,

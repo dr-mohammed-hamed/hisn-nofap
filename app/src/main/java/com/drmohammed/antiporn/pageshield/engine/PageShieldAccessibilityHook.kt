@@ -182,7 +182,7 @@ class PageShieldAccessibilityHook private constructor() : AccessibilityEventHook
             if (info.eventTypes != defaultFlags) {
                 info.eventTypes = defaultFlags
                 service.serviceInfo = info
-                Timber.tag(TAG).d("Dynamically reverted eventTypes to default (0% overhead outside targets)")
+                Timber.tag(TAG).d("Dynamically reverted eventTypes to default (zero overhead outside targets)")
             }
         } catch (e: Exception) {
             Timber.tag(TAG).w("Error updating serviceInfo to disable in-app events: ${e.message}")

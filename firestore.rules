@@ -122,7 +122,10 @@ service cloud.firestore {
     // 3. Approvals: Zero-trust app installation requests and guardian approvals as subcollection under policies
     match /policies/{wardUid}/approvals/{ticketId} {
       allow read: if isOwner(wardUid) || isGuardianOf(wardUid);
-      allow create: if request.auth != null && request.auth.uid == wardUid && request.resource.data.status == 'PENDING';
+      allow create: if request.auth != null && (
+        (request.auth.uid == wardUid && request.resource.data.status == 'PENDING') ||
+        isGuardianOf(wardUid)
+      );
       allow update: if request.auth != null && isGuardianOf(wardUid);
       allow delete: if request.auth != null && (request.auth.uid == wardUid || isGuardianOf(wardUid));
     }

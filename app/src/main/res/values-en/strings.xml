@@ -1102,6 +1102,11 @@
     <string name="page_shield_app_youtube">YouTube</string>
     <string name="page_shield_yt_shorts_title">Shorts &amp; Reels</string>
     <string name="page_shield_yt_shorts_desc">Block the short-video player inside YouTube immediately upon entry</string>
+    <string name="page_shield_app_facebook">Facebook</string>
+    <string name="page_shield_fb_reels_title">Facebook Reels</string>
+    <string name="page_shield_fb_reels_desc">Block the short-video player inside Facebook immediately upon entry</string>
+    <string name="page_shield_app_pages_count">%1$d of %2$d pages blocked</string>
+    <string name="page_shield_app_pages_none">No pages blocked</string>
     <string name="page_shield_target_pages_label">Target Pages to Block</string>
     <string name="page_shield_reaction_label">Reaction upon Entry</string>
     <string name="page_shield_reaction_exit_only">Exit Application Only (Exit Only)</string>

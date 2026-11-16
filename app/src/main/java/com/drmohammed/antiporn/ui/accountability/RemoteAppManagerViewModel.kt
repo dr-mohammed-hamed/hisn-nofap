@@ -483,19 +483,6 @@ class RemoteAppManagerViewModel(
                 val myName = accountabilityRepository.getMyDisplayName()
                     ?: context.getString(R.string.guardian_default_name)
 
-                // 1. Resolve Zero-Trust approval on ward cloud ticket so ZeroTrustWatcher never re-freezes it
-                try {
-                    val approvalSuccess = approvalRepository.resolveWardApproval(
-                        wardUid = state.wardId,
-                        packageName = pkg,
-                        approve = true,
-                        guardianName = myName
-                    )
-                    Log.i(TAG, "Quick unsuspend: Auto-resolved ward approval for $pkg (success=$approvalSuccess)")
-                } catch (e: Exception) {
-                    Log.e(TAG, "Quick unsuspend: Error resolving ward approval for $pkg", e)
-                }
-
                 val updatedPolicy = state.currentPolicy.copy(
                     guardianUid = state.currentPolicy.guardianUid?.takeIf { it.isNotBlank() } ?: myUid,
                     guardianName = state.currentPolicy.guardianName?.takeIf { it.isNotBlank() } ?: myName,
@@ -504,7 +491,23 @@ class RemoteAppManagerViewModel(
                     updatedAt = TrustedTimeProvider.currentTimeMillis(context)
                 )
 
+                // 1. Push policy FIRST so ward removes pkg from customBlacklistPackages before approval ticket arrives
                 val success = policyRepository.pushPolicyToWard(state.wardId, updatedPolicy)
+
+                // 2. Resolve Zero-Trust approval on ward cloud ticket only after policy is successfully updated in cloud
+                if (success) {
+                    try {
+                        val approvalSuccess = approvalRepository.resolveWardApproval(
+                            wardUid = state.wardId,
+                            packageName = pkg,
+                            approve = true,
+                            guardianName = myName
+                        )
+                        Log.i(TAG, "Quick unsuspend: Auto-resolved ward approval for $pkg (success=$approvalSuccess)")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Quick unsuspend: Error resolving ward approval for $pkg", e)
+                    }
+                }
 
                 _uiState.update { current ->
                     current.copy(
@@ -593,21 +596,6 @@ class RemoteAppManagerViewModel(
                 updatedAt = TrustedTimeProvider.currentTimeMillis(context)
             )
 
-            // Auto-resolve Zero-Trust approvals for any packages removed from 24/7 blacklist
-            val unFrozenPackages = state.initialBlacklist - state.customBlacklist
-            for (pkg in unFrozenPackages) {
-                try {
-                    if (state.isLocalMode) {
-                        approvalRepository.unsuspendAndApprove(pkg, decidedBy = "SELF")
-                    } else {
-                        approvalRepository.resolveWardApproval(state.wardId, pkg, approve = true, guardianName = myName ?: "GUARDIAN")
-                    }
-                    Log.i(TAG, "saveChanges: Auto-approved un-frozen package '$pkg'")
-                } catch (e: Exception) {
-                    Log.e(TAG, "saveChanges: Error auto-approving package '$pkg'", e)
-                }
-            }
-
             try {
                 val success = if (state.isLocalMode) {
                     policyRepository.saveAndEnforceSelfPolicy(updatedPolicy)
@@ -615,11 +603,25 @@ class RemoteAppManagerViewModel(
                     policyRepository.pushPolicyToWard(state.wardId, updatedPolicy)
                 }
 
-                _uiState.update { it.copy(isSaving = false) }
-
                 if (success) {
+                    // Auto-resolve Zero-Trust approvals for any packages removed from 24/7 blacklist AFTER policy push succeeds
+                    val unFrozenPackages = state.initialBlacklist - state.customBlacklist
+                    for (pkg in unFrozenPackages) {
+                        try {
+                            if (state.isLocalMode) {
+                                approvalRepository.unsuspendAndApprove(pkg, decidedBy = "SELF")
+                            } else {
+                                approvalRepository.resolveWardApproval(state.wardId, pkg, approve = true, guardianName = myName ?: "GUARDIAN")
+                            }
+                            Log.i(TAG, "saveChanges: Auto-approved un-frozen package '$pkg'")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "saveChanges: Error auto-approving package '$pkg'", e)
+                        }
+                    }
+
                     _uiState.update {
                         it.copy(
+                            isSaving = false,
                             initialBlacklist = state.customBlacklist,
                             initialCurfewWhitelist = state.customCurfewWhitelist,
                             initialAiScanPackages = state.customAiScanPackages,
@@ -632,6 +634,7 @@ class RemoteAppManagerViewModel(
                     _events.emit(RemoteAppManagerEvent.ShowToastRes(R.string.toast_app_manager_saved))
                     _events.emit(RemoteAppManagerEvent.SaveSuccess)
                 } else {
+                    _uiState.update { it.copy(isSaving = false) }
                     _events.emit(RemoteAppManagerEvent.ShowToastRes(R.string.toast_app_manager_save_failed, isLong = true))
                 }
             } catch (e: Exception) {

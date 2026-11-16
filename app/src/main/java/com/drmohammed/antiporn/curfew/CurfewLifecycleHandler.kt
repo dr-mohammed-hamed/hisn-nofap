@@ -94,6 +94,7 @@ internal object CurfewLifecycleHandler {
 
         CurfewConfig.addTrackedSuspendedPackages(context, activeTrackedApps)
         CurfewConfig.setLastBlockEnforced(context, true)
+        CurfewConfig.setDnsRestorePending(context, false)
 
         BlackBoxRecorder.recordCurfew(
             context,
@@ -174,11 +175,14 @@ internal object CurfewLifecycleHandler {
         }
 
         Log.i(TAG, "Enforcing Curfew OFF: Releasing daytime apps and stores")
+        var dnsRestoreSuccess = true
         if (!instantKill) {
             if (!CurfewVpnDnsBridge.reconcileNonBlackholeVpnAndDns(context, requiredMode, alwaysOnPkg, isLockdown)) {
                 overallSuccess = false
+                dnsRestoreSuccess = false
             }
         }
+        CurfewConfig.setDnsRestorePending(context, !dnsRestoreSuccess)
 
         unhideLegacyStores(context, pm, storesAndSearch)
         clearLegacyInstallRestriction(context)
