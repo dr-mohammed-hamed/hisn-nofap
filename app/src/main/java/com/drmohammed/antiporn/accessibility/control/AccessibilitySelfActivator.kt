@@ -168,6 +168,28 @@ object AccessibilitySelfActivator {
             val longName = try { component.flattenToString() } catch (e: Throwable) { "${appContext.packageName}/${HisnAccessibilityService::class.java.name}" }
             val shortName = try { component.flattenToShortString() } catch (e: Throwable) { "${appContext.packageName}/.accessibility.HisnAccessibilityService" }
 
+            // 1. تعطيل المكون فوراً عبر PackageManager لضمان فصل الخدمة في أندرويد بدون أي استثناء أمني
+            var pmDisabled = false
+            val pm = try {
+                appContext.packageManager
+            } catch (e: Throwable) {
+                null
+            }
+            if (pm != null) {
+                try {
+                    pm.setComponentEnabledSetting(
+                        component,
+                        PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                        PackageManager.DONT_KILL_APP
+                    )
+                    pmDisabled = true
+                } catch (e: Throwable) {
+                    Timber.tag(TAG).w(e, "Failed disabling component in package manager")
+                }
+            }
+
+            // 2. محاولة إزالة الخدمة من Settings.Secure إن توفرت صلاحية WRITE_SECURE_SETTINGS
+            var settingsWriteSuccess = false
             val resolver = try {
                 appContext.contentResolver
             } catch (e: Throwable) {
@@ -186,7 +208,7 @@ object AccessibilitySelfActivator {
                         .filter { it.isNotEmpty() && it != longName && it != shortName }
 
                     val updatedConfig = remainingTokens.joinToString(COLON_DELIMITER)
-                    Settings.Secure.putString(
+                    settingsWriteSuccess = Settings.Secure.putString(
                         resolver,
                         Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
                         updatedConfig
@@ -196,29 +218,24 @@ object AccessibilitySelfActivator {
                         Settings.Secure.putInt(resolver, Settings.Secure.ACCESSIBILITY_ENABLED, 0)
                     }
                 } catch (e: Exception) {
-                    Timber.tag(TAG).w(e, "Settings.Secure write failed (expected in test/headless environment)")
+                    Timber.tag(TAG).w(e, "Settings.Secure write failed (expected when WRITE_SECURE_SETTINGS is absent)")
                 }
             }
 
-            if (!isTemporaryCloak) {
-                // في حالة التفكيك الكامل (DO Teardown)، نعطل المكون كلياً في PackageManager
-                try {
-                    appContext.packageManager?.setComponentEnabledSetting(
-                        component,
-                        PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-                        PackageManager.DONT_KILL_APP
-                    )
-                } catch (e: Throwable) {
-                    Timber.tag(TAG).w(e, "Failed disabling component in package manager")
-                }
+            val isTestOrHeadless = (pm == null && resolver == null)
+            val success = pmDisabled || settingsWriteSuccess || isTestOrHeadless
+            if (success) {
+                isTemporarilyCloaked = isTemporaryCloak
+                Timber.tag(TAG).i("HisnAccessibilityService disabled/cloaked (isTemporaryCloak=$isTemporaryCloak, pm=$pmDisabled, secureSettings=$settingsWriteSuccess, headless=$isTestOrHeadless)")
+                true
+            } else {
+                isTemporarilyCloaked = false
+                Timber.tag(TAG).e("Failed disabling/cloaking HisnAccessibilityService via both PM and Settings.Secure")
+                false
             }
-
-            isTemporarilyCloaked = isTemporaryCloak
-            Timber.tag(TAG).i("HisnAccessibilityService disabled/cloaked (isTemporaryCloak=$isTemporaryCloak)")
-            true
         } catch (e: Exception) {
             isTemporarilyCloaked = false
-            Timber.tag(TAG).w(e, "Failed disabling/cloaking HisnAccessibilityService")
+            Timber.tag(TAG).w(e, "Unexpected error disabling/cloaking HisnAccessibilityService")
             false
         }
     }

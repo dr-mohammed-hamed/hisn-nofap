@@ -52,6 +52,7 @@ class BankingCloakManagerTest {
     fun testConstants() {
         assertEquals("com.egyptianbanks.instapay", BankingCloakManager.INSTAPAY_PACKAGE)
         assertEquals(180_000L, BankingCloakManager.CLOAK_TIMEOUT_MS)
+        assertEquals(250L, BankingCloakManager.DEFAULT_SETTLING_DELAY_MS)
         assertEquals("com.drmohammed.antiporn.action.RESTORE_BANKING_CLOAK", BankingCloakManager.ACTION_RESTORE_BANKING_CLOAK)
     }
 
@@ -64,11 +65,27 @@ class BankingCloakManagerTest {
         assertTrue(BankingCloakManager.isIgnoredPackage("com.google.android.inputmethod.latin"))
         assertTrue(BankingCloakManager.isIgnoredPackage("com.sec.android.inputmethod"))
 
+        // OEM Secure Keyboards (Realme/OPPO, Xiaomi, Samsung, Huawei)
+        assertTrue(BankingCloakManager.isIgnoredPackage("com.coloros.keyboard"))
+        assertTrue(BankingCloakManager.isIgnoredPackage("com.oppo.keyboard"))
+        assertTrue(BankingCloakManager.isIgnoredPackage("com.oplus.keyboard"))
+        assertTrue(BankingCloakManager.isIgnoredPackage("com.coloros.safecenter"))
+        assertTrue(BankingCloakManager.isIgnoredPackage("com.coloros.securitypermission"))
+        assertTrue(BankingCloakManager.isIgnoredPackage("com.miui.securityadd"))
+        assertTrue(BankingCloakManager.isIgnoredPackage("com.samsung.android.honeyboard"))
+        assertTrue(BankingCloakManager.isIgnoredPackage("com.huawei.secime"))
+        assertTrue(BankingCloakManager.isIgnoredPackage("com.touchtype.swiftkey"))
+
         assertFalse(BankingCloakManager.isIgnoredPackage("com.android.chrome"))
         assertFalse(BankingCloakManager.isIgnoredPackage("com.egyptianbanks.instapay"))
         assertFalse(BankingCloakManager.isIgnoredPackage("com.google.android.youtube"))
         assertFalse(BankingCloakManager.isIgnoredPackage("com.sec.android.app.launcher"))
         assertFalse(BankingCloakManager.isIgnoredPackage(""))
+    }
+
+    @Test
+    fun testDeveloperOptionsDetection_handlesExceptionsGracefully() {
+        assertFalse(BankingCloakManager.isDeveloperOptionsEnabled(dummyContext))
     }
 
     @Test

@@ -286,6 +286,19 @@ class ScreenBlurOverlayManager(
                 ref.get()?.onServiceDetached(service)
             }
         }
+
+        /**
+         * إخفاء وفصل كافة نوافذ التعتيم العائمة فوراً عند تشغيل التطبيقات البنكية (مثل إنستاباي)
+         * لمنع اعتراض البنك لنوافذ الـ Overlay وحظر اللمس (Anti-Tapjacking).
+         */
+        fun dismissAllOverlaysForBanking() {
+            for (ref in activeManagers) {
+                val manager = ref.get() ?: continue
+                manager.postToMainThread {
+                    manager.detachOverlay()
+                }
+            }
+        }
     }
 
     /**

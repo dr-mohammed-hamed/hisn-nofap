@@ -28,19 +28,46 @@ object BankingCloakManager {
 
     const val INSTAPAY_PACKAGE = "com.egyptianbanks.instapay"
     const val CLOAK_TIMEOUT_MS = 180_000L // 3 minutes
+    const val DEFAULT_SETTLING_DELAY_MS = 250L // ربع ثانية لضمان اكتمال فصل الخدمة في أندرويد
     const val ACTION_RESTORE_BANKING_CLOAK = "com.drmohammed.antiporn.action.RESTORE_BANKING_CLOAK"
     private const val RESTORE_ALARM_REQUEST_CODE = 4001
 
     /**
      * الحزم النظامية المستثناة من إيقاف وضع التخفي عند ظهورها كواجهات عابرة أو لوحة مفاتيح.
+     * تشمل واجهات النظام، وأذونات أندرويد، وكافة لوحات المفاتيح الآمنة لمصنعي الأجهزة الأصلية (OEMs):
+     * ريلمي/أوبو (ColorOS)، شاومي (MIUI/HyperOS)، سامسونج (One UI)، وهواوي.
      */
     val DEFAULT_IGNORED_PACKAGES: Set<String> = setOf(
+        // إطار أندرويد وواجهة النظام
         "com.android.systemui",
         "android",
         "com.android.permissioncontroller",
         "com.google.android.permissioncontroller",
+        // ريلمي وأوبو وون بلس (Realme UI / ColorOS / OxygenOS)
+        "com.coloros.keyboard", // لوحة مفاتيح ريلمي/أوبو الآمنة لكلمات السر والـ PIN
+        "com.oppo.keyboard",
+        "com.oplus.keyboard",
+        "com.sohu.inputmethod.sogou.oem",
+        "com.coloros.safecenter",
+        "com.coloros.securitypermission",
+        "com.oplus.securitypermission",
+        "com.coloros.systemclone",
+        "com.heytap.speechassist",
+        // شاومي وريدمي وبوكو (MIUI / HyperOS)
+        "com.miui.securityadd", // لوحة إدخال الـ PIN المحمية في شاومي
+        "com.sohu.inputmethod.sogou.xiaomi",
+        "com.miui.securitycenter",
+        "com.lbe.security.miui",
+        // سامسونج (One UI)
+        "com.sec.android.inputmethod",
+        "com.samsung.android.honeyboard",
+        // هواوي وهونر (EMUI / MagicOS)
+        "com.huawei.secime",
+        "com.huawei.securitymgr",
+        "com.huawei.systemmanager",
+        // لوحات المفاتيح الشائعة
         "com.google.android.inputmethod.latin",
-        "com.sec.android.inputmethod"
+        "com.touchtype.swiftkey"
     )
 
     @Volatile
@@ -58,10 +85,38 @@ object BankingCloakManager {
     }
 
     /**
+     * يتحقق مما إذا كانت خيارات المطورين (Developer Options) أو تصحيح أخطاء USB مفعلة على الهاتف.
+     */
+    fun isDeveloperOptionsEnabled(context: Context): Boolean {
+        return try {
+            val resolver = (context.applicationContext ?: context).contentResolver
+            val devEnabled = android.provider.Settings.Global.getInt(
+                resolver,
+                android.provider.Settings.Global.DEVELOPMENT_SETTINGS_ENABLED,
+                0
+            ) == 1
+            val adbEnabled = android.provider.Settings.Global.getInt(
+                resolver,
+                android.provider.Settings.Global.ADB_ENABLED,
+                0
+            ) == 1
+            devEnabled || adbEnabled
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
      * تشغيل آمن لتطبيق البنك المحدد مع تفعيل التخفي الصامت لخدمة الوصول وجدولة منبه استعادة الحماية.
+     *
+     * @param settlingDelayMs مهلة تسكين اختيارية بالمللي ثانية لضمان اكتمال فصل الخدمة في أندرويد قبل ظهور البنك.
      */
     @Synchronized
-    fun launchSafely(context: Context, targetPackage: String = INSTAPAY_PACKAGE): Boolean {
+    fun launchSafely(
+        context: Context,
+        targetPackage: String = INSTAPAY_PACKAGE,
+        settlingDelayMs: Long = 0L
+    ): Boolean {
         if (!BankingAppRegistry.isAllowed(targetPackage)) {
             Timber.tag(TAG).e("Security violation: Rejecting banking cloak request for non-whitelisted package: $targetPackage")
             return false
@@ -92,24 +147,68 @@ object BankingCloakManager {
             return false
         }
 
+        // 1. تطهير وفصل كافة نوافذ التعتيم العائمة فوراً لمنع حظر Tapjacking في البنك
+        try {
+            com.drmohammed.antiporn.ai.overlay.ScreenBlurOverlayManager.dismissAllOverlaysForBanking()
+        } catch (e: Throwable) {
+            Timber.tag(TAG).w(e, "Failed dismissing overlays for banking launch")
+        }
+
+        // 2. فحص استباقي لخيارات المطورين والتنبيه عليها دون المساس بـ ADB (المادة 2 من الدستور)
+        if (isDeveloperOptionsEnabled(appContext)) {
+            try {
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    try {
+                        Toast.makeText(appContext, R.string.banking_dev_options_warning, Toast.LENGTH_LONG).show()
+                    } catch (e: Throwable) {
+                        Timber.tag(TAG).w(e, "Toast for dev options warning failed")
+                    }
+                }
+            } catch (e: Throwable) {
+                Timber.tag(TAG).w(e, "Posting dev options warning toast failed")
+            }
+        }
+
         activeTargetPackage = targetPackage
 
-        // 1. إيقاف وتخفي خدمة الوصول صامتاً
+        // 3. إيقاف وتخفي خدمة الوصول صامتاً
         val cloaked = AccessibilitySelfActivator.disableAndCloakSilently(appContext, isTemporaryCloak = true)
         Timber.tag(TAG).i("Banking cloak activated (result=$cloaked) for target: $targetPackage")
 
-        // 2. جدولة منبه استعادة الحماية كصمام أمان زمني
+        // 4. جدولة منبه استعادة الحماية كصمام أمان زمني
         scheduleRestoreAlarm(appContext)
 
-        // 3. تشغيل تطبيق البنك في مهمة جديدة
+        // 5. تشغيل تطبيق البنك في مهمة جديدة
         try {
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         } catch (e: Throwable) {
             Timber.tag(TAG).w(e, "Could not add flags to launchIntent")
         }
 
+        return if (settlingDelayMs > 0L) {
+            try {
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    startActivityInternal(context, launchIntent, appContext, targetPackage)
+                }, settlingDelayMs)
+                true
+            } catch (e: Throwable) {
+                Timber.tag(TAG).w(e, "Handler postDelayed failed, launching immediately")
+                startActivityInternal(context, launchIntent, appContext, targetPackage)
+            }
+        } else {
+            startActivityInternal(context, launchIntent, appContext, targetPackage)
+        }
+    }
+
+    private fun startActivityInternal(
+        context: Context,
+        launchIntent: Intent,
+        appContext: Context,
+        targetPackage: String
+    ): Boolean {
+        val targetContext = if (context is android.app.Activity && context.isFinishing) appContext else context
         return try {
-            context.startActivity(launchIntent)
+            targetContext.startActivity(launchIntent)
             Timber.tag(TAG).i("Successfully started banking activity for $targetPackage")
             true
         } catch (e: Exception) {

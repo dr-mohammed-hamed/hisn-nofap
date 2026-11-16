@@ -4,12 +4,13 @@ import android.app.Activity
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import timber.log.Timber
 
 /**
  * نشاط وسيط شفاف لتشغيل تطبيق البنك بأمان وبدون وميض أو واجهة مستخدم.
  * يتم استدعاؤه من اختصار سطح المكتب أو ودجت التطبيق، فيقوم بتفعيل التخفي،
- * إطلاق تطبيق البنك المعتمد، ثم إنهاء نفسه فوراً.
+ * إطلاق تطبيق البنك المعتمد مع مهلة تسكين غير متزامنة، ثم إنهاء نفسه فوراً.
  */
 class SafeBankingLauncherActivity : Activity() {
 
@@ -29,10 +30,22 @@ class SafeBankingLauncherActivity : Activity() {
     }
 
     private fun handleLauncherIntent(intent: Intent?) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastLaunchTimeMs < DEBOUNCE_WINDOW_MS) {
+            Timber.tag(TAG).d("Ignoring rapid duplicate launcher attempt within debounce window")
+            return
+        }
+        lastLaunchTimeMs = now
+
         if (intent?.action == Intent.ACTION_VIEW || intent?.action == Intent.ACTION_MAIN) {
             val targetPackage = intent.getStringExtra(EXTRA_PACKAGE_NAME) ?: BankingCloakManager.INSTAPAY_PACKAGE
             if (BankingAppRegistry.isAllowed(targetPackage)) {
-                BankingCloakManager.launchSafely(this, targetPackage)
+                // نمرر applicationContext مع مهلة تسكين 250ms لضمان اكتمال فصل الخدمة في النظام
+                BankingCloakManager.launchSafely(
+                    context = applicationContext,
+                    targetPackage = targetPackage,
+                    settlingDelayMs = BankingCloakManager.DEFAULT_SETTLING_DELAY_MS
+                )
             } else {
                 Timber.tag(TAG).e("Unauthorized launcher attempt for non-whitelisted package: $targetPackage")
             }
@@ -52,5 +65,8 @@ class SafeBankingLauncherActivity : Activity() {
     companion object {
         private const val TAG = "AntiPorn_SafeBankLaunch"
         const val EXTRA_PACKAGE_NAME = "com.drmohammed.antiporn.extra.BANKING_PACKAGE"
+        private const val DEBOUNCE_WINDOW_MS = 1000L
+        @Volatile
+        private var lastLaunchTimeMs = 0L
     }
 }

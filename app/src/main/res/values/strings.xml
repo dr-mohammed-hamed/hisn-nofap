@@ -1353,6 +1353,7 @@
 
     <!-- Safe Banking Cloak -->
     <string name="banking_app_not_installed">تطبيق البنك غير مثبت على الهاتف</string>
+    <string name="banking_dev_options_warning">تنبيه: تطبيق البنك قد يرفض العمل إذا كانت خيارات المطورين (Developer Options) مفعلة.</string>
     <string name="banking_shortcut_label">تطبيق بنكي</string>
     <string name="banking_shortcut_long_label">تطبيق بنكي آمن</string>
     <string name="banking_shortcut_custom_long_label_format">%1$s (آمن)</string>

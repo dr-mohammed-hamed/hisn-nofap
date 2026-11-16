@@ -1076,6 +1076,7 @@
 
     <!-- Safe Banking Cloak -->
     <string name="banking_app_not_installed">Banking application is not installed on this device</string>
+    <string name="banking_dev_options_warning">Notice: Banking app may refuse to run if Developer Options are enabled.</string>
     <string name="banking_shortcut_label">Banking App</string>
     <string name="banking_shortcut_long_label">Safe Banking App</string>
     <string name="banking_shortcut_custom_long_label_format">%1$s (Safe)</string>
