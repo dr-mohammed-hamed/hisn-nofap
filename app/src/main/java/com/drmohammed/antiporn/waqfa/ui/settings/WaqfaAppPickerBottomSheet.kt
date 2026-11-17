@@ -1,9 +1,8 @@
 package com.drmohammed.antiporn.waqfa.ui.settings
 
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.graphics.drawable.Drawable
 import android.os.Bundle
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -14,34 +13,66 @@ import androidx.recyclerview.widget.RecyclerView
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.policy.AppPolicyRegistry
 import com.drmohammed.antiporn.curfew.CurfewAppResolver
+import com.drmohammed.antiporn.data.model.InstalledAppDto
 import com.drmohammed.antiporn.databinding.BottomSheetWaqfaAppPickerBinding
 import com.drmohammed.antiporn.databinding.ItemWaqfaAppPickerBinding
+import com.drmohammed.antiporn.ui.accountability.AppIconResolver
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
+import com.google.firebase.firestore.DocumentSnapshot
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.Source
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
 /**
  * نافذة سفلية منبثقة لاختيار التطبيقات الخاضعة لنظام «وَقْفَة».
+ * تدعم وضع الإشراف المحلي والتحكم عن بعد (Remote Supervision) عبر استرداد مستودع تطبيقات الجهاز المدار من Firestore.
  */
-class WaqfaAppPickerBottomSheet(
-    private val initiallySelected: Set<String>,
-    private val onConfirmed: (Set<String>) -> Unit
-) : BottomSheetDialogFragment() {
+class WaqfaAppPickerBottomSheet() : BottomSheetDialogFragment() {
 
     private var _binding: BottomSheetWaqfaAppPickerBinding? = null
     private val binding get() = _binding ?: throw IllegalStateException("Binding is only valid between onCreateView and onDestroyView")
 
+    private var legacyOnConfirmed: ((Set<String>) -> Unit)? = null
+
+    constructor(
+        initiallySelected: Set<String>,
+        onConfirmed: (Set<String>) -> Unit
+    ) : this() {
+        arguments = Bundle().apply {
+            putBoolean(ARG_IS_REMOTE, false)
+            putString(ARG_WARD_ID, "")
+            putStringArrayList(ARG_INITIAL_TARGETS, ArrayList(initiallySelected))
+        }
+        this.legacyOnConfirmed = onConfirmed
+    }
+
     data class AppItem(
         val packageName: String,
         val appName: String,
-        val icon: Drawable?,
         var isSelected: Boolean
     )
 
     private val allApps = mutableListOf<AppItem>()
     private val filteredApps = mutableListOf<AppItem>()
     private lateinit var adapter: AppPickerAdapter
+    private var currentSavedSelections: Set<String>? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        savedInstanceState?.getStringArrayList(KEY_CURRENT_SELECTIONS)?.let {
+            currentSavedSelections = it.toSet()
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        val selected = allApps.filter { it.isSelected }.map { it.packageName }
+        outState.putStringArrayList(KEY_CURRENT_SELECTIONS, ArrayList(selected))
+    }
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -55,9 +86,14 @@ class WaqfaAppPickerBottomSheet(
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
-        adapter = AppPickerAdapter(filteredApps) { item ->
+        val isRemote = arguments?.getBoolean(ARG_IS_REMOTE) ?: false
+
+        adapter = AppPickerAdapter(filteredApps, isLocalMode = !isRemote) { item ->
             item.isSelected = !item.isSelected
-            adapter.notifyItemChanged(filteredApps.indexOf(item))
+            val index = filteredApps.indexOf(item)
+            if (index != -1) {
+                adapter.notifyItemChanged(index, PAYLOAD_CHECKBOX)
+            }
             updateConfirmButton()
         }
 
@@ -69,8 +105,15 @@ class WaqfaAppPickerBottomSheet(
         }
 
         binding.btnConfirmSelection.setOnClickListener {
+            binding.btnConfirmSelection.isEnabled = false
             val selected = allApps.filter { it.isSelected }.map { it.packageName }.toSet()
-            onConfirmed(selected)
+            parentFragmentManager.setFragmentResult(
+                REQUEST_KEY,
+                Bundle().apply {
+                    putStringArrayList(RESULT_TARGETS, ArrayList(selected))
+                }
+            )
+            legacyOnConfirmed?.invoke(selected)
             dismiss()
         }
 
@@ -79,40 +122,105 @@ class WaqfaAppPickerBottomSheet(
 
     private fun loadInstalledApps() {
         val appContext = context?.applicationContext ?: return
+        val isRemote = arguments?.getBoolean(ARG_IS_REMOTE) ?: false
+        val wardId = arguments?.getString(ARG_WARD_ID).orEmpty()
+        val initialTargets = currentSavedSelections
+            ?: arguments?.getStringArrayList(ARG_INITIAL_TARGETS)?.toSet() ?: emptySet()
+
         viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
-            val pm = appContext.packageManager
-            val intent = Intent(Intent.ACTION_MAIN, null).apply {
-                addCategory(Intent.CATEGORY_LAUNCHER)
-            }
-
             val criticalPackages = CurfewAppResolver.resolveCoreSystemCriticalPackages(appContext)
-            val activities = pm.queryIntentActivities(intent, 0)
             val list = mutableListOf<AppItem>()
-            val seen = mutableSetOf<String>()
+            val seenPackages = mutableSetOf<String>()
 
-            for (resolveInfo in activities) {
-                val pkg = resolveInfo.activityInfo.packageName
-                if (pkg == appContext.packageName || seen.contains(pkg) || AppPolicyRegistry.isImmune(pkg) || criticalPackages.contains(pkg)) {
-                    continue
+            if (!isRemote) {
+                val pm = appContext.packageManager
+                val intent = Intent(Intent.ACTION_MAIN, null).apply {
+                    addCategory(Intent.CATEGORY_LAUNCHER)
                 }
-                seen.add(pkg)
+                val activities = pm.queryIntentActivities(intent, 0)
+                for (resolveInfo in activities) {
+                    val pkg = resolveInfo.activityInfo?.packageName ?: continue
+                    if (seenPackages.contains(pkg) || isPackageRestricted(pkg, appContext.packageName, criticalPackages)) {
+                        continue
+                    }
+                    seenPackages.add(pkg)
 
-                val name = resolveInfo.loadLabel(pm).toString()
-                val icon = try {
-                    resolveInfo.loadIcon(pm)
-                } catch (e: Exception) {
-                    android.util.Log.d("WaqfaAppPicker", "Could not load icon for $pkg", e)
-                    null
-                }
-
-                list.add(
-                    AppItem(
-                        packageName = pkg,
-                        appName = name,
-                        icon = icon,
-                        isSelected = initiallySelected.contains(pkg)
+                    val name = resolveInfo.loadLabel(pm).toString()
+                    list.add(
+                        AppItem(
+                            packageName = pkg,
+                            appName = name,
+                            isSelected = initialTargets.contains(pkg)
+                        )
                     )
-                )
+                }
+
+                val extraPackages = initialTargets - seenPackages
+                for (orphan in extraPackages) {
+                    if (isPackageRestricted(orphan, appContext.packageName, criticalPackages)) continue
+                    list.add(
+                        AppItem(
+                            packageName = orphan,
+                            appName = orphan,
+                            isSelected = true
+                        )
+                    )
+                }
+            } else if (wardId.isBlank()) {
+                Log.w(TAG, "Refusing remote waqfa app load: blank wardId")
+                withContext(Dispatchers.Main) {
+                    if (isAdded) dismissAllowingStateLoss()
+                }
+                return@launch
+            } else {
+                val firestore = FirebaseFirestore.getInstance()
+                var inventoryDoc: DocumentSnapshot? = null
+                try {
+                    inventoryDoc = firestore.collection("inventories").document(wardId).get().await()
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    Log.w(TAG, "Failed fetching remote inventory from server, falling back to cache: ${e.message}", e)
+                    try {
+                        inventoryDoc = firestore.collection("inventories").document(wardId).get(Source.CACHE).await()
+                    } catch (cacheEx: Exception) {
+                        if (cacheEx is CancellationException) throw cacheEx
+                        Log.w(TAG, "Failed fetching inventory from cache: ${cacheEx.message}")
+                    }
+                }
+
+                @Suppress("UNCHECKED_CAST")
+                val rawApps = (inventoryDoc?.get("apps") as? List<*>) ?: emptyList<Any?>()
+                val parsedApps = rawApps.mapNotNull { raw ->
+                    @Suppress("UNCHECKED_CAST")
+                    (raw as? Map<String, Any?>)?.let { InstalledAppDto.fromMap(it) }
+                }.filter { it.packageName.isNotBlank() }
+
+                for (app in parsedApps) {
+                    val pkg = app.packageName
+                    if (seenPackages.contains(pkg) || isPackageRestricted(pkg, appContext.packageName, criticalPackages)) {
+                        continue
+                    }
+                    seenPackages.add(pkg)
+                    list.add(
+                        AppItem(
+                            packageName = pkg,
+                            appName = app.appName.ifBlank { pkg },
+                            isSelected = initialTargets.contains(pkg)
+                        )
+                    )
+                }
+
+                val extraPackages = initialTargets - seenPackages
+                for (orphan in extraPackages) {
+                    if (isPackageRestricted(orphan, appContext.packageName, criticalPackages)) continue
+                    list.add(
+                        AppItem(
+                            packageName = orphan,
+                            appName = orphan,
+                            isSelected = true
+                        )
+                    )
+                }
             }
 
             list.sortBy { it.appName.lowercase() }
@@ -126,6 +234,18 @@ class WaqfaAppPickerBottomSheet(
                 }
             }
         }
+    }
+
+    private fun isPackageRestricted(
+        pkg: String,
+        selfPackageName: String,
+        criticalPackages: Set<String>
+    ): Boolean {
+        if (pkg.isBlank()) return true
+        if (pkg == selfPackageName) return true
+        if (criticalPackages.contains(pkg)) return true
+        if (AppPolicyRegistry.isImmune(pkg)) return true
+        return false
     }
 
     private fun filterApps(query: String) {
@@ -157,6 +277,7 @@ class WaqfaAppPickerBottomSheet(
 
     inner class AppPickerAdapter(
         private val items: List<AppItem>,
+        private val isLocalMode: Boolean,
         private val onItemClick: (AppItem) -> Unit
     ) : RecyclerView.Adapter<AppPickerAdapter.AppViewHolder>() {
 
@@ -170,15 +291,30 @@ class WaqfaAppPickerBottomSheet(
             return AppViewHolder(b)
         }
 
+        override fun onBindViewHolder(
+            holder: AppViewHolder,
+            position: Int,
+            payloads: MutableList<Any>
+        ) {
+            if (payloads.contains(PAYLOAD_CHECKBOX)) {
+                holder.itemBinding.cbSelected.isChecked = items[position].isSelected
+                return
+            }
+            super.onBindViewHolder(holder, position, payloads)
+        }
+
         override fun onBindViewHolder(holder: AppViewHolder, position: Int) {
             val item = items[position]
             holder.itemBinding.tvAppName.text = item.appName
             holder.itemBinding.tvPackageName.text = item.packageName
-            if (item.icon != null) {
-                holder.itemBinding.ivAppIcon.setImageDrawable(item.icon)
-            } else {
-                holder.itemBinding.ivAppIcon.setImageResource(android.R.drawable.sym_def_app_icon)
-            }
+
+            AppIconResolver.loadIcon(
+                imageView = holder.itemBinding.ivAppIcon,
+                packageName = item.packageName,
+                appName = item.appName,
+                isLocalMode = isLocalMode
+            )
+
             holder.itemBinding.cbSelected.isChecked = item.isSelected
 
             holder.itemBinding.root.setOnClickListener {
@@ -189,6 +325,37 @@ class WaqfaAppPickerBottomSheet(
             }
         }
 
+        override fun onViewRecycled(holder: AppViewHolder) {
+            super.onViewRecycled(holder)
+            AppIconResolver.cancelLoad(holder.itemBinding.ivAppIcon)
+        }
+
         override fun getItemCount(): Int = items.size
+    }
+
+    companion object {
+        const val TAG = "WaqfaAppPicker"
+        const val REQUEST_KEY = "waqfa_app_picker_request"
+        const val RESULT_TARGETS = "result_waqfa_targets"
+
+        private const val ARG_IS_REMOTE = "arg_is_remote"
+        private const val ARG_WARD_ID = "arg_ward_id"
+        private const val ARG_INITIAL_TARGETS = "arg_initial_targets"
+        private const val KEY_CURRENT_SELECTIONS = "key_current_selections"
+        private const val PAYLOAD_CHECKBOX = "payload_checkbox"
+
+        fun newInstance(
+            isRemote: Boolean,
+            wardId: String,
+            initialTargets: Set<String>
+        ): WaqfaAppPickerBottomSheet {
+            return WaqfaAppPickerBottomSheet().apply {
+                arguments = Bundle().apply {
+                    putBoolean(ARG_IS_REMOTE, isRemote)
+                    putString(ARG_WARD_ID, wardId)
+                    putStringArrayList(ARG_INITIAL_TARGETS, ArrayList(initialTargets))
+                }
+            }
+        }
     }
 }

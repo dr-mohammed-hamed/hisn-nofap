@@ -38,6 +38,14 @@ class WaqfaSettingsActivity : AppCompatActivity() {
         binding = ActivityWaqfaSettingsBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        supportFragmentManager.setFragmentResultListener(
+            WaqfaAppPickerBottomSheet.REQUEST_KEY,
+            this
+        ) { _, bundle ->
+            val targets = bundle.getStringArrayList(WaqfaAppPickerBottomSheet.RESULT_TARGETS)?.toSet() ?: emptySet()
+            viewModel.setTargetPackages(targets)
+        }
+
         val isRemote = intent.getBooleanExtra(EXTRA_IS_REMOTE, false)
         val wardId = intent.getStringExtra(EXTRA_WARD_ID)
         val policyJson = intent.getStringExtra(EXTRA_POLICY_JSON)
@@ -105,12 +113,14 @@ class WaqfaSettingsActivity : AppCompatActivity() {
         }
 
         binding.btnSelectApps.setOnClickListener {
-            if (supportFragmentManager.findFragmentByTag("WaqfaAppPicker") != null) return@setOnClickListener
-            val currentTargets = viewModel.uiState.value.config.targetPackages
-            val sheet = WaqfaAppPickerBottomSheet(currentTargets) { selected ->
-                viewModel.setTargetPackages(selected)
-            }
-            sheet.show(supportFragmentManager, "WaqfaAppPicker")
+            if (supportFragmentManager.findFragmentByTag(WaqfaAppPickerBottomSheet.TAG) != null) return@setOnClickListener
+            val state = viewModel.uiState.value
+            val sheet = WaqfaAppPickerBottomSheet.newInstance(
+                isRemote = state.isRemote,
+                wardId = state.wardId.orEmpty(),
+                initialTargets = state.config.targetPackages
+            )
+            sheet.show(supportFragmentManager, WaqfaAppPickerBottomSheet.TAG)
         }
 
         binding.swReasonRequired.setOnCheckedChangeListener { _, isChecked ->
