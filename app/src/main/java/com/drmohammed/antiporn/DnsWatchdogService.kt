@@ -12,16 +12,21 @@ import android.database.ContentObserver
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
+import android.os.Process
 import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.drmohammed.antiporn.core.engine.ProtectionEngine
+import com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
 import com.drmohammed.antiporn.curfew.CurfewConfig
 import com.drmohammed.antiporn.curfew.CurfewEnforcer
+import com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge
+import com.drmohammed.antiporn.curfew.DnsFastHealOutcome
 import com.drmohammed.antiporn.services.NetworkWatchdog
 import com.drmohammed.antiporn.shields.DnsShield
 import com.drmohammed.antiporn.core.model.ShieldStatus
@@ -135,6 +140,7 @@ class DnsWatchdogService : Service() {
         }
     }
 
+    private var dnsObserverThread: HandlerThread? = null
     private var dnsObserver: ContentObserver? = null
     private val networkWatchdog = NetworkWatchdog()
 
@@ -275,18 +281,14 @@ class DnsWatchdogService : Service() {
     private fun registerDnsObserver() {
         if (dnsObserver != null) return
 
-        val handler = Handler(Looper.getMainLooper())
-        dnsObserver = object : ContentObserver(handler) {
+        val observerThread = HandlerThread(
+            "AntiPorn_DnsObserver",
+            Process.THREAD_PRIORITY_URGENT_DISPLAY
+        ).apply { start() }
+
+        val observer = object : ContentObserver(Handler(observerThread.looper)) {
             override fun onChange(selfChange: Boolean, uri: Uri?) {
-                if (com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isWithinSettleWindow()) {
-                    Log.d(TAG, "DNS setting change observed during settle window: uri=$uri. Delaying audit...")
-                    debounceHandler.removeCallbacks(checkRunnable)
-                    debounceHandler.postDelayed(checkRunnable, 3500L)
-                    return
-                }
-                Log.d(TAG, "DNS setting change observed: uri=$uri. Debouncing check...")
-                debounceHandler.removeCallbacks(checkRunnable)
-                debounceHandler.postDelayed(checkRunnable, DEBOUNCE_DELAY_MS)
+                handleImmediateDnsChange(uri)
             }
         }
 
@@ -294,7 +296,11 @@ class DnsWatchdogService : Service() {
             val modeUri = Settings.Global.getUriFor("private_dns_mode")
             val specifierUri = Settings.Global.getUriFor("private_dns_specifier")
 
-            val observer = dnsObserver ?: return
+            if (modeUri == null && specifierUri == null) {
+                Log.w(TAG, "Settings.Global URIs for Private DNS unavailable; skipping observer registration")
+                observerThread.quitSafely()
+                return
+            }
 
             if (modeUri != null) {
                 contentResolver.registerContentObserver(modeUri, false, observer)
@@ -302,9 +308,79 @@ class DnsWatchdogService : Service() {
             if (specifierUri != null) {
                 contentResolver.registerContentObserver(specifierUri, false, observer)
             }
-            Log.i(TAG, "ContentObserver registered for DNS settings")
+            dnsObserverThread = observerThread
+            dnsObserver = observer
+            Log.i(TAG, "ContentObserver registered for DNS settings on dedicated HandlerThread")
         } catch (e: Exception) {
+            try {
+                contentResolver.unregisterContentObserver(observer)
+            } catch (_: Exception) {
+                // Best-effort cleanup if one URI registered before another failed
+            }
+            observerThread.quitSafely()
+            dnsObserver = null
+            dnsObserverThread = null
             Log.e(TAG, "Failed to register ContentObserver for DNS settings", e)
+        }
+    }
+
+    private fun handleImmediateDnsChange(uri: Uri?) {
+        if (!isRunning) return
+        try {
+            val appContext = applicationContext ?: this
+            val result = CurfewVpnDnsBridge.tryFastHealGlobalPrivateDns(appContext)
+            when (result.outcome) {
+                DnsFastHealOutcome.ALREADY_COMPLIANT -> {
+                    // 0 writes, 0 debounce: prevents infinite ContentObserver feedback loops
+                    return
+                }
+                DnsFastHealOutcome.HEALED_DIRECT -> {
+                    Log.i(
+                        TAG,
+                        "DNS fast-path healed silently in ${result.latencyMs}ms " +
+                            "(wasMode=${result.observedMode}, wasHost=${result.observedHost}, restored=${result.expectedHost}, uri=$uri)"
+                    )
+                    BlackBoxRecorder.record(
+                        context = appContext,
+                        tag = BlackBoxRecorder.TAG_SHIELD,
+                        actionName = "DNS_FAST_PATH_HEALED",
+                        isSuccess = true,
+                        executionTimeMs = result.latencyMs,
+                        metadata = "wasMode=${result.observedMode}, wasHost=${result.observedHost}, restored=${result.expectedHost}, uri=$uri"
+                    )
+                    ProtectionEngine.applyDnsShieldFastAsync(appContext)
+                }
+                DnsFastHealOutcome.PERMISSION_DENIED_NEEDS_DPM,
+                DnsFastHealOutcome.FAILED_NEEDS_DPM -> {
+                    Log.w(
+                        TAG,
+                        "DNS fast-path direct write unavailable (${result.outcome}); escalating immediately to DPM fast-path (uri=$uri)"
+                    )
+                    BlackBoxRecorder.record(
+                        context = appContext,
+                        tag = BlackBoxRecorder.TAG_SHIELD,
+                        actionName = "DNS_FAST_PATH_FALLBACK_DPM",
+                        isSuccess = false,
+                        executionTimeMs = result.latencyMs,
+                        errorDetails = result.errorMessage,
+                        metadata = "wasMode=${result.observedMode}, wasHost=${result.observedHost}, expected=${result.expectedHost}, outcome=${result.outcome}"
+                    )
+                    ProtectionEngine.applyDnsShieldFastAsync(appContext)
+                }
+                DnsFastHealOutcome.SKIPPED_ACTIVE_TRANSITION,
+                DnsFastHealOutcome.SKIPPED_VPN_EXPECTED -> {
+                    val delayMs = if (ProtectionTransitionGuard.isWithinSettleWindow()) 3500L else DEBOUNCE_DELAY_MS
+                    Log.d(TAG, "DNS change deferred (${result.outcome}, uri=$uri). Scheduling post-transition audit in ${delayMs}ms...")
+                    debounceHandler.removeCallbacks(checkRunnable)
+                    debounceHandler.postDelayed(checkRunnable, delayMs)
+                }
+                DnsFastHealOutcome.SKIPPED_UNSUPPORTED_SDK,
+                DnsFastHealOutcome.SKIPPED_NOT_DEVICE_OWNER -> {
+                    return
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error handling immediate DNS change (uri=$uri)", e)
         }
     }
 
@@ -317,6 +393,14 @@ class DnsWatchdogService : Service() {
                 Log.e(TAG, "Failed to unregister ContentObserver", e)
             }
             dnsObserver = null
+        }
+        dnsObserverThread?.let { thread ->
+            try {
+                thread.quitSafely()
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to quit DNS observer HandlerThread", e)
+            }
+            dnsObserverThread = null
         }
     }
 
@@ -589,12 +673,13 @@ class DnsWatchdogService : Service() {
             // Silent self-healing first
             ProtectionEngine.applyAllAsync(appContext)
 
-            // Post user-facing tamper alert ONLY for confirmed external tampering
+            // Post user-facing tamper alert ONLY for confirmed non-DNS external tampering.
+            // Intentional silent DNS policy: Private DNS self-healing is recorded in Black Box only
+            // with zero user-facing notifications in the notification shade.
             val isDirectTamper = desyncReasons.any {
                 it.startsWith("[TIMEZONE:") ||
                     it.startsWith("[AUTO_TIME:") ||
-                    it.startsWith("[system_tamper:") ||
-                    (it.startsWith("[DNS_GLOBAL:") && !it.contains("VPN required"))
+                    it.startsWith("[system_tamper:")
             }
 
             val isCurfewStateSynchronized = CurfewEnforcer.isEffectiveBlockActive(appContext) == CurfewConfig.isLastBlockEnforced(appContext)

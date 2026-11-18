@@ -46,6 +46,10 @@ object ProtectionEngine {
     private val isEnforcing = AtomicBoolean(false)
     @Volatile
     private var needsRerun: Boolean = false
+    private val pendingDnsCallbacks = CopyOnWriteArrayList<(ShieldResult) -> Unit>()
+    private val isDnsFastEnforcing = AtomicBoolean(false)
+    @Volatile
+    private var needsDnsFastRerun: Boolean = false
     private val lastRecordedShieldFailures = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     fun getAdminComponent(context: Context): ComponentName {
@@ -119,6 +123,143 @@ object ProtectionEngine {
                 }
             }
         }
+    }
+
+    /**
+     * Enforces ONLY DnsShield asynchronously on a dedicated background fast-path
+     * without waiting behind the other 5 shields (SystemTamper, VPN, Curfew, Browser, AppSuspension).
+     * Conflates rapid concurrent requests cleanly via AtomicBoolean + rerun flag.
+     */
+    fun applyDnsShieldFastAsync(context: Context, onComplete: ((ShieldResult) -> Unit)? = null) {
+        synchronized(pendingDnsCallbacks) {
+            if (onComplete != null) {
+                pendingDnsCallbacks.add(onComplete)
+            }
+
+            if (!isDnsFastEnforcing.compareAndSet(false, true)) {
+                needsDnsFastRerun = true
+                Log.d(TAG, "DNS fast-path enforcement in progress, conflated request and scheduled rerun")
+                return
+            }
+            needsDnsFastRerun = false
+        }
+
+        val appContext = context.applicationContext ?: context
+        engineScope.launch {
+            var released = false
+            try {
+                while (true) {
+                    val result = try {
+                        applyDnsShieldFastSync(appContext)
+                    } catch (t: Throwable) {
+                        if (t is kotlinx.coroutines.CancellationException) throw t
+                        Log.e(TAG, "Fatal error executing applyDnsShieldFastSync", t)
+                        ShieldResult(
+                            shieldId = DnsShield.id,
+                            success = false,
+                            message = appContext.getString(R.string.toast_error_applying, t.localizedMessage ?: "Unknown")
+                        )
+                    }
+
+                    val callbacksToNotify: List<(ShieldResult) -> Unit>? = synchronized(pendingDnsCallbacks) {
+                        if (needsDnsFastRerun) {
+                            needsDnsFastRerun = false
+                            null
+                        } else {
+                            val copy = pendingDnsCallbacks.toList()
+                            pendingDnsCallbacks.clear()
+                            isDnsFastEnforcing.set(false)
+                            released = true
+                            copy
+                        }
+                    }
+
+                    if (callbacksToNotify != null) {
+                        if (callbacksToNotify.isNotEmpty()) {
+                            withContext(Dispatchers.Main) {
+                                for (cb in callbacksToNotify) {
+                                    try {
+                                        cb.invoke(result)
+                                    } catch (e: Exception) {
+                                        Log.e(TAG, "Error invoking DNS fast-path completion callback", e)
+                                    }
+                                }
+                            }
+                        }
+                        break
+                    }
+                }
+            } finally {
+                if (!released) {
+                    synchronized(pendingDnsCallbacks) {
+                        if (!released) {
+                            pendingDnsCallbacks.clear()
+                            needsDnsFastRerun = false
+                            isDnsFastEnforcing.set(false)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Synchronously enforces ONLY [DnsShield] for standalone DoT reinforcement.
+     * Deliberately does NOT hold a [ProtectionTransitionGuard.runInternalTransition] token during
+     * potentially blocking (5-8s) DPM TLS probes, so repeated tamper attempts still get healed in
+     * ~1-3ms by `tryFastHealGlobalPrivateDns`. `applyStandaloneDot` calls `markInternalDnsMutation()`
+     * to keep the post-mutation settle window intact.
+     * MUST be called from a background thread.
+     */
+    private fun applyDnsShieldFastSync(context: Context): ShieldResult {
+        val appContext = context.applicationContext ?: context
+        if (ProtectionTransitionGuard.isTeardownInProgress) {
+            Log.d(TAG, "Skipping applyDnsShieldFastSync because teardown is in progress")
+            return ShieldResult(
+                shieldId = DnsShield.id,
+                success = false,
+                message = appContext.getString(R.string.card_dns_inactive)
+            )
+        }
+        if (ProtectionTransitionGuard.hasActiveTransitions()) {
+            Log.d(TAG, "Skipping applyDnsShieldFastSync because an internal transition is already active")
+            return ShieldResult(
+                shieldId = DnsShield.id,
+                success = false,
+                message = appContext.getString(R.string.card_dns_inactive)
+            )
+        }
+        if (com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge.isLocalVpnExpectedActive(appContext)) {
+            Log.d(TAG, "Skipping applyDnsShieldFastSync because local VPN mode is expected active")
+            return ShieldResult(
+                shieldId = DnsShield.id,
+                success = true,
+                message = appContext.getString(R.string.shield_dns_local_filter_active)
+            )
+        }
+        if (!isDeviceOwner(appContext)) {
+            Log.w(TAG, "App is not Device/Profile Owner. Cannot run DNS fast-path enforcement.")
+            return ShieldResult(
+                shieldId = DnsShield.id,
+                success = false,
+                message = appContext.getString(R.string.toast_not_device_owner)
+            )
+        }
+
+        val dpmResult = com.drmohammed.antiporn.telemetry.SafeDpmGateway.executeRawBlocking(
+            context = appContext,
+            tag = com.drmohammed.antiporn.telemetry.BlackBoxRecorder.TAG_SHIELD,
+            actionName = "applyDnsShieldFast",
+            requireDeviceOwner = true
+        ) { dpm, admin ->
+            DnsShield.apply(appContext, dpm, admin)
+        }
+
+        return dpmResult.getOrNull() ?: ShieldResult(
+            shieldId = DnsShield.id,
+            success = false,
+            message = appContext.getString(R.string.toast_dpm_missing)
+        )
     }
 
     /**

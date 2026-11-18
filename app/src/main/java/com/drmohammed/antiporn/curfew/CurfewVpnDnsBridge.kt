@@ -9,13 +9,35 @@ import android.os.UserManager
 import android.provider.Settings
 import android.util.Log
 import androidx.annotation.RequiresApi
+import androidx.annotation.VisibleForTesting
 import com.drmohammed.antiporn.R
+import com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard
 import com.drmohammed.antiporn.core.model.ShieldResult
 import com.drmohammed.antiporn.core.model.ShieldStatus
 import com.drmohammed.antiporn.shields.DnsShield
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import com.drmohammed.antiporn.telemetry.DpmExecutionResult
 import com.drmohammed.antiporn.telemetry.SafeDpmGateway
+
+enum class DnsFastHealOutcome {
+    SKIPPED_UNSUPPORTED_SDK,
+    SKIPPED_NOT_DEVICE_OWNER,
+    SKIPPED_ACTIVE_TRANSITION,
+    SKIPPED_VPN_EXPECTED,
+    ALREADY_COMPLIANT,
+    HEALED_DIRECT,
+    PERMISSION_DENIED_NEEDS_DPM,
+    FAILED_NEEDS_DPM
+}
+
+data class DnsFastHealResult(
+    val outcome: DnsFastHealOutcome,
+    val observedMode: String? = null,
+    val observedHost: String? = null,
+    val expectedHost: String? = null,
+    val latencyMs: Long = 0L,
+    val errorMessage: String? = null
+)
 
 /**
  * Coordinates Always-On VPN lockdown and Private DNS state during curfew transitions
@@ -28,7 +50,19 @@ internal object CurfewVpnDnsBridge {
     private const val COMPAT_PRIVATE_DNS_MODE_OFF = 1
     private const val COMPAT_PRIVATE_DNS_MODE_OPPORTUNISTIC = 2
     private const val COMPAT_PRIVATE_DNS_MODE_PROVIDER_HOSTNAME = 3
+    private const val COMPAT_PRIVATE_DNS_SET_NO_ERROR = 0
     private const val COMPAT_PRIVATE_DNS_SET_ERROR_FAILURE_SETTING = 2
+
+    @Volatile
+    private var directGlobalWriteDenied: Boolean = false
+
+    @VisibleForTesting
+    internal fun resetFastHealCircuitBreakerForTest() {
+        directGlobalWriteDenied = false
+    }
+
+    @VisibleForTesting
+    internal fun isDirectGlobalWriteDeniedForTest(): Boolean = directGlobalWriteDenied
 
     private fun privateDnsModeUnknown(): Int =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) DevicePolicyManager.PRIVATE_DNS_MODE_UNKNOWN
@@ -132,6 +166,142 @@ internal object CurfewVpnDnsBridge {
         val dpmConsistentOrInitialFallback = dpmMatches ||
             dpmMode == privateDnsModeUnknown()
         return globalMatches && dpmConsistentOrInitialFallback
+    }
+
+    fun isLocalVpnExpectedActive(context: Context): Boolean {
+        return CurfewBlackholeVpnService.evaluateRequiredMode(context) != CurfewBlackholeVpnService.VpnMode.IDLE &&
+            isVpnConsentGranted(context)
+    }
+
+    /**
+     * Zero-latency (~1-3ms) silent fast-path that restores `Settings.Global` Private DNS immediately
+     * when external tampering is detected, with zero blocking DPM calls and zero polling.
+     */
+    fun tryFastHealGlobalPrivateDns(context: Context): DnsFastHealResult {
+        return tryFastHealGlobalPrivateDnsInternal(
+            sdkInt = Build.VERSION.SDK_INT,
+            hasActiveTransitions = { ProtectionTransitionGuard.hasActiveTransitions() },
+            isDeviceOwner = { SafeDpmGateway.isDeviceOwner(context) },
+            isLocalVpnExpected = { isLocalVpnExpectedActive(context) },
+            getExpectedHost = { DnsShield.getEffectiveDnsHost(context) },
+            readGlobal = { key -> readGlobalSetting(context, key) },
+            markInternalMutation = { ProtectionTransitionGuard.markInternalDnsMutation() },
+            writeGlobal = { key, value -> Settings.Global.putString(context.contentResolver, key, value) },
+            clearDnsRestorePending = {
+                if (CurfewConfig.isDnsRestorePending(context)) {
+                    CurfewConfig.setDnsRestorePending(context, false)
+                }
+            }
+        )
+    }
+
+    @VisibleForTesting
+    internal fun tryFastHealGlobalPrivateDnsInternal(
+        sdkInt: Int = Build.VERSION_CODES.Q,
+        hasActiveTransitions: () -> Boolean,
+        isDeviceOwner: () -> Boolean,
+        isLocalVpnExpected: () -> Boolean,
+        getExpectedHost: () -> String,
+        readGlobal: (String) -> String?,
+        markInternalMutation: () -> Unit,
+        writeGlobal: (String, String) -> Boolean,
+        clearDnsRestorePending: () -> Unit = {}
+    ): DnsFastHealResult {
+        if (sdkInt < Build.VERSION_CODES.Q) {
+            return DnsFastHealResult(outcome = DnsFastHealOutcome.SKIPPED_UNSUPPORTED_SDK)
+        }
+        if (hasActiveTransitions()) {
+            return DnsFastHealResult(outcome = DnsFastHealOutcome.SKIPPED_ACTIVE_TRANSITION)
+        }
+        if (!isDeviceOwner()) {
+            return DnsFastHealResult(outcome = DnsFastHealOutcome.SKIPPED_NOT_DEVICE_OWNER)
+        }
+        if (isLocalVpnExpected()) {
+            return DnsFastHealResult(outcome = DnsFastHealOutcome.SKIPPED_VPN_EXPECTED)
+        }
+
+        val expectedHost = getExpectedHost()
+        if (expectedHost.isBlank()) {
+            return DnsFastHealResult(
+                outcome = DnsFastHealOutcome.FAILED_NEEDS_DPM,
+                expectedHost = expectedHost,
+                errorMessage = "Effective DNS host is blank"
+            )
+        }
+
+        val globalMode = readGlobal("private_dns_mode")
+        val globalHost = readGlobal("private_dns_specifier")
+
+        // Check compliance FIRST to prevent any ContentObserver feedback loop.
+        if (globalMode == "hostname" && globalHost?.equals(expectedHost, ignoreCase = true) == true) {
+            return DnsFastHealResult(
+                outcome = DnsFastHealOutcome.ALREADY_COMPLIANT,
+                observedMode = globalMode,
+                observedHost = globalHost,
+                expectedHost = expectedHost
+            )
+        }
+
+        if (directGlobalWriteDenied) {
+            return DnsFastHealResult(
+                outcome = DnsFastHealOutcome.PERMISSION_DENIED_NEEDS_DPM,
+                observedMode = globalMode,
+                observedHost = globalHost,
+                expectedHost = expectedHost,
+                errorMessage = "Direct Settings.Global write circuit breaker open"
+            )
+        }
+
+        val startNanos = System.nanoTime()
+        return try {
+            markInternalMutation()
+            val modeWritten = writeGlobal("private_dns_mode", "hostname")
+            val hostWritten = writeGlobal("private_dns_specifier", expectedHost)
+            val latencyMs = ((System.nanoTime() - startNanos) / 1_000_000L).coerceAtLeast(0L)
+            if (!modeWritten || !hostWritten) {
+                safeLogW("Fast-heal Settings.Global.putString returned false (mode=$modeWritten, host=$hostWritten)")
+                return DnsFastHealResult(
+                    outcome = DnsFastHealOutcome.FAILED_NEEDS_DPM,
+                    observedMode = globalMode,
+                    observedHost = globalHost,
+                    expectedHost = expectedHost,
+                    latencyMs = latencyMs,
+                    errorMessage = "Settings.Global.putString returned false (mode=$modeWritten, host=$hostWritten)"
+                )
+            }
+            clearDnsRestorePending()
+            safeLogI("Fast-healed Private DNS via Settings.Global to $expectedHost in ${latencyMs}ms (was mode=$globalMode, host=$globalHost)")
+            DnsFastHealResult(
+                outcome = DnsFastHealOutcome.HEALED_DIRECT,
+                observedMode = globalMode,
+                observedHost = globalHost,
+                expectedHost = expectedHost,
+                latencyMs = latencyMs
+            )
+        } catch (e: SecurityException) {
+            directGlobalWriteDenied = true
+            val latencyMs = ((System.nanoTime() - startNanos) / 1_000_000L).coerceAtLeast(0L)
+            safeLogW("Direct Settings.Global private DNS write denied (SecurityException); tripping circuit breaker", e)
+            DnsFastHealResult(
+                outcome = DnsFastHealOutcome.PERMISSION_DENIED_NEEDS_DPM,
+                observedMode = globalMode,
+                observedHost = globalHost,
+                expectedHost = expectedHost,
+                latencyMs = latencyMs,
+                errorMessage = e.message ?: e.javaClass.simpleName
+            )
+        } catch (e: Exception) {
+            val latencyMs = ((System.nanoTime() - startNanos) / 1_000_000L).coerceAtLeast(0L)
+            safeLogW("Direct Settings.Global private DNS fast-heal failed; delegating to DPM fast-path", e)
+            DnsFastHealResult(
+                outcome = DnsFastHealOutcome.FAILED_NEEDS_DPM,
+                observedMode = globalMode,
+                observedHost = globalHost,
+                expectedHost = expectedHost,
+                latencyMs = latencyMs,
+                errorMessage = e.message ?: e.javaClass.simpleName
+            )
+        }
     }
 
     fun isStandaloneDnsShieldActive(context: Context): Boolean {
@@ -321,9 +491,7 @@ internal object CurfewVpnDnsBridge {
         val globalSpecifier = readGlobalSetting(context, "private_dns_specifier")
         val modeFromDpm = readDpmPrivateDnsMode(context)
 
-        val requiredVpnMode = CurfewBlackholeVpnService.evaluateRequiredMode(context)
-        val isVpnExpected = requiredVpnMode != CurfewBlackholeVpnService.VpnMode.IDLE &&
-            isVpnConsentGranted(context)
+        val isVpnExpected = isLocalVpnExpectedActive(context)
 
         if (isVpnExpected) {
             val isHealthy = isLocalVpnDnsStateConsistent(modeFromDpm, globalMode, globalSpecifier)
@@ -367,9 +535,6 @@ internal object CurfewVpnDnsBridge {
         context: Context,
         targetHost: String
     ): Pair<Int, Boolean> {
-        com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.markInternalDnsMutation()
-        var dnsSetResult = DevicePolicyManager.PRIVATE_DNS_SET_NO_ERROR
-        var usedFallback = false
         val currentMode = readDpmPrivateDnsMode(context)
         val currentHost = SafeDpmGateway.getGlobalPrivateDnsHostBlocking(
             context = context,
@@ -379,52 +544,109 @@ internal object CurfewVpnDnsBridge {
         val globalMode = readGlobalSetting(context, "private_dns_mode")
         val globalHost = readGlobalSetting(context, "private_dns_specifier")
 
-        val dpmMatches = currentMode == DevicePolicyManager.PRIVATE_DNS_MODE_PROVIDER_HOSTNAME &&
-            currentHost?.equals(targetHost, ignoreCase = true) == true
+        return applyStandaloneDotInternal(
+            targetHost = targetHost,
+            currentDpmMode = currentMode,
+            currentDpmHost = currentHost,
+            globalMode = globalMode,
+            globalHost = globalHost,
+            isDeviceOwner = SafeDpmGateway.isDeviceOwner(context),
+            markInternalMutation = { ProtectionTransitionGuard.markInternalDnsMutation() },
+            writeGlobal = { key, value -> Settings.Global.putString(context.contentResolver, key, value) },
+            setDpmPrivateDns = { host ->
+                val dpmRes = SafeDpmGateway.setGlobalPrivateDnsBlocking(
+                    context = context,
+                    host = host,
+                    tag = BlackBoxRecorder.TAG_SHIELD
+                )
+                val resultCode = when (dpmRes) {
+                    is DpmExecutionResult.Success -> dpmRes.data
+                    is DpmExecutionResult.Failure -> COMPAT_PRIVATE_DNS_SET_ERROR_FAILURE_SETTING
+                }
+                dpmRes.isSuccess to resultCode
+            },
+            clearDnsRestorePending = {
+                if (CurfewConfig.isDnsRestorePending(context)) {
+                    CurfewConfig.setDnsRestorePending(context, false)
+                }
+            }
+        )
+    }
+
+    @VisibleForTesting
+    internal fun applyStandaloneDotInternal(
+        targetHost: String,
+        currentDpmMode: Int,
+        currentDpmHost: String?,
+        globalMode: String?,
+        globalHost: String?,
+        isDeviceOwner: Boolean,
+        markInternalMutation: () -> Unit,
+        writeGlobal: (String, String) -> Boolean,
+        setDpmPrivateDns: (String) -> Pair<Boolean, Int>,
+        clearDnsRestorePending: () -> Unit = {}
+    ): Pair<Int, Boolean> {
+        markInternalMutation()
+        var dnsSetResult = COMPAT_PRIVATE_DNS_SET_NO_ERROR
+        var usedFallback = false
+
+        val dpmMatches = currentDpmMode == privateDnsModeProviderHostname() &&
+            currentDpmHost?.equals(targetHost, ignoreCase = true) == true
         val globalMatches = globalMode == "hostname" &&
             globalHost?.equals(targetHost, ignoreCase = true) == true
 
         if (!dpmMatches || !globalMatches) {
-            var dpmSucceeded = dpmMatches
-            if (!dpmMatches && SafeDpmGateway.isDeviceOwner(context)) {
-                val dpmRes = SafeDpmGateway.setGlobalPrivateDnsBlocking(
-                    context = context,
-                    host = targetHost,
-                    tag = BlackBoxRecorder.TAG_SHIELD
-                )
-                dnsSetResult = when (dpmRes) {
-                    is DpmExecutionResult.Success -> dpmRes.data
-                    is DpmExecutionResult.Failure -> COMPAT_PRIVATE_DNS_SET_ERROR_FAILURE_SETTING
+            // Step 1 (Inverted order): Write Settings.Global FIRST (~1ms) to close the netd DNS loophole
+            // immediately before DPM performs any blocking TLS probe (which can stall 5-8s or fail offline).
+            var globalWriteSucceeded = false
+            if (!globalMatches) {
+                if (!directGlobalWriteDenied) {
+                    try {
+                        val modeOk = writeGlobal("private_dns_mode", "hostname")
+                        val hostOk = writeGlobal("private_dns_specifier", targetHost)
+                        globalWriteSucceeded = modeOk && hostOk
+                        if (globalWriteSucceeded) {
+                            safeLogI("Enforced private DNS via Settings.Global FIRST to $targetHost")
+                        } else {
+                            safeLogW("Settings.Global.putString returned false for private DNS ($targetHost)")
+                        }
+                    } catch (e: SecurityException) {
+                        directGlobalWriteDenied = true
+                        safeLogW("SecurityException writing Settings.Global for private DNS; circuit breaker tripped", e)
+                    } catch (e: Exception) {
+                        safeLogW("Could not write Settings.Global for private DNS", e)
+                    }
+                } else {
+                    safeLogD("Skipping Settings.Global write in applyStandaloneDot (circuit breaker active)")
                 }
-                Log.i(TAG, "setGlobalPrivateDnsBlocking to $targetHost, result: $dnsSetResult (ok=${dpmRes.isSuccess})")
-                dpmSucceeded = dpmRes.isSuccess && dnsSetResult == DevicePolicyManager.PRIVATE_DNS_SET_NO_ERROR
-            } else if (!dpmMatches) {
-                dnsSetResult = DevicePolicyManager.PRIVATE_DNS_SET_ERROR_FAILURE_SETTING
             }
 
-            if (!globalMatches) {
-                try {
-                    Settings.Global.putString(context.contentResolver, "private_dns_mode", "hostname")
-                    Settings.Global.putString(context.contentResolver, "private_dns_specifier", targetHost)
-                    Log.i(TAG, "Enforced private DNS via Settings.Global to $targetHost")
-                    if (!dpmSucceeded) {
-                        usedFallback = true
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Could not write Settings.Global for private DNS", e)
-                    if (!dpmSucceeded && dnsSetResult == DevicePolicyManager.PRIVATE_DNS_SET_NO_ERROR) {
-                        dnsSetResult = DevicePolicyManager.PRIVATE_DNS_SET_ERROR_FAILURE_SETTING
-                    }
-                }
-            } else if (!dpmSucceeded) {
+            // Step 2: Authoritatively commit Private DNS policy through DevicePolicyManager.
+            var dpmSucceeded = dpmMatches
+            if (!dpmMatches && isDeviceOwner) {
+                val (dpmOk, resultCode) = setDpmPrivateDns(targetHost)
+                dnsSetResult = resultCode
+                safeLogI("setGlobalPrivateDnsBlocking to $targetHost, result: $dnsSetResult (ok=$dpmOk)")
+                dpmSucceeded = dpmOk && dnsSetResult == COMPAT_PRIVATE_DNS_SET_NO_ERROR
+            } else if (!dpmMatches) {
+                dnsSetResult = COMPAT_PRIVATE_DNS_SET_ERROR_FAILURE_SETTING
+            }
+
+            // Step 3: Preserve exact (dnsSetResult, usedFallback) contract for callers.
+            if (!dpmSucceeded && (globalMatches || globalWriteSucceeded)) {
                 usedFallback = true
+            } else if (!dpmSucceeded && !globalMatches && !globalWriteSucceeded &&
+                dnsSetResult == COMPAT_PRIVATE_DNS_SET_NO_ERROR
+            ) {
+                dnsSetResult = COMPAT_PRIVATE_DNS_SET_ERROR_FAILURE_SETTING
             }
         } else {
-            Log.d(TAG, "Private DNS already set to $targetHost via both DPM and Settings.Global, skipping redundant write")
+            safeLogD("Private DNS already set to $targetHost via both DPM and Settings.Global, skipping redundant write")
         }
-        val isSuccess = dnsSetResult == DevicePolicyManager.PRIVATE_DNS_SET_NO_ERROR || usedFallback || (dpmMatches && globalMatches)
-        if (isSuccess && CurfewConfig.isDnsRestorePending(context)) {
-            CurfewConfig.setDnsRestorePending(context, false)
+
+        val isSuccess = dnsSetResult == COMPAT_PRIVATE_DNS_SET_NO_ERROR || usedFallback || (dpmMatches && globalMatches)
+        if (isSuccess) {
+            clearDnsRestorePending()
         }
         return dnsSetResult to usedFallback
     }
@@ -608,8 +830,36 @@ internal object CurfewVpnDnsBridge {
         return try {
             Settings.Global.getString(context.contentResolver, key)
         } catch (e: Exception) {
-            Log.w(TAG, "Failed reading Settings.Global key=$key", e)
+            safeLogW("Failed reading Settings.Global key=$key", e)
             null
+        }
+    }
+
+    private fun safeLogI(message: String) {
+        try {
+            Log.i(TAG, message)
+        } catch (_: RuntimeException) {
+            // Allow pure JUnit tests where android.util.Log is not mocked
+        }
+    }
+
+    private fun safeLogD(message: String) {
+        try {
+            Log.d(TAG, message)
+        } catch (_: RuntimeException) {
+            // Allow pure JUnit tests where android.util.Log is not mocked
+        }
+    }
+
+    private fun safeLogW(message: String, throwable: Throwable? = null) {
+        try {
+            if (throwable != null) {
+                Log.w(TAG, message, throwable)
+            } else {
+                Log.w(TAG, message)
+            }
+        } catch (_: RuntimeException) {
+            // Allow pure JUnit tests where android.util.Log is not mocked
         }
     }
 }

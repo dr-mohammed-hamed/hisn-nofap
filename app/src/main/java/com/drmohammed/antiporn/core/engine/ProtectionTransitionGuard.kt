@@ -3,6 +3,7 @@ package com.drmohammed.antiporn.core.engine
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
@@ -21,6 +22,9 @@ object ProtectionTransitionGuard {
     internal val activeTransitions = ConcurrentHashMap<Long, Long>()
     @PublishedApi
     internal val nextToken = AtomicLong(0L)
+    @PublishedApi
+    @Volatile
+    internal var elapsedRealtimeProvider: () -> Long = { SystemClock.elapsedRealtime() }
     private val lastInternalDnsMutationElapsed = AtomicLong(0L)
 
     @Volatile
@@ -31,7 +35,7 @@ object ProtectionTransitionGuard {
      */
     inline fun <T> runInternalTransition(block: () -> T): T {
         val token = nextToken.incrementAndGet()
-        activeTransitions[token] = SystemClock.elapsedRealtime()
+        activeTransitions[token] = elapsedRealtimeProvider()
         return try {
             block()
         } finally {
@@ -44,7 +48,7 @@ object ProtectionTransitionGuard {
      */
     suspend fun <T> runInternalTransitionSuspend(block: suspend () -> T): T {
         val token = nextToken.incrementAndGet()
-        activeTransitions[token] = SystemClock.elapsedRealtime()
+        activeTransitions[token] = elapsedRealtimeProvider()
         return try {
             block()
         } finally {
@@ -56,35 +60,55 @@ object ProtectionTransitionGuard {
      * Marks a deliberate internal DNS or VPN reconfiguration event.
      */
     fun markInternalDnsMutation() {
-        lastInternalDnsMutationElapsed.set(SystemClock.elapsedRealtime())
+        lastInternalDnsMutationElapsed.set(elapsedRealtimeProvider())
+    }
+
+    private fun evictStuckTransitions(now: Long) {
+        val iterator = activeTransitions.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            val duration = now - entry.value
+            if (duration > MAX_STUCK_TRANSITION_TIMEOUT_MS) {
+                try {
+                    Log.w(TAG, "Forced recovery: transition token ${entry.key} stuck for ${duration}ms. Evicting.")
+                } catch (_: RuntimeException) {
+                    // Allow pure JUnit tests where android.util.Log is not mocked
+                }
+                iterator.remove()
+            }
+        }
+    }
+
+    /**
+     * Returns true ONLY when teardown is in progress or an internal transition block
+     * is actively executing right now (excludes the post-mutation 3.5s settle cooldown).
+     */
+    fun hasActiveTransitions(): Boolean {
+        if (isTeardownInProgress) return true
+        evictStuckTransitions(elapsedRealtimeProvider())
+        return activeTransitions.isNotEmpty()
     }
 
     /**
      * Evaluates whether the system is within a legitimate transition or settle window.
      */
     fun isWithinSettleWindow(settleMs: Long = 3500L): Boolean {
-        if (isTeardownInProgress) return true
-
-        val now = SystemClock.elapsedRealtime()
-        val iterator = activeTransitions.entries.iterator()
-        while (iterator.hasNext()) {
-            val entry = iterator.next()
-            val duration = now - entry.value
-            if (duration > MAX_STUCK_TRANSITION_TIMEOUT_MS) {
-                Log.w(TAG, "Forced recovery: transition token ${entry.key} stuck for ${duration}ms. Evicting.")
-                iterator.remove()
-            }
-        }
-        if (activeTransitions.isNotEmpty()) {
-            return true
-        }
+        if (hasActiveTransitions()) return true
 
         val last = lastInternalDnsMutationElapsed.get()
-        if (last > 0L && (SystemClock.elapsedRealtime() - last) < settleMs) {
+        if (last > 0L && (elapsedRealtimeProvider() - last) < settleMs) {
             return true
         }
 
         return false
+    }
+
+    @VisibleForTesting
+    internal fun resetForTest() {
+        activeTransitions.clear()
+        lastInternalDnsMutationElapsed.set(0L)
+        isTeardownInProgress = false
+        elapsedRealtimeProvider = { SystemClock.elapsedRealtime() }
     }
 
     /**
