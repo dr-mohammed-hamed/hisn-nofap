@@ -1,11 +1,11 @@
 {
-  "versionCode": 24,
-  "versionName": "1.85",
+  "versionCode": 25,
+  "versionName": "1.86",
   "minSupportedVersion": 1,
   "apkFileName": "antiporn-release.apk",
   "downloadUrl": "https://pub-e568dc85c0ec4f2fb3d1b90e310b4310.r2.dev/antiporn-release.apk",
-  "fileSizeBytes": 35624032,
+  "fileSizeBytes": 35669144,
   "sha256CertificateChecksum": "Cxi7DKn3ddcJXYIuDNXdlKN84EuKu8Bf0L0SkSPCOMk",
-  "releaseNotes": "إصدار 1.85 (كود البناء 24): تعزيز حماية التطبيقات البنكية (InstaPay) لأجهزة Realme/ColorOS، وتوسيع درع الصفحات لحظر Facebook Reels، ودعم اختيار التطبيقات وقفلها عن بعد عبر Firestore، مع حماية فائقة لدرع الذكاء الاصطناعي البصري على Android 14+.",
-  "releaseDate": "2026-11-17"
+  "releaseNotes": "إصدار 1.86 (كود البناء 25): منسّق ذكي لخدمة إمكانية الوصول مع التفعيل حسب الحاجة، وتأمين شامل للدخول البنكي الآمن (إنستاباي) بالتوقيت الموثوق والاستعادة بعد إعادة التشغيل وتوافق أندرويد 12–16، وتحسين استقرار حارس غض البصر ودرع الصفحات وتنبيهات المشرف وتباين ألوان Material 3.",
+  "releaseDate": "2026-11-18"
 }
