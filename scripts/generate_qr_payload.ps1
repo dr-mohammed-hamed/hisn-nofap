@@ -12,7 +12,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $false)]
-    [string]$ApkPath = "app\build\outputs\apk\release\app-release.apk",
+    [string]$ApkPath = "app\build\outputs\apk\release\app-release-rotated.apk",
 
     [Parameter(Mandatory = $false)]
     [string]$KeystorePath = "app\keystore\testkey.p12",
@@ -21,7 +21,7 @@ param(
     [string]$KeystorePassword = "android",
 
     [Parameter(Mandatory = $false)]
-    [string]$DownloadUrl = "https://example.com/downloads/antiporn-release.apk",
+    [string]$DownloadUrl = "https://pub-e568dc85c0ec4f2fb3d1b90e310b4310.r2.dev/antiporn-release.apk",
 
     [Parameter(Mandatory = $false)]
     [string]$WifiSsid = $null,
@@ -61,14 +61,25 @@ if (Get-Command apksigner -ErrorAction SilentlyContinue) {
 if (Test-Path $ApkPath) {
     Write-Host "[1/3] Extracting certificate SHA-256 digest from APK: $ApkPath" -ForegroundColor Green
     
-    # Try apksigner first
+    # Try apksigner first:
+    # CRITICAL (AOSP VerifyAdminPackageTask.java): Android ManagedProvisioning uses
+    # PackageManager.GET_SIGNATURES (which returns pastSigningCertificates[0] / v2 root
+    # certificate for v3 lineage-rotated APKs). Therefore we query --max-sdk-version 27
+    # first to extract the exact v2/lineage-root certificate that AOSP verifies against.
     if ($apksignerExe) {
         try {
-            $apkSignerOutput = & $apksignerExe verify --verbose --print-certs $ApkPath
+            $apkSignerOutput = & $apksignerExe verify --verbose --print-certs --min-sdk-version 24 --max-sdk-version 27 $ApkPath 2>&1
             $match = $apkSignerOutput | Select-String 'Signer #1 certificate SHA-256 digest:\s*([a-fA-F0-9\s]+)'
             if ($match) {
                 $hexDigest = ($match.Matches.Groups[1].Value -replace '\s+', '').Trim()
-                Write-Host "   -> Extracted from APK using apksigner ($apksignerExe)" -ForegroundColor Gray
+                Write-Host "   -> Extracted v2/lineage-root signer (AOSP GET_SIGNATURES match) using apksigner" -ForegroundColor Gray
+            } else {
+                $apkSignerOutput = & $apksignerExe verify --verbose --print-certs $ApkPath 2>&1
+                $match = $apkSignerOutput | Select-String 'Signer #1 certificate SHA-256 digest:\s*([a-fA-F0-9\s]+)'
+                if ($match) {
+                    $hexDigest = ($match.Matches.Groups[1].Value -replace '\s+', '').Trim()
+                    Write-Host "   -> Extracted signer using apksigner ($apksignerExe)" -ForegroundColor Gray
+                }
             }
         } catch {
             Write-Verbose "apksigner failed, attempting keytool fallback..."
@@ -128,8 +139,7 @@ Write-Host "   -> $urlSafeChecksum" -ForegroundColor White -BackgroundColor Dark
 Write-Host "[3/3] Generating Provisioning JSON Payload..." -ForegroundColor Green
 
 $payload = [ordered]@{
-    "android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME" = "com.drmohammed.antiporn/.AdminReceiver"
-    "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_NAME" = "com.drmohammed.antiporn"
+    "android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME" = "com.drmohammed.antiporn/com.drmohammed.antiporn.AdminReceiver"
     "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION" = $DownloadUrl
     "android.app.extra.PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM" = $urlSafeChecksum
     "android.app.extra.PROVISIONING_LEAVE_ALL_SYSTEM_APPS_ENABLED" = $true
@@ -144,7 +154,6 @@ if (-not [string]::IsNullOrWhiteSpace($WifiSsid)) {
     $payload["android.app.extra.PROVISIONING_WIFI_HIDDEN"] = $false
 }
 
-$payload["android.app.extra.PROVISIONING_SKIP_ENCRYPTION"] = $false
 $payload["android.app.extra.PROVISIONING_ADMIN_EXTRAS_BUNDLE"] = @{
     "provisioning_source" = "qr_oobe"
 }
@@ -164,12 +173,16 @@ import sys, json, qrcode
 with open(r'$OutputFile', 'r', encoding='utf-8-sig') as f:
     data = json.load(f)
 compact_json = json.dumps(data, separators=(',', ':'))
-qr = qrcode.QRCode(box_size=10, border=2)
+qr = qrcode.QRCode(
+    error_correction=qrcode.constants.ERROR_CORRECT_M,
+    box_size=12,
+    border=4
+)
 qr.add_data(compact_json)
 qr.make(fit=True)
 img = qr.make_image(fill_color='black', back_color='white')
 img.save(r'$QrImageFile')
-print('Generated QR image at $QrImageFile')
+print(f'Generated QR image at $QrImageFile (version={qr.version}, bytes={len(compact_json)})')
 "@
         & python -c $pyScript
         if (Test-Path $QrImageFile) {
