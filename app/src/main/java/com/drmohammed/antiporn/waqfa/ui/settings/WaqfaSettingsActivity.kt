@@ -13,6 +13,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.drmohammed.antiporn.R
+import com.drmohammed.antiporn.accessibility.control.AccessibilityReconcileResult
+import com.drmohammed.antiporn.accessibility.ui.AccessibilityOnboardingBottomSheet
+import com.drmohammed.antiporn.banking.BankingShortcutPromptHelper
 import com.drmohammed.antiporn.databinding.ActivityWaqfaSettingsBinding
 import com.drmohammed.antiporn.ui.control.gate.SelfControlAccessGateRegistry
 import com.drmohammed.antiporn.ui.control.gate.SelfControlSection
@@ -32,9 +35,13 @@ class WaqfaSettingsActivity : AppCompatActivity() {
     private val viewModel: WaqfaSettingsViewModel by viewModel()
     private var isBindingUi = false
     private var lastRenderedDurationsSignature: String = ""
+    private var awaitingA11yReturn = false
+    private var awaitingUsageReturn = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        awaitingA11yReturn = savedInstanceState?.getBoolean(KEY_AWAITING_A11Y_RETURN, false) ?: false
+        awaitingUsageReturn = savedInstanceState?.getBoolean(KEY_AWAITING_USAGE_RETURN, false) ?: false
         binding = ActivityWaqfaSettingsBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
@@ -73,7 +80,20 @@ class WaqfaSettingsActivity : AppCompatActivity() {
             finish()
             return
         }
+
         viewModel.refreshEngineStatus()
+        val state = viewModel.uiState.value
+
+        if (awaitingA11yReturn && state.isAccessibilityActive) {
+            awaitingA11yReturn = false
+            Toast.makeText(this, R.string.a11y_onboarding_enabled_success_toast, Toast.LENGTH_SHORT).show()
+            BankingShortcutPromptHelper.maybePrompt(this) {}
+        }
+
+        if (awaitingUsageReturn && state.hasUsageStatsPermission) {
+            awaitingUsageReturn = false
+            Toast.makeText(this, R.string.waqfa_usage_access_granted_toast, Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun setupToolbar(isRemote: Boolean) {
@@ -91,6 +111,11 @@ class WaqfaSettingsActivity : AppCompatActivity() {
             viewModel.setWaqfaEnabled(isChecked)
         }
 
+        binding.swWaqfaInstantMode.setOnCheckedChangeListener { _, isChecked ->
+            if (isBindingUi) return@setOnCheckedChangeListener
+            viewModel.setUseInstantAccessibilityMode(isChecked)
+        }
+
         binding.tvEngineStatus.setOnClickListener {
             val state = viewModel.uiState.value
             if (state.isRemote) {
@@ -102,12 +127,20 @@ class WaqfaSettingsActivity : AppCompatActivity() {
                 WaqfaEngineType.INSTANT_0MS -> {
                     Toast.makeText(this, getString(R.string.waqfa_engine_status_instant_toast), Toast.LENGTH_SHORT).show()
                 }
-                WaqfaEngineType.USAGE_STATS_FALLBACK,
+                WaqfaEngineType.USAGE_STATS_FALLBACK -> {
+                    Toast.makeText(this, getString(R.string.waqfa_engine_status_bank_compatible_toast), Toast.LENGTH_SHORT).show()
+                }
                 WaqfaEngineType.DORMANT -> {
-                    if (!state.config.isEnabled) {
-                        viewModel.setWaqfaEnabled(true)
+                    if (state.config.useInstantAccessibilityMode || state.isAutoUpgradedByOtherFeature) {
+                        awaitingA11yReturn = true
+                        AccessibilityOnboardingBottomSheet.showIfNotShowing(
+                            fragmentManager = supportFragmentManager,
+                            reason = AccessibilityOnboardingBottomSheet.REASON_WAQFA_INSTANT
+                        )
+                    } else {
+                        awaitingUsageReturn = true
+                        openUsageAccessSettings()
                     }
-                    navigateToAccessibilitySettings()
                 }
             }
         }
@@ -168,20 +201,58 @@ class WaqfaSettingsActivity : AppCompatActivity() {
 
         binding.btnSaveWaqfaSettings.setOnClickListener {
             binding.btnSaveWaqfaSettings.isEnabled = false
-            viewModel.saveSettings { success, updatedPolicy ->
+            viewModel.saveSettings { success, updatedPolicy, reconcileResult ->
                 if (isFinishing || isDestroyed) return@saveSettings
-                if (success) {
-                    if (updatedPolicy != null) {
-                        setResult(
-                            Activity.RESULT_OK,
-                            Intent().putExtra(EXTRA_POLICY_JSON, updatedPolicy.toJson())
-                        )
-                    }
-                    Toast.makeText(this, getString(R.string.waqfa_settings_saved_toast), Toast.LENGTH_SHORT).show()
-                    finish()
-                } else {
+                if (!success) {
                     binding.btnSaveWaqfaSettings.isEnabled = true
                     Toast.makeText(this, getString(R.string.waqfa_settings_save_failed_toast), Toast.LENGTH_SHORT).show()
+                    return@saveSettings
+                }
+
+                if (updatedPolicy != null) {
+                    setResult(
+                        Activity.RESULT_OK,
+                        Intent().putExtra(EXTRA_POLICY_JSON, updatedPolicy.toJson())
+                    )
+                }
+                Toast.makeText(this, getString(R.string.waqfa_settings_saved_toast), Toast.LENGTH_SHORT).show()
+
+                val latestState = viewModel.uiState.value
+                if (latestState.isRemote) {
+                    finish()
+                    return@saveSettings
+                }
+
+                when {
+                    reconcileResult is AccessibilityReconcileResult.NeedsManualActivation -> {
+                        // إبقاء الشاشة مفتوحة حتى يكمل المستخدم التفعيل اليدوي ويعود
+                        binding.btnSaveWaqfaSettings.isEnabled = true
+                        awaitingA11yReturn = true
+                        val reason = AccessibilityOnboardingBottomSheet.reasonFromSet(reconcileResult.reasons)
+                        AccessibilityOnboardingBottomSheet.showIfNotShowing(
+                            fragmentManager = supportFragmentManager,
+                            reason = reason
+                        )
+                        viewModel.clearPendingPrompts()
+                    }
+                    latestState.pendingUsageAccessPrompt -> {
+                        // إبقاء الشاشة مفتوحة لتوجيه المستخدم نحو إذن الوصول لبيانات الاستخدام
+                        binding.btnSaveWaqfaSettings.isEnabled = true
+                        awaitingUsageReturn = true
+                        showUsageAccessPromptDialog()
+                        viewModel.clearPendingPrompts()
+                    }
+                    reconcileResult is AccessibilityReconcileResult.EnabledSilently -> {
+                        val shown = BankingShortcutPromptHelper.maybePrompt(this) {
+                            if (!isFinishing && !isDestroyed) finish()
+                        }
+                        if (!shown) {
+                            finish()
+                        }
+                    }
+                    else -> {
+                        finish()
+                    }
                 }
             }
         }
@@ -206,24 +277,37 @@ class WaqfaSettingsActivity : AppCompatActivity() {
                 binding.swWaqfaMaster.isChecked = config.isEnabled
             }
 
+            if (binding.swWaqfaInstantMode.isChecked != config.useInstantAccessibilityMode) {
+                binding.swWaqfaInstantMode.isChecked = config.useInstantAccessibilityMode
+            }
+
+            binding.tvWaqfaInstantModeDesc.text =
+                if (!state.isRemote && state.isAutoUpgradedByOtherFeature && !config.useInstantAccessibilityMode) {
+                    getString(R.string.waqfa_instant_mode_desc_auto_upgraded)
+                } else {
+                    getString(R.string.waqfa_instant_mode_desc)
+                }
+
+            renderRemoteWarning(state)
+
             val count = config.targetPackages.size
             binding.tvTargetAppsCount.text = getString(R.string.waqfa_target_apps_desc, count)
 
-            // عرض شارة حالة محرك الرصد اللحظي (0ms) / الاحتياطي
+            // عرض شارة حالة محرك الرصد اللحظي (0ms) / المتوافق مع البنوك / الخامل
             when (state.engineType) {
                 WaqfaEngineType.INSTANT_0MS -> {
-                    binding.tvEngineStatus.text = getString(R.string.waqfa_engine_status_instant)
+                    val statusText = if (!state.isRemote && state.isAutoUpgradedByOtherFeature && !config.useInstantAccessibilityMode) {
+                        getString(R.string.waqfa_engine_status_auto_upgraded)
+                    } else {
+                        getString(R.string.waqfa_engine_status_instant)
+                    }
+                    binding.tvEngineStatus.text = statusText
                     binding.tvEngineStatus.setTextColor(ContextCompat.getColor(this, R.color.status_green))
                     binding.tvEngineStatus.visibility = View.VISIBLE
                 }
                 WaqfaEngineType.USAGE_STATS_FALLBACK -> {
-                    val statusText = if (state.isRemote) {
-                        getString(R.string.waqfa_engine_status_fallback)
-                    } else {
-                        getString(R.string.waqfa_engine_status_fallback_clickable)
-                    }
-                    binding.tvEngineStatus.text = statusText
-                    binding.tvEngineStatus.setTextColor(ContextCompat.getColor(this, R.color.status_orange))
+                    binding.tvEngineStatus.text = getString(R.string.waqfa_engine_status_bank_compatible)
+                    binding.tvEngineStatus.setTextColor(ContextCompat.getColor(this, R.color.status_green))
                     binding.tvEngineStatus.visibility = View.VISIBLE
                 }
                 WaqfaEngineType.DORMANT -> {
@@ -233,10 +317,14 @@ class WaqfaSettingsActivity : AppCompatActivity() {
                         getString(R.string.waqfa_engine_status_dormant_clickable)
                     }
                     binding.tvEngineStatus.text = statusText
-                    val dormantColor = MaterialColors.getColor(
-                        binding.tvEngineStatus,
-                        com.google.android.material.R.attr.colorOnSurfaceVariant
-                    )
+                    val dormantColor = if (!state.isRemote && config.isEnabled) {
+                        ContextCompat.getColor(this, R.color.status_orange)
+                    } else {
+                        MaterialColors.getColor(
+                            binding.tvEngineStatus,
+                            com.google.android.material.R.attr.colorOnSurfaceVariant
+                        )
+                    }
                     binding.tvEngineStatus.setTextColor(dormantColor)
                     binding.tvEngineStatus.visibility = View.VISIBLE
                 }
@@ -283,11 +371,38 @@ class WaqfaSettingsActivity : AppCompatActivity() {
             binding.btnSaveWaqfaSettings.isEnabled = !state.isLoading
 
             if (state.showPermissionDialog) {
-                showPermissionGuidanceDialog()
+                showUsageAccessPromptDialog()
                 viewModel.dismissPermissionDialog()
             }
         } finally {
             isBindingUi = false
+        }
+    }
+
+    private fun renderRemoteWarning(state: WaqfaSettingsUiState) {
+        if (!state.isRemote || !state.config.isEnabled) {
+            binding.cardWaqfaRemoteWarning.visibility = View.GONE
+            return
+        }
+
+        val config = state.config
+        val warningRes = when {
+            config.useInstantAccessibilityMode &&
+                state.wardHasAccessibilityService == false &&
+                state.wardCanWriteSecureSettings == false -> R.string.waqfa_remote_warning_a11y_qr
+
+            !config.useInstantAccessibilityMode &&
+                state.wardHasUsageStats == false &&
+                state.wardHasAccessibilityService != true -> R.string.waqfa_remote_warning_usage_access
+
+            else -> null
+        }
+
+        if (warningRes != null) {
+            binding.tvWaqfaRemoteWarning.setText(warningRes)
+            binding.cardWaqfaRemoteWarning.visibility = View.VISIBLE
+        } else {
+            binding.cardWaqfaRemoteWarning.visibility = View.GONE
         }
     }
 
@@ -342,43 +457,37 @@ class WaqfaSettingsActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun showPermissionGuidanceDialog() {
+    private fun showUsageAccessPromptDialog() {
         if (isFinishing || isDestroyed) return
-
         MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.waqfa_permission_dialog_title)
-            .setMessage(R.string.waqfa_permission_dialog_desc)
-            .setPositiveButton(R.string.waqfa_permission_dialog_enable_btn) { _, _ ->
-                navigateToAccessibilitySettings()
+            .setTitle(R.string.waqfa_usage_access_dialog_title)
+            .setMessage(R.string.waqfa_usage_access_dialog_msg)
+            .setPositiveButton(R.string.waqfa_usage_access_dialog_open_btn) { _, _ ->
+                openUsageAccessSettings()
             }
-            .setNegativeButton(R.string.waqfa_permission_dialog_fallback_btn) { _, _ ->
-                try {
-                    startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
-                } catch (e: Exception) {
-                    Toast.makeText(this, getString(R.string.waqfa_could_not_open_settings), Toast.LENGTH_SHORT).show()
-                }
-            }
-            .setNeutralButton(R.string.waqfa_permission_dialog_skip_btn, null)
+            .setNegativeButton(R.string.waqfa_permission_dialog_skip_btn, null)
             .show()
     }
 
-    private fun navigateToAccessibilitySettings() {
+    private fun openUsageAccessSettings() {
         try {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        } catch (ignored: Exception) {
-            android.util.Log.w("WaqfaSettingsActivity", "Direct accessibility settings intent failed, falling back to general settings", ignored)
-            try {
-                startActivity(Intent(Settings.ACTION_SETTINGS))
-            } catch (e: Exception) {
-                android.util.Log.e("WaqfaSettingsActivity", "Could not open system settings", e)
-                Toast.makeText(this, getString(R.string.waqfa_could_not_open_settings), Toast.LENGTH_SHORT).show()
-            }
+            startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+        } catch (e: Exception) {
+            Toast.makeText(this, getString(R.string.waqfa_could_not_open_settings), Toast.LENGTH_SHORT).show()
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(KEY_AWAITING_A11Y_RETURN, awaitingA11yReturn)
+        outState.putBoolean(KEY_AWAITING_USAGE_RETURN, awaitingUsageReturn)
     }
 
     companion object {
         const val EXTRA_IS_REMOTE = "extra_is_remote"
         const val EXTRA_WARD_ID = "extra_ward_id"
         const val EXTRA_POLICY_JSON = "extra_policy_json"
+        private const val KEY_AWAITING_A11Y_RETURN = "key_awaiting_a11y_return"
+        private const val KEY_AWAITING_USAGE_RETURN = "key_awaiting_usage_return"
     }
 }

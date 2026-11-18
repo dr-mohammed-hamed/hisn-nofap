@@ -167,9 +167,8 @@ object ActiveShieldsEvaluator {
         }
 
         // 8. Page Shield (درع الصفحات)
-        val isPageShieldEnabled = policy?.pageShieldConfig?.isEnabled ?: false
         val isA11yActive = com.drmohammed.antiporn.accessibility.HisnAccessibilityService.instance != null
-        if (isPageShieldEnabled && isA11yActive) {
+        if (shouldIncludePageShield(policy, isA11yActive)) {
             val count = policy?.pageShieldConfig?.getTargetPackages()?.size ?: 0
             val desc = context.getString(R.string.page_shield_active_desc, count)
             activeList.add(
@@ -190,6 +189,13 @@ object ActiveShieldsEvaluator {
         policy: DevicePolicyBundle?,
         curfewStatus: ShieldStatus?
     ): Boolean = (policy?.isCurfewEnabled ?: false) && curfewStatus is ShieldStatus.Active
+
+    internal fun shouldIncludePageShield(
+        policy: DevicePolicyBundle?,
+        isA11yActive: Boolean
+    ): Boolean = policy?.pageShieldConfig?.isEnabled == true &&
+        policy.pageShieldConfig.getTargetPackages().isNotEmpty() &&
+        isA11yActive
 
     /**
      * Determines whether the given host is an exact known adult-filtering DNS preset.

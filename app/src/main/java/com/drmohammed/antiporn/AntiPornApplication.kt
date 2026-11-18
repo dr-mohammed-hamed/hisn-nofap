@@ -91,6 +91,12 @@ class AntiPornApplication : Application(), Configuration.Provider {
         }
         TrustedTimeProvider.syncNowAsync(this)
 
+        // Wire Accessibility capability/tamper cloud sync hook before initializing repositories
+        com.drmohammed.antiporn.accessibility.control.AccessibilityPolicyCoordinator.onCapabilitiesChangedCallback = { ctx, recordTamper ->
+            com.drmohammed.antiporn.data.repository.AccountabilityRepository.getInstance(ctx)
+                .syncWardCapabilitiesAsync(recordTamper)
+        }
+
         // Initialize PolicyRepository on cold boot so policy and approval sync listeners start reliably
         PolicyRepository.getInstance(this)
 

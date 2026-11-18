@@ -212,11 +212,11 @@ object SystemTamperShield : ProtectionShield {
                 }
             }
 
-            // 9. Self-healing: Enforce and awaken HisnAccessibilityService silently if not cloaked
+            // 9. Self-healing: Reconcile HisnAccessibilityService strictly according to active policy
             try {
-                com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator.enableSilently(context)
+                com.drmohammed.antiporn.accessibility.control.AccessibilityPolicyCoordinator.reconcile(context)
             } catch (e: Exception) {
-                Timber.tag(TAG).w(e, "Could not self-heal accessibility service: ${e.message}")
+                Timber.tag(TAG).w(e, "Could not reconcile accessibility service: ${e.message}")
             }
 
             ShieldResult(

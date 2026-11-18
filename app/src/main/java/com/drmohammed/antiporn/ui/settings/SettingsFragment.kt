@@ -17,6 +17,8 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.drmohammed.antiporn.R
+import com.drmohammed.antiporn.accessibility.HisnAccessibilityService
+import com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator
 import com.drmohammed.antiporn.banking.BankingAppRegistry
 import com.drmohammed.antiporn.banking.BankingCloakManager
 import com.drmohammed.antiporn.banking.BankingShortcutHelper
@@ -66,7 +68,9 @@ class SettingsFragment : Fragment() {
     private var lastEditNameClickTime = 0L
     private var lastDeviceOwnerClickTime = 0L
     private var lastBankingClickTime = 0L
+    private var lastBankingLaunchClickTime = 0L
     private var lastPinShortcutClickTime = 0L
+    private var bankingBottomSheet: BottomSheetDialog? = null
 
     override fun onAttach(context: Context) {
         super.onAttach(context)
@@ -132,6 +136,7 @@ class SettingsFragment : Fragment() {
 
     private fun renderAiSection(state: SettingsUiState, ctx: Context) {
         binding.switchAiShield.isChecked = state.isAiRunning
+        binding.switchAiShield.alpha = if (state.isAiControlLocked) 0.55f else 1.0f
 
         if (state.isAiRunning) {
             if (state.aiInitError.isNotEmpty()) {
@@ -302,8 +307,15 @@ class SettingsFragment : Fragment() {
             showEditDeviceNameDialog()
         }
 
-        binding.switchAiShield.setOnCheckedChangeListener { _, isChecked ->
-            if (binding.switchAiShield.isPressed) {
+        binding.switchAiShield.setOnCheckedChangeListener { buttonView, isChecked ->
+            if (buttonView.isPressed) {
+                if (viewModel.uiState.value.isAiControlLocked) {
+                    buttonView.isChecked = !isChecked
+                    context?.let { ctx ->
+                        Toast.makeText(ctx, R.string.self_control_section_locked_by_guardian, Toast.LENGTH_SHORT).show()
+                    }
+                    return@setOnCheckedChangeListener
+                }
                 actionListener?.onToggleAiRequested(isChecked)
             }
         }
@@ -348,15 +360,62 @@ class SettingsFragment : Fragment() {
 
     private fun showBankingAppsBottomSheet() {
         val ctx = context ?: return
+        bankingBottomSheet?.dismiss()
         val bottomSheetDialog = BottomSheetDialog(ctx)
+        bankingBottomSheet = bottomSheetDialog
+        bottomSheetDialog.setOnDismissListener {
+            if (bankingBottomSheet === bottomSheetDialog) {
+                bankingBottomSheet = null
+            }
+        }
         val sheetBinding = BottomSheetBankingAppsBinding.inflate(layoutInflater)
         bottomSheetDialog.setContentView(sheetBinding.root)
 
+        val isA11yActiveOrEnabled = HisnAccessibilityService.instance != null ||
+            AccessibilitySelfActivator.isServiceEnabledInSettings(ctx)
+        val canWriteSecure = AccessibilitySelfActivator.canWriteSecureSettings(ctx)
+
+        when {
+            !isA11yActiveOrEnabled -> {
+                val green = ContextCompat.getColor(ctx, R.color.status_green)
+                val greenBg = ContextCompat.getColor(ctx, R.color.status_green_bg)
+                sheetBinding.tvBankingModeHint.setText(R.string.banking_mode_hint_a11y_off)
+                sheetBinding.tvBankingModeHint.setTextColor(green)
+                sheetBinding.cardBankingModeHint.setCardBackgroundColor(greenBg)
+                sheetBinding.cardBankingModeHint.strokeColor = green
+            }
+            canWriteSecure -> {
+                val onSecondaryContainer = MaterialColors.getColor(sheetBinding.root, com.google.android.material.R.attr.colorOnSecondaryContainer)
+                val containerBg = MaterialColors.getColor(sheetBinding.root, com.google.android.material.R.attr.colorSecondaryContainer)
+                val outline = MaterialColors.getColor(sheetBinding.root, com.google.android.material.R.attr.colorOutlineVariant)
+                sheetBinding.tvBankingModeHint.setText(R.string.banking_mode_hint_a11y_on_adb)
+                sheetBinding.tvBankingModeHint.setTextColor(onSecondaryContainer)
+                sheetBinding.cardBankingModeHint.setCardBackgroundColor(containerBg)
+                sheetBinding.cardBankingModeHint.strokeColor = outline
+            }
+            else -> {
+                val onSurface = MaterialColors.getColor(sheetBinding.root, com.google.android.material.R.attr.colorOnSurface)
+                val amber = ContextCompat.getColor(ctx, R.color.status_orange)
+                val amberBg = ContextCompat.getColor(ctx, R.color.status_orange_bg)
+                sheetBinding.tvBankingModeHint.setText(R.string.banking_mode_hint_a11y_on_qr)
+                sheetBinding.tvBankingModeHint.setTextColor(onSurface)
+                sheetBinding.cardBankingModeHint.setCardBackgroundColor(amberBg)
+                sheetBinding.cardBankingModeHint.strokeColor = amber
+            }
+        }
+
         val adapter = BankingAppsAdapter(
             onLaunchClick = { app ->
+                val currentTime = SystemClock.elapsedRealtime()
+                if (currentTime - lastBankingLaunchClickTime < 1000L) return@BankingAppsAdapter
+                lastBankingLaunchClickTime = currentTime
                 val currentContext = context ?: return@BankingAppsAdapter
                 bottomSheetDialog.dismiss()
-                BankingCloakManager.launchSafely(currentContext, app.packageName)
+                BankingCloakManager.launchSafely(
+                    context = currentContext,
+                    targetPackage = app.packageName,
+                    settlingDelayMs = BankingCloakManager.DEFAULT_SETTLING_DELAY_MS
+                )
             },
             onPinShortcutClick = { app ->
                 val currentTime = SystemClock.elapsedRealtime()
@@ -371,7 +430,7 @@ class SettingsFragment : Fragment() {
             val installedApps = withContext(Dispatchers.IO) {
                 BankingAppRegistry.getInstalledBankingApps(ctx)
             }
-            if (!isAdded || _binding == null) return@launch
+            if (!isAdded || _binding == null || !bottomSheetDialog.isShowing) return@launch
 
             if (installedApps.isEmpty()) {
                 sheetBinding.layoutEmptyState.visibility = View.VISIBLE
@@ -635,6 +694,7 @@ class SettingsFragment : Fragment() {
     }
 
     fun updateAiUi() {
+        if (!isAdded) return
         settingsViewModel.refreshAiState()
     }
 
@@ -651,6 +711,8 @@ class SettingsFragment : Fragment() {
     }
 
     override fun onDestroyView() {
+        bankingBottomSheet?.dismiss()
+        bankingBottomSheet = null
         super.onDestroyView()
         _binding = null
     }

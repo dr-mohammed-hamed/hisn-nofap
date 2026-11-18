@@ -16,6 +16,7 @@ import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -57,10 +58,15 @@ class PolicyRepository(
     @Volatile
     private var lastSyncedCloudVersion: Long = 0L
 
+    @Volatile
+    var isInitialPolicyLoaded: Boolean = false
+        private set
+
     init {
         // Fast synchronous load from SharedPreferences cache only to avoid blocking caller/main thread with Room I/O
         val cachedPolicy = loadFastPolicyFromCache()
         val hasCachedPolicy = cachedPolicy != null
+        isInitialPolicyLoaded = hasCachedPolicy
         val initialPolicy = cachedPolicy ?: DevicePolicyBundle.defaultPolicy()
         _currentPolicyFlow = MutableStateFlow(initialPolicy)
         currentPolicyFlow = _currentPolicyFlow.asStateFlow()
@@ -82,7 +88,7 @@ class PolicyRepository(
                     (shouldAdoptInitialRoomLoad ||
                         reconciled.version > current.version ||
                         (reconciled.version == current.version && reconciled.updatedAt >= current.updatedAt))
-                if (isNewerOrEqualReconciled) {
+                val wasAdopted = if (isNewerOrEqualReconciled) {
                     _currentPolicyFlow.value = reconciled
                     com.drmohammed.antiporn.ui.control.gate.SelfControlAccessGateRegistry.isSelfControlAllowedWhenSupervised = reconciled.isSelfControlAllowed
                     if (needsSave || !hasCachedPolicy) {
@@ -94,6 +100,29 @@ class PolicyRepository(
                     true
                 } else {
                     false
+                }
+                isInitialPolicyLoaded = true
+                wasAdopted
+            }
+            val effectivePolicy = _currentPolicyFlow.value
+            if (adopted || effectivePolicy != initialPolicy) {
+                try {
+                    com.drmohammed.antiporn.pageshield.engine.PageShieldAccessibilityHook.getInstance()
+                        .updateConfig(effectivePolicy.pageShieldConfig)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed updating PageShield config after cold-start Room reconcile", e)
+                }
+                try {
+                    com.drmohammed.antiporn.waqfa.engine.WaqfaSessionManager.getInstance(appContext)
+                        .updateConfig(effectivePolicy.waqfaConfig)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed updating Waqfa config after cold-start Room reconcile", e)
+                }
+                try {
+                    com.drmohammed.antiporn.accessibility.control.AccessibilityPolicyCoordinator
+                        .reconcile(appContext, effectivePolicy)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed reconciling accessibility after cold-start Room reconcile", e)
                 }
             }
             if (adopted) {
@@ -315,7 +344,8 @@ class PolicyRepository(
                                         cloudPolicy.guardianUid != current.guardianUid ||
                                         cloudPolicy.waqfaConfig != current.waqfaConfig ||
                                         cloudPolicy.pageShieldConfig != current.pageShieldConfig ||
-                                        cloudPolicy.selfControlPageShieldAllowed != current.selfControlPageShieldAllowed
+                                        cloudPolicy.selfControlPageShieldAllowed != current.selfControlPageShieldAllowed ||
+                                        cloudPolicy.isScreenAiEnabledGlobally != current.isScreenAiEnabledGlobally
                                     )
                                     val statusChanged = cloudPolicy.breakoutStatus != current.breakoutStatus || cloudPolicy.deactivationStatus != current.deactivationStatus
                                     val isTimeNewer = cloudPolicy.updatedAt > current.updatedAt
@@ -541,7 +571,7 @@ class PolicyRepository(
         )
         return try {
             firestore.collection("policies").document(wardUid)
-                .set(policyToPush.toMap())
+                .set(policyToPush.toMap(), SetOptions.merge())
                 .await()
             Log.i(TAG, "[SelfControlDiag] pushPolicyToWard SUCCESS for wardUid=$maskedWardUid (isSelfControlAllowed=${policyToPush.isSelfControlAllowed}, v$targetVersion)")
             com.drmohammed.antiporn.telemetry.BlackBoxRecorder.recordCloudSync(
@@ -573,7 +603,7 @@ class PolicyRepository(
                 try {
                     if (bundle.version >= lastSyncedCloudVersion) {
                         FirebaseFirestore.getInstance().collection("policies").document(uid)
-                            .set(bundle.toMap())
+                            .set(bundle.toMap(), SetOptions.merge())
                             .await()
                         lastSyncedCloudVersion = bundle.version
                         Log.i(TAG, "Successfully synced policy v${bundle.version} to cloud ($maskedUid)")
@@ -621,6 +651,22 @@ class PolicyRepository(
                         selfControlNewAppsAllowed = current.selfControlNewAppsAllowed
                     )
                     if (isSupervised) {
+                        sanitized = sanitized.copy(
+                            isDateTimeLocked = current.isDateTimeLocked,
+                            timeZoneId = current.timeZoneId,
+                            screenAiSchemaVersion = maxOf(
+                                current.screenAiSchemaVersion,
+                                DevicePolicyBundle.CURRENT_SCREEN_AI_SCHEMA_VERSION
+                            ),
+                            breakoutStatus = current.breakoutStatus,
+                            breakoutRequestedAt = current.breakoutRequestedAt,
+                            breakoutUnlockAt = current.breakoutUnlockAt,
+                            deactivationStatus = current.deactivationStatus,
+                            deactivationRequestedAt = current.deactivationRequestedAt,
+                            deactivationUnlockAt = current.deactivationUnlockAt,
+                            deactivationHasQr = current.deactivationHasQr,
+                            remoteSelfControlResetRequestedAt = current.remoteSelfControlResetRequestedAt
+                        )
                         if (!current.selfControlCurfewAllowed) {
                             sanitized = sanitized.copy(
                                 curfewStartHour = current.curfewStartHour,

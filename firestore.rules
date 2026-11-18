@@ -66,10 +66,30 @@ service cloud.firestore {
           resource.data.get('isSelfControlAllowed', false) == true &&
           request.resource.data.get('guardianUid', null) == resource.data.get('guardianUid', null) &&
           request.resource.data.get('isSupervised', null) == resource.data.get('isSupervised', null) &&
-          request.resource.data.get('isSelfControlAllowed', false) == resource.data.get('isSelfControlAllowed', false)) ||
-        // Case 4: Ward updates heartbeat and sync acknowledgment while supervised
+          request.resource.data.get('isSelfControlAllowed', false) == resource.data.get('isSelfControlAllowed', false) &&
+          request.resource.data.get('selfControlCurfewAllowed', true) == resource.data.get('selfControlCurfewAllowed', true) &&
+          request.resource.data.get('selfControlWebAllowed', false) == resource.data.get('selfControlWebAllowed', false) &&
+          request.resource.data.get('selfControlAppsAllowed', false) == resource.data.get('selfControlAppsAllowed', false) &&
+          request.resource.data.get('selfControlWaqfaAllowed', true) == resource.data.get('selfControlWaqfaAllowed', true) &&
+          request.resource.data.get('selfControlPageShieldAllowed', false) == resource.data.get('selfControlPageShieldAllowed', false) &&
+          request.resource.data.get('selfControlNewAppsAllowed', false) == resource.data.get('selfControlNewAppsAllowed', false) &&
+          request.resource.data.get('isDateTimeLocked', false) == resource.data.get('isDateTimeLocked', false) &&
+          request.resource.data.get('breakoutStatus', null) == resource.data.get('breakoutStatus', null) &&
+          request.resource.data.get('breakoutRequestedAt', null) == resource.data.get('breakoutRequestedAt', null) &&
+          request.resource.data.get('breakoutUnlockAt', null) == resource.data.get('breakoutUnlockAt', null) &&
+          request.resource.data.get('deactivationStatus', null) == resource.data.get('deactivationStatus', null) &&
+          request.resource.data.get('deactivationRequestedAt', null) == resource.data.get('deactivationRequestedAt', null) &&
+          request.resource.data.get('deactivationUnlockAt', null) == resource.data.get('deactivationUnlockAt', null) &&
+          request.resource.data.get('deactivationHasQr', false) == resource.data.get('deactivationHasQr', false) &&
+          request.resource.data.get('remoteSelfControlResetRequestedAt', null) == resource.data.get('remoteSelfControlResetRequestedAt', null)) ||
+        // Case 4: Ward updates heartbeat, sync acknowledgment, and device capabilities while supervised
         (resource.data.get('guardianUid', null) != null && isOwner(wardUid) &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastHeartbeat', 'acknowledgedVersion', 'lastAcknowledgedAt'])) ||
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'lastHeartbeat', 'acknowledgedVersion', 'lastAcknowledgedAt',
+            'wardHasAccessibilityService', 'wardHasUsageStats',
+            'wardCanWriteSecureSettings', 'wardCapabilitiesUpdatedAt',
+            'wardA11yTamperAt', 'wardSdkInt'
+          ])) ||
         // Case 5: Ward initiates or cancels 24h emergency breakout while supervised (protection stays intact)
         (resource.data.get('guardianUid', null) != null && isOwner(wardUid) &&
           request.resource.data.get('guardianUid', null) == resource.data.get('guardianUid', null) &&

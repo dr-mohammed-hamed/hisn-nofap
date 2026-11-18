@@ -126,7 +126,7 @@ class WaqfaBankingCloakLinkTest {
     }
 
     @Test
-    fun `test screen turned off while cloaked immediately restores protection`() {
+    fun `test screen turned off while cloaked keeps cloak active until user navigates away`() {
         val watcher = createWatcher()
         watcher.isRunning = true
         watcher.isScreenOn = true
@@ -138,7 +138,7 @@ class WaqfaBankingCloakLinkTest {
         watcher.onScreenStateChanged(false)
 
         assertFalse(watcher.isScreenOn)
-        assertFalse("Screen off must immediately restore accessibility protection", BankingCloakManager.isCloaked)
+        assertTrue("Screen off must keep cloak active until user navigates away", BankingCloakManager.isCloaked)
     }
 
     @Test

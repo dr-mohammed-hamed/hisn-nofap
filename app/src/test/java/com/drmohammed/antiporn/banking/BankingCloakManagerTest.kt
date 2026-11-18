@@ -24,11 +24,14 @@ import android.content.res.Resources
 import android.content.res.XmlResourceParser
 import android.graphics.Rect
 import android.graphics.drawable.Drawable
+import android.os.SystemClock
 import android.os.UserHandle
 import com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator
+import com.drmohammed.antiporn.core.time.TrustedTimeProvider
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -36,16 +39,28 @@ import org.junit.Test
 class BankingCloakManagerTest {
 
     private lateinit var dummyContext: DummyBankingContext
+    private var fakeElapsedMs = 10_000L
+    private var fakeWallMs = 1_700_000_000_000L
 
     @Before
     fun setUp() {
+        fakeElapsedMs = 10_000L
+        fakeWallMs = 1_700_000_000_000L
+        TrustedTimeProvider.resetForTesting()
+        TrustedTimeProvider.elapsedRealtimeProvider = { fakeElapsedMs }
+        TrustedTimeProvider.wallTimeProvider = { fakeWallMs }
         dummyContext = DummyBankingContext()
+        BankingCloakManager.resetForTesting()
         AccessibilitySelfActivator.enableSilently(dummyContext, forceUncloak = true)
     }
 
     @After
     fun tearDown() {
+        BankingCloakManager.resetForTesting()
         AccessibilitySelfActivator.enableSilently(dummyContext, forceUncloak = true)
+        TrustedTimeProvider.resetForTesting()
+        TrustedTimeProvider.elapsedRealtimeProvider = { SystemClock.elapsedRealtime() }
+        TrustedTimeProvider.wallTimeProvider = { System.currentTimeMillis() }
     }
 
     @Test
@@ -53,7 +68,47 @@ class BankingCloakManagerTest {
         assertEquals("com.egyptianbanks.instapay", BankingCloakManager.INSTAPAY_PACKAGE)
         assertEquals(180_000L, BankingCloakManager.CLOAK_TIMEOUT_MS)
         assertEquals(250L, BankingCloakManager.DEFAULT_SETTLING_DELAY_MS)
+        assertTrue(BankingCloakManager.MIN_CLOAK_SETTLING_DELAY_MS >= 350L)
         assertEquals("com.drmohammed.antiporn.action.RESTORE_BANKING_CLOAK", BankingCloakManager.ACTION_RESTORE_BANKING_CLOAK)
+    }
+
+    @Test
+    fun testCloakStateAndActiveTargetPackage_surviveSimulatedProcessDeath() {
+        val cibPkg = "com.cib.cibmobilebanking"
+        val prefs = InMemorySharedPreferences()
+        val persistentContext = DummyBankingContext(sharedPrefs = prefs).apply {
+            installedPackages.add(cibPkg)
+        }
+
+        // Launch CIB (non-InstaPay bank) -> persists cloak state and target package
+        val launched = BankingCloakManager.launchSafely(persistentContext, cibPkg)
+        assertTrue(launched)
+        assertTrue(BankingCloakManager.isCloaked(persistentContext))
+        assertEquals(cibPkg, BankingCloakManager.activeTargetPackage)
+
+        // Simulate process death by resetting in-memory volatile fields without clearing SharedPreferences
+        val cloakField = AccessibilitySelfActivator::class.java.getDeclaredField("isTemporarilyCloaked")
+        cloakField.isAccessible = true
+        cloakField.setBoolean(AccessibilitySelfActivator, false)
+        val expiryField = AccessibilitySelfActivator::class.java.getDeclaredField("cloakExpiresAtMs")
+        expiryField.isAccessible = true
+        expiryField.setLong(AccessibilitySelfActivator, 0L)
+        val targetField = BankingCloakManager::class.java.getDeclaredField("activeTargetPackage")
+        targetField.isAccessible = true
+        targetField.set(BankingCloakManager, BankingCloakManager.INSTAPAY_PACKAGE)
+
+        // After process restart, isCloaked(context) must recover from SharedPreferences
+        assertTrue(BankingCloakManager.isCloaked(persistentContext))
+
+        // Staying inside CIB after process restart must NOT uncloak
+        BankingCloakManager.onForegroundPackageChanged(persistentContext, cibPkg)
+        assertTrue(BankingCloakManager.isCloaked(persistentContext))
+        assertEquals(cibPkg, BankingCloakManager.activeTargetPackage)
+
+        // Leaving CIB to Chrome must uncloak and clear persisted state
+        BankingCloakManager.onForegroundPackageChanged(persistentContext, "com.android.chrome")
+        assertFalse(BankingCloakManager.isCloaked(persistentContext))
+        assertEquals(BankingCloakManager.INSTAPAY_PACKAGE, BankingCloakManager.activeTargetPackage)
     }
 
     @Test
@@ -75,6 +130,12 @@ class BankingCloakManagerTest {
         assertTrue(BankingCloakManager.isIgnoredPackage("com.samsung.android.honeyboard"))
         assertTrue(BankingCloakManager.isIgnoredPackage("com.huawei.secime"))
         assertTrue(BankingCloakManager.isIgnoredPackage("com.touchtype.swiftkey"))
+
+        // Cross-OEM Settings & Biometrics Ignored Packages
+        assertTrue(BankingCloakManager.isIgnoredPackage("com.android.settings"))
+        assertTrue(BankingCloakManager.isIgnoredPackage("com.samsung.android.biometrics.app.setting"))
+        assertTrue(BankingCloakManager.isIgnoredPackage("com.vivo.fingerprint"))
+        assertTrue(BankingCloakManager.isIgnoredPackage("com.vivo.fingerprintui"))
 
         assertFalse(BankingCloakManager.isIgnoredPackage("com.android.chrome"))
         assertFalse(BankingCloakManager.isIgnoredPackage("com.egyptianbanks.instapay"))
@@ -226,6 +287,103 @@ class BankingCloakManagerTest {
     }
 
     @Test
+    fun testLaunchSafely_whenCloakFails_abortsLaunchAndClearsState() {
+        val cibPkg = "com.cib.cibmobilebanking"
+        val prefs = InMemorySharedPreferences()
+        val persistentContext = DummyBankingContext(sharedPrefs = prefs).apply {
+            installedPackages.add(cibPkg)
+        }
+        BankingCloakManager.disableCleanlyAction = { _, _ -> false }
+
+        val launched = BankingCloakManager.launchSafely(persistentContext, cibPkg)
+
+        assertFalse(launched)
+        assertTrue(persistentContext.startedActivities.isEmpty())
+        assertFalse(BankingCloakManager.isCloaked(persistentContext))
+        assertEquals(BankingCloakManager.INSTAPAY_PACKAGE, BankingCloakManager.activeTargetPackage)
+        assertNull(prefs.getString("active_target_package", null))
+    }
+
+    @Test
+    fun testLaunchSafely_launchGracePreventsPrematureRestore_thenRestoresAfterGraceExpires() {
+        dummyContext.installedPackages.add(BankingCloakManager.INSTAPAY_PACKAGE)
+
+        val launched = BankingCloakManager.launchSafely(dummyContext, BankingCloakManager.INSTAPAY_PACKAGE)
+        assertTrue(launched)
+        assertTrue(BankingCloakManager.isCloaked(dummyContext))
+
+        // Within 2500ms launch grace window: transient foreground package must NOT prematurely restore
+        fakeElapsedMs += 500L
+        BankingCloakManager.onForegroundPackageChanged(dummyContext, "com.android.chrome")
+        assertTrue(BankingCloakManager.isCloaked(dummyContext))
+
+        // Once launch grace window elapses: non-banking foreground app restores protection
+        fakeElapsedMs += 2_500L
+        BankingCloakManager.onForegroundPackageChanged(dummyContext, "com.android.chrome")
+        assertFalse(BankingCloakManager.isCloaked(dummyContext))
+    }
+
+    @Test
+    fun testLaunchSafely_launchGraceExitsImmediatelyWhenBankEntersForeground() {
+        dummyContext.installedPackages.add(BankingCloakManager.INSTAPAY_PACKAGE)
+
+        assertTrue(BankingCloakManager.launchSafely(dummyContext, BankingCloakManager.INSTAPAY_PACKAGE))
+        assertTrue(BankingCloakManager.isCloaked(dummyContext))
+
+        // Target bank reaches foreground -> clears launch grace immediately
+        fakeElapsedMs += 200L
+        BankingCloakManager.onForegroundPackageChanged(dummyContext, BankingCloakManager.INSTAPAY_PACKAGE)
+        assertTrue(BankingCloakManager.isCloaked(dummyContext))
+
+        // Leaving bank right away restores protection without waiting for the original 2500ms grace
+        fakeElapsedMs += 100L
+        BankingCloakManager.onForegroundPackageChanged(dummyContext, "com.android.chrome")
+        assertFalse(BankingCloakManager.isCloaked(dummyContext))
+    }
+
+    @Test
+    fun testLaunchSafely_whenAccessibilityInactive_launchesDirectlyWithoutCloaking() {
+        dummyContext.installedPackages.add(BankingCloakManager.INSTAPAY_PACKAGE)
+        BankingCloakManager.accessibilityActiveCheckOverride = { false }
+
+        val launched = BankingCloakManager.launchSafely(dummyContext, BankingCloakManager.INSTAPAY_PACKAGE)
+
+        assertTrue(launched)
+        assertEquals(1, dummyContext.startedActivities.size)
+        assertFalse(BankingCloakManager.isCloaked(dummyContext))
+        assertFalse(AccessibilitySelfActivator.isTemporarilyCloaked)
+    }
+
+    @Test
+    fun testCloakExpiry_zeroExpiryRejectedAndMaxDurationClamped() {
+        val prefs = InMemorySharedPreferences()
+        val persistentContext = DummyBankingContext(sharedPrefs = prefs)
+
+        // Persisted cloak with zero/invalid expiry must be treated as expired and cleared
+        prefs.edit()
+            .putBoolean("is_cloaked", true)
+            .putLong("cloak_expires_at_ms", 0L)
+            .apply()
+        assertFalse(AccessibilitySelfActivator.isCloaked(persistentContext))
+        assertFalse(prefs.getBoolean("is_cloaked", false))
+
+        // Oversized cloak duration must be clamped to MAX_CLOAK_DURATION_MS (10 minutes)
+        val clamped = AccessibilitySelfActivator.disableCleanly(
+            persistentContext,
+            isTemporaryCloak = true,
+            cloakDurationMs = 60L * 60L * 1000L
+        )
+        assertTrue(clamped)
+        assertTrue(AccessibilitySelfActivator.isCloaked(persistentContext))
+
+        fakeElapsedMs += AccessibilitySelfActivator.MAX_CLOAK_DURATION_MS - 1_000L
+        assertTrue(AccessibilitySelfActivator.isCloaked(persistentContext))
+
+        fakeElapsedMs += 1_000L
+        assertFalse(AccessibilitySelfActivator.isCloaked(persistentContext))
+    }
+
+    @Test
     fun testBankingRestoreReceiver_onReceiveRestoresProtection() {
         AccessibilitySelfActivator.disableAndCloakSilently(dummyContext, isTemporaryCloak = true)
         assertTrue(AccessibilitySelfActivator.isTemporarilyCloaked)
@@ -279,7 +437,9 @@ class BankingCloakManagerTest {
         override fun getFlags(): Int = flagsInt
     }
 
-    private class DummyBankingContext : ContextWrapper(null) {
+    private class DummyBankingContext(
+        private val sharedPrefs: android.content.SharedPreferences? = null
+    ) : ContextWrapper(null) {
         val installedPackages = mutableSetOf<String>()
         val startedActivities = mutableListOf<Intent>()
         private val fakePm = FakeBankingPackageManager(installedPackages)
@@ -287,6 +447,10 @@ class BankingCloakManagerTest {
         override fun getApplicationContext(): Context = this
         override fun getPackageName(): String = "com.drmohammed.antiporn"
         override fun getPackageManager(): PackageManager = fakePm
+
+        override fun getSharedPreferences(name: String?, mode: Int): android.content.SharedPreferences {
+            return sharedPrefs ?: super.getSharedPreferences(name, mode)
+        }
 
         override fun startActivity(intent: Intent?) {
             if (intent != null) {
@@ -297,6 +461,47 @@ class BankingCloakManagerTest {
         override fun getSystemService(name: String): Any? {
             // Return null for AlarmManager or other system services in test double
             return null
+        }
+    }
+
+    private class InMemorySharedPreferences : android.content.SharedPreferences {
+        private val data = mutableMapOf<String, Any?>()
+
+        override fun getAll(): MutableMap<String, *> = HashMap(data)
+        override fun getString(key: String?, defValue: String?): String? = data[key] as? String ?: defValue
+        @Suppress("UNCHECKED_CAST")
+        override fun getStringSet(key: String?, defValues: MutableSet<String>?): MutableSet<String>? =
+            (data[key] as? Set<String>)?.toMutableSet() ?: defValues
+        override fun getInt(key: String?, defValue: Int): Int = (data[key] as? Int) ?: defValue
+        override fun getLong(key: String?, defValue: Long): Long = (data[key] as? Long) ?: defValue
+        override fun getFloat(key: String?, defValue: Float): Float = (data[key] as? Float) ?: defValue
+        override fun getBoolean(key: String?, defValue: Boolean): Boolean = (data[key] as? Boolean) ?: defValue
+        override fun contains(key: String?): Boolean = data.containsKey(key)
+        override fun registerOnSharedPreferenceChangeListener(listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener?) {}
+        override fun unregisterOnSharedPreferenceChangeListener(listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener?) {}
+
+        override fun edit(): android.content.SharedPreferences.Editor = object : android.content.SharedPreferences.Editor {
+            private val pending = mutableMapOf<String, Any?>()
+            private val removals = mutableSetOf<String>()
+            private var clearAll = false
+
+            override fun putString(key: String?, value: String?) = apply { if (key != null) pending[key] = value }
+            override fun putStringSet(key: String?, values: MutableSet<String>?) = apply { if (key != null) pending[key] = values?.toSet() }
+            override fun putInt(key: String?, value: Int) = apply { if (key != null) pending[key] = value }
+            override fun putLong(key: String?, value: Long) = apply { if (key != null) pending[key] = value }
+            override fun putFloat(key: String?, value: Float) = apply { if (key != null) pending[key] = value }
+            override fun putBoolean(key: String?, value: Boolean) = apply { if (key != null) pending[key] = value }
+            override fun remove(key: String?) = apply { if (key != null) removals.add(key) }
+            override fun clear() = apply { clearAll = true }
+            override fun commit(): Boolean {
+                apply()
+                return true
+            }
+            override fun apply() {
+                if (clearAll) data.clear()
+                removals.forEach { data.remove(it) }
+                data.putAll(pending)
+            }
         }
     }
 

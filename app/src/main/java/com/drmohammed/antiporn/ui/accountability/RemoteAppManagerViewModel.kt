@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.drmohammed.antiporn.R
+import com.drmohammed.antiporn.accessibility.HisnAccessibilityService
 import com.drmohammed.antiporn.ai.service.ScreenAiProjectionService
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
@@ -29,6 +30,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -118,6 +120,21 @@ class RemoteAppManagerViewModel(
                 }
             }
         }
+
+        viewModelScope.launch {
+            combine(
+                ScreenAiProjectionService.isRunningFlow,
+                HisnAccessibilityService.isStandaloneAiActiveFlow
+            ) { projectionRunning, standaloneActive ->
+                projectionRunning || standaloneActive
+            }.collect { isRunning ->
+                if (!_uiState.value.isLocalMode) return@collect
+                _uiState.update { current ->
+                    if (current.isScreenAiServiceRunning == isRunning) current
+                    else current.copy(isScreenAiServiceRunning = isRunning)
+                }
+            }
+        }
     }
 
     fun loadData() {
@@ -163,7 +180,7 @@ class RemoteAppManagerViewModel(
                     initialProtectedApps = policy.protectedAppPackages.toSet(),
                     initialLockNewInstalls = policy.lockNewInstallsUntilApproved,
                     isScreenAiEnabledGlobally = policy.isScreenAiEnabledGlobally,
-                    isScreenAiServiceRunning = ScreenAiProjectionService.isRunning,
+                    isScreenAiServiceRunning = ScreenAiProjectionService.isRunning || HisnAccessibilityService.isStandaloneAiActive,
                     allApps = sortedList,
                     displayedApps = filtered
                 )
@@ -236,7 +253,7 @@ class RemoteAppManagerViewModel(
                 initialProtectedApps = policy.protectedAppPackages.toSet(),
                 initialLockNewInstalls = policy.lockNewInstallsUntilApproved,
                 isScreenAiEnabledGlobally = policy.isScreenAiEnabledGlobally,
-                isScreenAiServiceRunning = ScreenAiProjectionService.isRunning,
+                isScreenAiServiceRunning = policy.isScreenAiEnabledGlobally && policy.wardHasAccessibilityService == true,
                 allApps = sortedList,
                 displayedApps = filtered
             )
@@ -424,117 +441,127 @@ class RemoteAppManagerViewModel(
 
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>()
-            if (state.isLocalMode) {
-                var success = false
-                var errorMsg: String? = null
+            try {
+                if (state.isLocalMode) {
+                    var success = false
+                    var errorMsg: String? = null
 
-                if (SafeDpmGateway.isDeviceOwner(context)) {
-                    val result = SafeDpmGateway.setPackagesSuspended(
-                        context = context,
-                        packages = arrayOf(pkg),
-                        suspended = false
-                    )
-                    when (result) {
-                        is DpmExecutionResult.Success -> {
-                            success = result.data.isEmpty()
-                            if (!success) errorMsg = context.getString(R.string.error_unknown)
+                    if (SafeDpmGateway.isDeviceOwner(context)) {
+                        val result = SafeDpmGateway.setPackagesSuspended(
+                            context = context,
+                            packages = arrayOf(pkg),
+                            suspended = false
+                        )
+                        when (result) {
+                            is DpmExecutionResult.Success -> {
+                                success = result.data.isEmpty()
+                                if (!success) errorMsg = context.getString(R.string.error_unknown)
+                            }
+                            is DpmExecutionResult.Failure -> {
+                                errorMsg = result.message
+                            }
                         }
-                        is DpmExecutionResult.Failure -> {
-                            errorMsg = result.message
-                        }
+                    } else {
+                        errorMsg = context.getString(R.string.toast_not_device_owner)
                     }
-                } else {
-                    errorMsg = context.getString(R.string.toast_not_device_owner)
-                }
 
-                // Synchronize Zero-Trust approvals locally so it is never re-frozen
-                try {
-                    approvalRepository.unsuspendAndApprove(pkg, decidedBy = "SELF")
-                    Log.i(TAG, "Quick unsuspend: Auto-approved package $pkg in local Zero-Trust baseline")
-                } catch (e: Exception) {
-                    Log.e(TAG, "Quick unsuspend: Error approving $pkg in local Zero-Trust", e)
-                }
-
-                _uiState.update { current ->
-                    current.copy(
-                        isLoading = false,
-                        allApps = current.allApps.map { if (it.packageName == pkg) it.copy(isSuspended = false) else it },
-                        displayedApps = current.displayedApps.map { if (it.packageName == pkg) it.copy(isSuspended = false) else it }
-                    )
-                }
-
-                if (success) {
-                    _events.emit(
-                        RemoteAppManagerEvent.ShowToastString(
-                            context.getString(R.string.toast_quick_unsuspend_local_success, displayName)
-                        )
-                    )
-                } else {
-                    _events.emit(
-                        RemoteAppManagerEvent.ShowToastString(
-                            context.getString(R.string.toast_quick_unsuspend_failed, errorMsg ?: context.getString(R.string.error_unknown)),
-                            isLong = true
-                        )
-                    )
-                }
-            } else {
-                val updatedBlacklist = state.customBlacklist - pkg
-                val myUid = accountabilityRepository.getCachedUid()
-                val myName = accountabilityRepository.getMyDisplayName()
-                    ?: context.getString(R.string.guardian_default_name)
-
-                val updatedPolicy = state.currentPolicy.copy(
-                    guardianUid = state.currentPolicy.guardianUid?.takeIf { it.isNotBlank() } ?: myUid,
-                    guardianName = state.currentPolicy.guardianName?.takeIf { it.isNotBlank() } ?: myName,
-                    isSupervised = true,
-                    customBlacklistPackages = updatedBlacklist,
-                    updatedAt = TrustedTimeProvider.currentTimeMillis(context)
-                )
-
-                // 1. Push policy FIRST so ward removes pkg from customBlacklistPackages before approval ticket arrives
-                val success = policyRepository.pushPolicyToWard(state.wardId, updatedPolicy)
-
-                // 2. Resolve Zero-Trust approval on ward cloud ticket only after policy is successfully updated in cloud
-                if (success) {
+                    // Synchronize Zero-Trust approvals locally so it is never re-frozen
                     try {
-                        val approvalSuccess = approvalRepository.resolveWardApproval(
-                            wardUid = state.wardId,
-                            packageName = pkg,
-                            approve = true,
-                            guardianName = myName
-                        )
-                        Log.i(TAG, "Quick unsuspend: Auto-resolved ward approval for $pkg (success=$approvalSuccess)")
+                        approvalRepository.unsuspendAndApprove(pkg, decidedBy = "SELF")
+                        Log.i(TAG, "Quick unsuspend: Auto-approved package $pkg in local Zero-Trust baseline")
                     } catch (e: Exception) {
-                        Log.e(TAG, "Quick unsuspend: Error resolving ward approval for $pkg", e)
+                        if (e is CancellationException) throw e
+                        Log.e(TAG, "Quick unsuspend: Error approving $pkg in local Zero-Trust", e)
+                    }
+
+                    if (success) {
+                        _uiState.update { current ->
+                            current.copy(
+                                allApps = current.allApps.map { if (it.packageName == pkg) it.copy(isSuspended = false) else it },
+                                displayedApps = current.displayedApps.map { if (it.packageName == pkg) it.copy(isSuspended = false) else it }
+                            )
+                        }
+                        _events.emit(
+                            RemoteAppManagerEvent.ShowToastString(
+                                context.getString(R.string.toast_quick_unsuspend_local_success, displayName)
+                            )
+                        )
+                    } else {
+                        _events.emit(
+                            RemoteAppManagerEvent.ShowToastString(
+                                context.getString(R.string.toast_quick_unsuspend_failed, errorMsg ?: context.getString(R.string.error_unknown)),
+                                isLong = true
+                            )
+                        )
+                    }
+                } else {
+                    val updatedBlacklist = state.customBlacklist - pkg
+                    val myUid = accountabilityRepository.getCachedUid()
+                    val myName = accountabilityRepository.getMyDisplayName()
+                        ?: context.getString(R.string.guardian_default_name)
+
+                    val updatedPolicy = state.currentPolicy.copy(
+                        guardianUid = state.currentPolicy.guardianUid?.takeIf { it.isNotBlank() } ?: myUid,
+                        guardianName = state.currentPolicy.guardianName?.takeIf { it.isNotBlank() } ?: myName,
+                        isSupervised = true,
+                        customBlacklistPackages = updatedBlacklist,
+                        updatedAt = TrustedTimeProvider.currentTimeMillis(context)
+                    )
+
+                    // 1. Push policy FIRST so ward removes pkg from customBlacklistPackages before approval ticket arrives
+                    val success = policyRepository.pushPolicyToWard(state.wardId, updatedPolicy)
+
+                    // 2. Resolve Zero-Trust approval on ward cloud ticket only after policy is successfully updated in cloud
+                    if (success) {
+                        try {
+                            val approvalSuccess = approvalRepository.resolveWardApproval(
+                                wardUid = state.wardId,
+                                packageName = pkg,
+                                approve = true,
+                                guardianName = myName
+                            )
+                            Log.i(TAG, "Quick unsuspend: Auto-resolved ward approval for $pkg (success=$approvalSuccess)")
+                        } catch (e: Exception) {
+                            if (e is CancellationException) throw e
+                            Log.e(TAG, "Quick unsuspend: Error resolving ward approval for $pkg", e)
+                        }
+
+                        _uiState.update { current ->
+                            current.copy(
+                                customBlacklist = updatedBlacklist,
+                                currentPolicy = updatedPolicy,
+                                initialBlacklist = updatedBlacklist,
+                                allApps = current.allApps.map { if (it.packageName == pkg) it.copy(isSuspended = false) else it },
+                                displayedApps = current.displayedApps.map { if (it.packageName == pkg) it.copy(isSuspended = false) else it }
+                            )
+                        }
+
+                        _events.emit(
+                            RemoteAppManagerEvent.ShowToastString(
+                                context.getString(R.string.toast_quick_unsuspend_remote_sent, displayName, state.wardName),
+                                isLong = true
+                            )
+                        )
+                    } else {
+                        _events.emit(
+                            RemoteAppManagerEvent.ShowToastString(
+                                context.getString(R.string.toast_quick_unsuspend_failed, context.getString(R.string.error_unknown)),
+                                isLong = true
+                            )
+                        )
                     }
                 }
-
-                _uiState.update { current ->
-                    current.copy(
-                        isLoading = false,
-                        customBlacklist = updatedBlacklist,
-                        currentPolicy = updatedPolicy,
-                        initialBlacklist = updatedBlacklist,
-                        allApps = current.allApps.map { if (it.packageName == pkg) it.copy(isSuspended = false) else it },
-                        displayedApps = current.displayedApps.map { if (it.packageName == pkg) it.copy(isSuspended = false) else it }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                Log.e(TAG, "Quick unsuspend failed for $pkg", e)
+                _events.emit(
+                    RemoteAppManagerEvent.ShowToastString(
+                        context.getString(R.string.toast_quick_unsuspend_failed, e.localizedMessage ?: context.getString(R.string.error_unknown)),
+                        isLong = true
                     )
-                }
-
-                if (success) {
-                    _events.emit(
-                        RemoteAppManagerEvent.ShowToastString(
-                            context.getString(R.string.toast_quick_unsuspend_remote_sent, displayName, state.wardName),
-                            isLong = true
-                        )
-                    )
-                } else {
-                    _events.emit(
-                        RemoteAppManagerEvent.ShowToastString(
-                            context.getString(R.string.toast_quick_unsuspend_failed, context.getString(R.string.error_unknown)),
-                            isLong = true
-                        )
-                    )
-                }
+                )
+            } finally {
+                _uiState.update { it.copy(isLoading = false) }
             }
         }
     }

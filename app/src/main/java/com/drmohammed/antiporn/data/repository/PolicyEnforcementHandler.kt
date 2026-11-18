@@ -1,11 +1,23 @@
 package com.drmohammed.antiporn.data.repository
 
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.UserManager
+import android.provider.Settings
 import android.util.Log
+import androidx.core.app.NotificationCompat
+import com.drmohammed.antiporn.R
+import com.drmohammed.antiporn.accessibility.HisnAccessibilityService
+import com.drmohammed.antiporn.accessibility.control.AccessibilityPolicyCoordinator
+import com.drmohammed.antiporn.accessibility.control.AccessibilityReconcileResult
+import com.drmohammed.antiporn.accessibility.control.AccessibilityRequirementReason
+import com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator
+import com.drmohammed.antiporn.ai.service.ScreenAiProjectionService
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.core.model.IslamicTimeZoneRegistry
 import com.drmohammed.antiporn.core.policy.AppPolicyRegistry
@@ -13,9 +25,11 @@ import com.drmohammed.antiporn.curfew.CurfewAppResolver
 import com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService
 import com.drmohammed.antiporn.curfew.CurfewConfig
 import com.drmohammed.antiporn.curfew.CurfewEnforcer
+import com.drmohammed.antiporn.curfew.CurfewForegroundWatcher
 import com.drmohammed.antiporn.curfew.CurfewScheduler
 import com.drmohammed.antiporn.curfew.ZeroTrustForegroundWatcher
 import com.drmohammed.antiporn.data.local.db.entity.PendingApprovalEntity
+import com.drmohammed.antiporn.notification.registry.NotificationRegistry
 import com.drmohammed.antiporn.shields.BrowserShield
 import com.drmohammed.antiporn.shields.DnsShield
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
@@ -120,6 +134,7 @@ internal class PolicyEnforcementHandler(
                 }
                 WaqfaSessionManager.getInstance(appContext).updateConfig(bundle.waqfaConfig)
                 com.drmohammed.antiporn.pageshield.engine.PageShieldAccessibilityHook.getInstance().updateConfig(bundle.pageShieldConfig)
+                reconcileAccessibilityAndCapabilities(bundle)
 
                 synchronized(baselineLock) {
                     lastAppliedPolicyBundle = bundle
@@ -419,6 +434,128 @@ internal class PolicyEnforcementHandler(
         } else {
             val failure = result as? DpmExecutionResult.Failure
             Log.e(TAG, "$actionLabel failed via SafeDpmGateway: ${failure?.errorType} - ${failure?.message}")
+        }
+    }
+
+    private fun reconcileAccessibilityAndCapabilities(bundle: DevicePolicyBundle) {
+        val reconcileResult = AccessibilityPolicyCoordinator.reconcile(appContext, bundle)
+
+        if (reconcileResult is AccessibilityReconcileResult.NeedsManualActivation) {
+            val isLocalVisionFallbackOnly =
+                reconcileResult.reasons == setOf(AccessibilityRequirementReason.VISION_AI) &&
+                    (ScreenAiProjectionService.isRunning || !bundle.isSupervised)
+            if (isLocalVisionFallbackOnly) {
+                cancelUrgentNotification(NotificationRegistry.EVENT_REMOTE_A11Y_REQUIRED_ID)
+            } else {
+                postRemoteAccessibilityRequiredNotification(reconcileResult.reasons)
+            }
+        } else {
+            cancelUrgentNotification(NotificationRegistry.EVENT_REMOTE_A11Y_REQUIRED_ID)
+        }
+
+        val isA11yActive = HisnAccessibilityService.instance != null ||
+            AccessibilitySelfActivator.isServiceEnabledInSettings(appContext)
+        if (AccessibilityPolicyCoordinator.isUsageAccessRequired(bundle, isA11yActive = isA11yActive) &&
+            !CurfewForegroundWatcher.hasUsageStatsPermission(appContext)
+        ) {
+            postRemoteUsageAccessRequiredNotification()
+        } else {
+            cancelUrgentNotification(NotificationRegistry.EVENT_REMOTE_USAGE_ACCESS_REQUIRED_ID)
+        }
+
+        if (!bundle.isScreenAiEnabledGlobally && ScreenAiProjectionService.isRunning) {
+            try {
+                appContext.stopService(Intent(appContext, ScreenAiProjectionService::class.java))
+                Log.i(TAG, "Stopped ScreenAiProjectionService because policy disabled Vision Guard AI")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed stopping ScreenAiProjectionService during policy enforcement", e)
+            }
+        }
+
+        try {
+            AccountabilityRepository.getInstance(appContext).syncWardCapabilitiesAsync(recordTamper = false)
+        } catch (e: Exception) {
+            Log.w(TAG, "Non-critical: failed scheduling ward capabilities sync after policy enforcement", e)
+        }
+    }
+
+    private fun postRemoteAccessibilityRequiredNotification(reasons: Set<AccessibilityRequirementReason>) {
+        try {
+            val manager = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            val separator = appContext.getString(R.string.list_separator)
+            val featureNames = reasons.map { reason ->
+                when (reason) {
+                    AccessibilityRequirementReason.PAGE_SHIELD -> appContext.getString(R.string.feature_name_page_shield)
+                    AccessibilityRequirementReason.WAQFA_INSTANT -> appContext.getString(R.string.feature_name_waqfa)
+                    AccessibilityRequirementReason.VISION_AI -> appContext.getString(R.string.feature_name_vision_ai)
+                }
+            }.joinToString(separator)
+
+            val settingsIntent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                appContext,
+                NotificationRegistry.EVENT_REMOTE_A11Y_REQUIRED_ID,
+                settingsIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val title = appContext.getString(R.string.notif_remote_a11y_required_title)
+            val message = appContext.getString(R.string.notif_remote_a11y_required_msg, featureNames)
+            val notification = NotificationCompat.Builder(appContext, NotificationRegistry.CHANNEL_ID_PROTECTION_EVENTS)
+                .setSmallIcon(R.drawable.ic_shield_device_owner)
+                .setContentTitle(title)
+                .setContentText(message)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
+                .build()
+
+            manager.notify(NotificationRegistry.EVENT_REMOTE_A11Y_REQUIRED_ID, notification)
+        } catch (e: Throwable) {
+            Log.w(TAG, "Could not post remote accessibility required notification", e)
+        }
+    }
+
+    private fun postRemoteUsageAccessRequiredNotification() {
+        try {
+            val manager = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            val settingsIntent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                appContext,
+                NotificationRegistry.EVENT_REMOTE_USAGE_ACCESS_REQUIRED_ID,
+                settingsIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val title = appContext.getString(R.string.notif_remote_usage_access_required_title)
+            val message = appContext.getString(R.string.notif_remote_usage_access_required_msg)
+            val notification = NotificationCompat.Builder(appContext, NotificationRegistry.CHANNEL_ID_PROTECTION_EVENTS)
+                .setSmallIcon(R.drawable.ic_shield_device_owner)
+                .setContentTitle(title)
+                .setContentText(message)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
+                .build()
+
+            manager.notify(NotificationRegistry.EVENT_REMOTE_USAGE_ACCESS_REQUIRED_ID, notification)
+        } catch (e: Throwable) {
+            Log.w(TAG, "Could not post remote usage access required notification", e)
+        }
+    }
+
+    private fun cancelUrgentNotification(notificationId: Int) {
+        try {
+            val manager = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            manager.cancel(notificationId)
+        } catch (e: Throwable) {
+            Log.w(TAG, "Could not cancel notification $notificationId", e)
         }
     }
 

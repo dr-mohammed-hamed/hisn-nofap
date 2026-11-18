@@ -242,9 +242,6 @@ object DeviceOwnerPromoter {
             legacyResult
         }
 
-        if (result is PromotionResult.Success) {
-            com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator.enableSilently(context)
-        }
         return result
     }
 

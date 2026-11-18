@@ -48,9 +48,18 @@ class AccountabilityRepository(
 
     internal val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     internal val syncPartnersMutex = Mutex()
+    internal val capabilitiesSyncMutex = Mutex()
     private val revocationMutex = Mutex()
     private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val identityMigrator by lazy { AccountabilityIdentityMigrator(appContext, firestore, partnerDao, policyDao) }
+
+    init {
+        if (com.drmohammed.antiporn.accessibility.control.AccessibilityPolicyCoordinator.onCapabilitiesChangedCallback == null) {
+            com.drmohammed.antiporn.accessibility.control.AccessibilityPolicyCoordinator.onCapabilitiesChangedCallback = { ctx, recordTamper ->
+                getInstance(ctx).syncWardCapabilitiesAsync(recordTamper)
+            }
+        }
+    }
 
     suspend fun getOrCreateCurrentUid(): String = withContext(Dispatchers.IO) {
         val user = auth.currentUser
@@ -286,7 +295,7 @@ class AccountabilityRepository(
                 val policyMap = updatedPolicy.toMap().toMutableMap().apply {
                     put("pairingCode", cleanCode)
                 }
-                firestore.collection("policies").document(targetUid).set(policyMap).await()
+                firestore.collection("policies").document(targetUid).set(policyMap, SetOptions.merge()).await()
             } else if (role == PartnerEntity.ROLE_GUARDIAN) {
                 // Target is protecting ME (Target is my GUARDIAN, I am their WARD)
                 val myPolicyDoc = try {
@@ -314,7 +323,7 @@ class AccountabilityRepository(
                     version = currentVersion + 1,
                     updatedAt = TrustedTimeProvider.currentTimeMillis(appContext)
                 )
-                firestore.collection("policies").document(myUid).set(updatedMyPolicy.toMap()).await()
+                firestore.collection("policies").document(myUid).set(updatedMyPolicy.toMap(), SetOptions.merge()).await()
                 policyDao.saveDevicePolicyBlocking(DevicePolicyEntity.fromBundle(updatedMyPolicy))
                 PolicyRepository.getInstance(appContext).updateLocalPolicyAndEnforce(updatedMyPolicy)
             }
@@ -402,7 +411,7 @@ class AccountabilityRepository(
                         version = currentVersion + 1,
                         updatedAt = TrustedTimeProvider.currentTimeMillis(appContext)
                     )
-                    firestore.collection("policies").document(targetUid).set(safeDefaultPolicy.toMap()).await()
+                    firestore.collection("policies").document(targetUid).set(safeDefaultPolicy.toMap(), SetOptions.merge()).await()
                     val maskedTarget = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(targetUid)
                     Log.i(TAG, "Revoked cloud policy for ward UID: $maskedTarget (v${safeDefaultPolicy.version})")
                 } catch (e: Exception) {
@@ -595,6 +604,15 @@ class AccountabilityRepository(
     }
 
     suspend fun updateHeartbeat(): Result<Unit> = updateHeartbeatInternal()
+
+    suspend fun syncWardCapabilities(recordTamper: Boolean = false): Result<Unit> =
+        syncWardCapabilitiesInternal(recordTamper)
+
+    fun syncWardCapabilitiesAsync(recordTamper: Boolean = false) {
+        repositoryScope.launch {
+            syncWardCapabilitiesInternal(recordTamper)
+        }
+    }
 
     suspend fun requestEmergencyBreakout(): Result<Long> = requestEmergencyBreakoutInternal()
 

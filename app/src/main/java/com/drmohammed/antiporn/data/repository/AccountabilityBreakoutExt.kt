@@ -1,36 +1,105 @@
 package com.drmohammed.antiporn.data.repository
 
+import android.content.Context
 import android.util.Log
 import com.drmohammed.antiporn.R
+import com.drmohammed.antiporn.accessibility.HisnAccessibilityService
+import com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
+import com.drmohammed.antiporn.curfew.CurfewForegroundWatcher
 import com.drmohammed.antiporn.telemetry.AiTelemetryReporter
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.Source
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
 private const val TAG = "AntiPorn_AccBreakout"
 
 /**
- * Updates the device's heartbeat timestamp in Firestore /policies/{myUid}.
+ * Collects the ward device's current runtime capability telemetry fields for Firestore sync.
+ * Auto-clears [wardA11yTamperAt] back to 0L once Accessibility is active again.
+ */
+internal fun collectWardCapabilityFields(
+    appContext: Context,
+    now: Long,
+    recordTamper: Boolean = false
+): Map<String, Any> {
+    val hasA11y = HisnAccessibilityService.instance != null ||
+        AccessibilitySelfActivator.isServiceEnabledInSettings(appContext)
+    val hasUsageStats = CurfewForegroundWatcher.hasUsageStatsPermission(appContext)
+    val canWriteSecure = AccessibilitySelfActivator.canWriteSecureSettings(appContext)
+
+    val fields = mutableMapOf<String, Any>(
+        "wardHasAccessibilityService" to hasA11y,
+        "wardHasUsageStats" to hasUsageStats,
+        "wardCanWriteSecureSettings" to canWriteSecure,
+        "wardCapabilitiesUpdatedAt" to now,
+        "wardSdkInt" to android.os.Build.VERSION.SDK_INT
+    )
+    if (recordTamper) {
+        fields["wardA11yTamperAt"] = now
+    } else if (hasA11y) {
+        fields["wardA11yTamperAt"] = 0L
+    }
+    return fields
+}
+
+/**
+ * Updates the device's heartbeat timestamp and runtime capability telemetry in Firestore /policies/{myUid}.
  * Lightweight operation invoked periodically or on app foreground.
  */
 internal suspend fun AccountabilityRepository.updateHeartbeatInternal(): Result<Unit> = withContext(Dispatchers.IO) {
-    try {
-        val myUid = getOrCreateCurrentUid()
-        val now = TrustedTimeProvider.currentTimeMillis(appContext)
-        firestore.collection("policies").document(myUid)
-            .set(mapOf("lastHeartbeat" to now), SetOptions.merge())
-            .await()
-        Log.d(TAG, "Heartbeat updated successfully at $now")
-        Result.success(Unit)
-    } catch (e: Exception) {
-        if (e is CancellationException) throw e
-        Log.w(TAG, "Non-critical heartbeat update failed: ${e.message}")
-        Result.failure(e)
+    capabilitiesSyncMutex.withLock {
+        try {
+            val myUid = getOrCreateCurrentUid()
+            val now = TrustedTimeProvider.currentTimeMillis(appContext)
+            val payload = HashMap<String, Any>(8).apply {
+                put("lastHeartbeat", now)
+                putAll(collectWardCapabilityFields(appContext, now, recordTamper = false))
+            }
+            firestore.collection("policies").document(myUid)
+                .set(payload, SetOptions.merge())
+                .await()
+            Log.d(TAG, "Heartbeat and ward capabilities updated successfully at $now")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Log.w(TAG, "Non-critical heartbeat update failed: ${e.message}")
+            Result.failure(e)
+        }
+    }
+}
+
+/**
+ * Syncs the ward device's capability flags (Accessibility, Usage Stats, WRITE_SECURE_SETTINGS)
+ * and optional tamper timestamp to Firestore /policies/{myUid} using merge semantics.
+ */
+internal suspend fun AccountabilityRepository.syncWardCapabilitiesInternal(
+    recordTamper: Boolean = false
+): Result<Unit> = withContext(Dispatchers.IO) {
+    capabilitiesSyncMutex.withLock {
+        try {
+            val myUid = getOrCreateCurrentUid()
+            if (myUid.startsWith("dev_") && auth.currentUser == null) {
+                Log.d(TAG, "Skipping ward capabilities sync: device not authenticated")
+                return@withLock Result.success(Unit)
+            }
+            val now = TrustedTimeProvider.currentTimeMillis(appContext)
+            val payload = collectWardCapabilityFields(appContext, now, recordTamper = recordTamper)
+            firestore.collection("policies").document(myUid)
+                .set(payload, SetOptions.merge())
+                .await()
+            Log.d(TAG, "Ward capabilities synced successfully at $now (recordTamper=$recordTamper)")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Log.w(TAG, "Non-critical ward capabilities sync failed: ${e.message}")
+            Result.failure(e)
+        }
     }
 }
 
@@ -164,7 +233,7 @@ internal suspend fun AccountabilityRepository.executeEmergencyBreakoutInternal()
             version = currentVersion + 1,
             updatedAt = now
         )
-        docRef.set(safeDefault.toMap()).await()
+        docRef.set(safeDefault.toMap(), SetOptions.merge()).await()
         PolicyRepository.getInstance(appContext).updateLocalPolicyAndEnforce(safeDefault)
         onSupervisionRevokedLocally()
         Log.i(TAG, "Successfully executed emergency breakout after 24 hours")

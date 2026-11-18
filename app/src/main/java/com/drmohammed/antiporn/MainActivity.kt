@@ -34,12 +34,17 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.viewpager2.adapter.FragmentStateAdapter
 import androidx.viewpager2.widget.ViewPager2
+import com.drmohammed.antiporn.accessibility.HisnAccessibilityService
+import com.drmohammed.antiporn.accessibility.control.AccessibilityPolicyCoordinator
+import com.drmohammed.antiporn.accessibility.control.AccessibilityReconcileResult
 import com.drmohammed.antiporn.ai.service.ScreenAiProjectionService
+import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.notification.router.NotificationActionRouter
 import com.drmohammed.antiporn.core.engine.ProtectionEngine
 import com.drmohammed.antiporn.curfew.CurfewEnforcer
 import com.drmohammed.antiporn.curfew.CurfewScheduler
 import com.drmohammed.antiporn.data.repository.AppInventoryManager
+import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.databinding.ActivityMainBinding
 import com.drmohammed.antiporn.ota.model.OtaUpdateState
 import com.drmohammed.antiporn.ota.model.OtaVersionInfo
@@ -59,7 +64,9 @@ import com.drmohammed.antiporn.ui.splash.SplashAnimationController
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Main application dashboard activity hosting the Material 3 Bottom Navigation Hub.
@@ -105,6 +112,11 @@ class MainActivity : AppCompatActivity(),
             ContextCompat.startForegroundService(this, serviceIntent)
         } else {
             Toast.makeText(this, R.string.ai_permission_denied, Toast.LENGTH_SHORT).show()
+            lifecycleScope.launch {
+                revertScreenAiPolicyToDisabled()
+                if (isFinishing || isDestroyed) return@launch
+                refreshSettingsAiUi()
+            }
         }
     }
 
@@ -309,27 +321,113 @@ class MainActivity : AppCompatActivity(),
         if (now - lastAiToggleMs < 1000L) return
         lastAiToggleMs = now
 
-        if (enable) {
-            if (!Settings.canDrawOverlays(this)) {
-                val intent = Intent(
-                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    "package:$packageName".toUri()
-                )
-                startActivity(intent)
-                Toast.makeText(this, R.string.overlay_permission_prompt, Toast.LENGTH_LONG).show()
-                return
-            }
-
-            val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
-            if (mpManager != null) {
-                projectionLauncher.launch(mpManager.createScreenCaptureIntent())
-            } else {
-                Toast.makeText(this, R.string.ai_permission_denied, Toast.LENGTH_SHORT).show()
-            }
-        } else {
-            val stopIntent = Intent(this, ScreenAiProjectionService::class.java)
-            stopService(stopIntent)
+        val policyRepo = PolicyRepository.getInstance(applicationContext)
+        val currentPolicy = policyRepo.getCurrentPolicy()
+        if (currentPolicy.isSupervised && !currentPolicy.isSelfControlAllowed) {
+            Toast.makeText(this, R.string.self_control_section_locked_by_guardian, Toast.LENGTH_SHORT).show()
+            refreshSettingsAiUi()
+            return
         }
+
+        val updatedPolicy = currentPolicy.copy(
+            isScreenAiEnabledGlobally = enable,
+            screenAiSchemaVersion = DevicePolicyBundle.CURRENT_SCREEN_AI_SCHEMA_VERSION
+        )
+
+        lifecycleScope.launch {
+            if (enable) {
+                val saved = policyRepo.saveAndEnforceSelfPolicy(updatedPolicy)
+                if (isFinishing || isDestroyed) return@launch
+                if (!saved) {
+                    Toast.makeText(this@MainActivity, R.string.self_control_section_locked_by_guardian, Toast.LENGTH_SHORT).show()
+                    refreshSettingsAiUi()
+                    return@launch
+                }
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    val reconcileResult = withContext(Dispatchers.IO) {
+                        AccessibilityPolicyCoordinator.reconcile(this@MainActivity, updatedPolicy)
+                    }
+                    if (isFinishing || isDestroyed) return@launch
+                    when (reconcileResult) {
+                        is AccessibilityReconcileResult.AlreadyActive,
+                        is AccessibilityReconcileResult.EnabledSilently -> {
+                            if (ScreenAiProjectionService.isRunning) {
+                                stopService(Intent(this@MainActivity, ScreenAiProjectionService::class.java))
+                                withTimeoutOrNull(2_000L) {
+                                    ScreenAiProjectionService.isRunningFlow.first { !it }
+                                }
+                            }
+                            HisnAccessibilityService.instance?.syncStandaloneAiState(true)
+                            if (isFinishing || isDestroyed) return@launch
+                            refreshSettingsAiUi()
+                            return@launch
+                        }
+                        else -> {
+                            // Fall back to MediaProjection flow on QR OOBE / manual activation without forcing A11y
+                            launchMediaProjectionFlow()
+                        }
+                    }
+                } else {
+                    launchMediaProjectionFlow()
+                }
+            } else {
+                stopService(Intent(this@MainActivity, ScreenAiProjectionService::class.java))
+                policyRepo.saveAndEnforceSelfPolicy(updatedPolicy)
+                withContext(Dispatchers.IO) {
+                    AccessibilityPolicyCoordinator.reconcile(this@MainActivity, updatedPolicy)
+                }
+                if (!isFinishing && !isDestroyed) {
+                    refreshSettingsAiUi()
+                }
+            }
+        }
+    }
+
+    private suspend fun launchMediaProjectionFlow() {
+        if (!Settings.canDrawOverlays(this)) {
+            revertScreenAiPolicyToDisabled()
+            if (isFinishing || isDestroyed) return
+            refreshSettingsAiUi()
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                "package:$packageName".toUri()
+            )
+            startActivity(intent)
+            Toast.makeText(this, R.string.overlay_permission_prompt, Toast.LENGTH_LONG).show()
+            return
+        }
+
+        val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
+        if (mpManager != null) {
+            projectionLauncher.launch(mpManager.createScreenCaptureIntent())
+        } else {
+            revertScreenAiPolicyToDisabled()
+            if (isFinishing || isDestroyed) return
+            refreshSettingsAiUi()
+            Toast.makeText(this, R.string.ai_permission_denied, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private suspend fun revertScreenAiPolicyToDisabled() {
+        val policyRepo = PolicyRepository.getInstance(applicationContext)
+        val current = policyRepo.getCurrentPolicy()
+        if (current.isScreenAiEnabledGlobally) {
+            val reverted = current.copy(
+                isScreenAiEnabledGlobally = false,
+                screenAiSchemaVersion = DevicePolicyBundle.CURRENT_SCREEN_AI_SCHEMA_VERSION
+            )
+            policyRepo.saveAndEnforceSelfPolicy(reverted)
+            withContext(Dispatchers.IO) {
+                AccessibilityPolicyCoordinator.reconcile(this@MainActivity, reverted)
+            }
+        }
+    }
+
+    private fun refreshSettingsAiUi() {
+        supportFragmentManager.fragments
+            .filterIsInstance<SettingsFragment>()
+            .forEach { it.updateAiUi() }
     }
 
     override fun onCheckOtaRequested() {

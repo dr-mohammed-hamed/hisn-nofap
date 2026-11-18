@@ -17,10 +17,16 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.drmohammed.antiporn.R
+import com.drmohammed.antiporn.accessibility.HisnAccessibilityService
+import com.drmohammed.antiporn.accessibility.control.AccessibilityPolicyCoordinator
+import com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator
+import com.drmohammed.antiporn.accessibility.ui.AccessibilityOnboardingBottomSheet
+import com.drmohammed.antiporn.banking.BankingCloakManager
 import com.drmohammed.antiporn.core.engine.ProtectionEngine
 import com.drmohammed.antiporn.core.model.ShieldStatus
 import com.drmohammed.antiporn.curfew.CurfewForegroundWatcher
 import com.drmohammed.antiporn.curfew.NapController
+import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.databinding.FragmentHomeBinding
 import com.drmohammed.antiporn.provisioning.ui.ProvisioningWizardActivity
 import com.drmohammed.antiporn.shields.DnsShield
@@ -93,7 +99,7 @@ class HomeFragment : Fragment() {
         wasStopped = false
         homeViewModel.refreshProtectionState(isEnforcing = false, force = forceRefresh)
         homeViewModel.tickNap()
-        checkUsageAccess()
+        updateSmartBanners()
     }
 
     override fun onStop() {
@@ -132,8 +138,7 @@ class HomeFragment : Fragment() {
 
         updateProtectionState(state.protectionState, state.isApplying)
         updateNapCountdown(state.napRemainingMs, state.isNapActive, state.isCurfewActive)
-
-        binding.btnGrantUsageAccess.visibility = if (!state.hasUsageAccess) View.VISIBLE else View.GONE
+        updateSmartBanners()
     }
 
     private fun setupListeners() {
@@ -276,6 +281,24 @@ class HomeFragment : Fragment() {
                 Toast.makeText(ctx.applicationContext, R.string.toast_open_settings_failed, Toast.LENGTH_SHORT).show()
             }
         }
+
+        binding.btnCompleteA11ySetup.setOnClickListener {
+            val ctx = context ?: return@setOnClickListener
+            if (!isAdded) return@setOnClickListener
+            val policy = try {
+                PolicyRepository.getInstance(ctx).getCurrentPolicy()
+            } catch (_: Throwable) {
+                null
+            }
+            val reasons = policy?.let { AccessibilityPolicyCoordinator.getRequiredReasons(it) } ?: emptySet()
+            val isSupervised = policy?.isSupervised == true
+            val reason = AccessibilityOnboardingBottomSheet.reasonFromSet(reasons, isFromGuardian = isSupervised)
+            AccessibilityOnboardingBottomSheet.showIfNotShowing(
+                fragmentManager = parentFragmentManager,
+                reason = reason,
+                isFromGuardian = isSupervised
+            )
+        }
     }
 
     fun updateProtectionState(state: ProtectionUiState, isApplying: Boolean = false) {
@@ -408,10 +431,56 @@ class HomeFragment : Fragment() {
         homeViewModel.tickNap()
     }
 
+    private fun updateSmartBanners() {
+        checkAccessibilityBanner()
+        checkUsageAccess()
+    }
+
+    private fun checkAccessibilityBanner() {
+        val ctx = context ?: return
+        val b = _binding ?: return
+        val policy = try {
+            PolicyRepository.getInstance(ctx).getCurrentPolicy()
+        } catch (_: Throwable) {
+            null
+        } ?: run {
+            b.cardA11yRequired.visibility = View.GONE
+            return
+        }
+
+        val isA11yActive = HisnAccessibilityService.instance != null ||
+            AccessibilitySelfActivator.isServiceEnabledInSettings(ctx)
+        val isA11yRequired = AccessibilityPolicyCoordinator.isAccessibilityRequired(policy)
+        val isCloaked = BankingCloakManager.isCloaked(ctx)
+
+        if (isA11yRequired && !isA11yActive && !isCloaked) {
+            if (policy.isSupervised) {
+                b.tvA11yRequiredTitle.setText(R.string.home_a11y_required_title_guardian)
+                b.tvA11yRequiredDesc.setText(R.string.home_a11y_required_desc_guardian)
+            } else {
+                b.tvA11yRequiredTitle.setText(R.string.home_a11y_required_title)
+                b.tvA11yRequiredDesc.setText(R.string.home_a11y_required_desc)
+            }
+            b.cardA11yRequired.visibility = View.VISIBLE
+        } else {
+            b.cardA11yRequired.visibility = View.GONE
+        }
+    }
+
     private fun checkUsageAccess() {
         val ctx = context ?: return
+        val b = _binding ?: return
+        val policy = try {
+            PolicyRepository.getInstance(ctx).getCurrentPolicy()
+        } catch (_: Throwable) {
+            null
+        }
+        val isA11yActive = HisnAccessibilityService.instance != null ||
+            AccessibilitySelfActivator.isServiceEnabledInSettings(ctx)
+        val isUsageRequired = policy != null &&
+            AccessibilityPolicyCoordinator.isUsageAccessRequired(policy, isA11yActive)
         val hasUsage = CurfewForegroundWatcher.hasUsageStatsPermission(ctx)
-        _binding?.btnGrantUsageAccess?.visibility = if (!hasUsage) View.VISIBLE else View.GONE
+        b.btnGrantUsageAccess.visibility = if (isUsageRequired && !hasUsage) View.VISIBLE else View.GONE
     }
 
     override fun onDestroyView() {

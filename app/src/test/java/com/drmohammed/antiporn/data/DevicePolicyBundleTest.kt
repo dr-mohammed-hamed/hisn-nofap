@@ -28,7 +28,8 @@ class DevicePolicyBundleTest {
         assertTrue(policy.isVpnBlackholeEnabled)
         assertTrue(policy.isIncognitoBlocked)
         assertFalse(policy.lockNewInstallsUntilApproved)
-        assertTrue(policy.isScreenAiEnabledGlobally)
+        assertFalse(policy.isScreenAiEnabledGlobally)
+        assertEquals(DevicePolicyBundle.CURRENT_SCREEN_AI_SCHEMA_VERSION, policy.screenAiSchemaVersion)
         assertTrue(policy.customBlacklistPackages.isEmpty())
         assertEquals(com.drmohammed.antiporn.curfew.CurfewConfig.STATIC_WHITELIST, policy.customCurfewWhitelistPackages)
         assertTrue(policy.curfewVpnBypassPackages.isEmpty())
@@ -476,5 +477,154 @@ class DevicePolicyBundleTest {
         assertNull(DevicePolicyBundle.fromJsonOrNull("{corrupted"))
         assertNull(DevicePolicyBundle.fromJsonOrNull(""))
         assertNotNull(DevicePolicyBundle.fromJsonOrNull(constructed.toJson()))
+    }
+
+    @Test
+    fun testLegacyScreenAiSchemaV1_migratesTrueToFalseAndUpgradesSchemaVersionTo2() {
+        // 1. Missing screenAiSchemaVersion with legacy isScreenAiEnabledGlobally = true
+        val legacyMapMissing = mapOf<String, Any?>(
+            "isScreenAiEnabledGlobally" to true,
+            "version" to 3L
+        )
+        val migratedFromMapMissing = DevicePolicyBundle.fromMap(legacyMapMissing)
+        assertFalse(migratedFromMapMissing.isScreenAiEnabledGlobally)
+        assertEquals(DevicePolicyBundle.CURRENT_SCREEN_AI_SCHEMA_VERSION, migratedFromMapMissing.screenAiSchemaVersion)
+        assertEquals(2, migratedFromMapMissing.screenAiSchemaVersion)
+
+        val legacyJsonMissing = """{"isScreenAiEnabledGlobally": true, "version": 3}"""
+        val migratedFromJsonMissing = DevicePolicyBundle.fromJson(legacyJsonMissing)
+        assertFalse(migratedFromJsonMissing.isScreenAiEnabledGlobally)
+        assertEquals(2, migratedFromJsonMissing.screenAiSchemaVersion)
+
+        // 2. Explicit screenAiSchemaVersion = 1 with isScreenAiEnabledGlobally = true
+        val legacyMapV1 = mapOf<String, Any?>(
+            "isScreenAiEnabledGlobally" to true,
+            "screenAiSchemaVersion" to 1
+        )
+        val migratedFromMapV1 = DevicePolicyBundle.fromMap(legacyMapV1)
+        assertFalse(migratedFromMapV1.isScreenAiEnabledGlobally)
+        assertEquals(2, migratedFromMapV1.screenAiSchemaVersion)
+
+        val legacyJsonV1 = """{"isScreenAiEnabledGlobally": true, "screenAiSchemaVersion": 1}"""
+        val migratedFromJsonV1 = DevicePolicyBundle.fromJson(legacyJsonV1)
+        assertFalse(migratedFromJsonV1.isScreenAiEnabledGlobally)
+        assertEquals(2, migratedFromJsonV1.screenAiSchemaVersion)
+    }
+
+    @Test
+    fun testScreenAiSchemaV2AndAbove_preservesIsScreenAiEnabledGloballyTrue() {
+        val v2Map = mapOf<String, Any?>(
+            "isScreenAiEnabledGlobally" to true,
+            "screenAiSchemaVersion" to 2
+        )
+        val fromV2Map = DevicePolicyBundle.fromMap(v2Map)
+        assertTrue(fromV2Map.isScreenAiEnabledGlobally)
+        assertEquals(2, fromV2Map.screenAiSchemaVersion)
+
+        val v2Json = """{"isScreenAiEnabledGlobally": true, "screenAiSchemaVersion": 2}"""
+        val fromV2Json = DevicePolicyBundle.fromJson(v2Json)
+        assertTrue(fromV2Json.isScreenAiEnabledGlobally)
+        assertEquals(2, fromV2Json.screenAiSchemaVersion)
+
+        // Future schema version (>= 2) also preserved
+        val v3Bundle = DevicePolicyBundle(
+            isScreenAiEnabledGlobally = true,
+            screenAiSchemaVersion = 3
+        )
+        val v3RoundTripMap = DevicePolicyBundle.fromMap(v3Bundle.toMap())
+        assertTrue(v3RoundTripMap.isScreenAiEnabledGlobally)
+        assertEquals(3, v3RoundTripMap.screenAiSchemaVersion)
+
+        val v3RoundTripJson = DevicePolicyBundle.fromJson(v3Bundle.toJson())
+        assertTrue(v3RoundTripJson.isScreenAiEnabledGlobally)
+        assertEquals(3, v3RoundTripJson.screenAiSchemaVersion)
+    }
+
+    @Test
+    fun testWardCapabilityFields_excludedFromToMap_butRoundTrippedInFromMapAndJson() {
+        val populated = DevicePolicyBundle(
+            wardHasAccessibilityService = true,
+            wardHasUsageStats = false,
+            wardCanWriteSecureSettings = true,
+            wardCapabilitiesUpdatedAt = 1791234567890L,
+            wardA11yTamperAt = 1791234500000L,
+            wardSdkInt = 35
+        )
+
+        // toMap() MUST NEVER output any of the 6 ward* telemetry keys so Guardian pushes never clobber them
+        val map = populated.toMap()
+        assertFalse(map.containsKey("wardHasAccessibilityService"))
+        assertFalse(map.containsKey("wardHasUsageStats"))
+        assertFalse(map.containsKey("wardCanWriteSecureSettings"))
+        assertFalse(map.containsKey("wardCapabilitiesUpdatedAt"))
+        assertFalse(map.containsKey("wardA11yTamperAt"))
+        assertFalse(map.containsKey("wardSdkInt"))
+
+        // fromMap() reads all 6 keys cleanly when present in Firestore document snapshots
+        val firestoreDoc = map.toMutableMap().apply {
+            put("wardHasAccessibilityService", true)
+            put("wardHasUsageStats", false)
+            put("wardCanWriteSecureSettings", true)
+            put("wardCapabilitiesUpdatedAt", 1791234567890L)
+            put("wardA11yTamperAt", 1791234500000L)
+            put("wardSdkInt", 35)
+        }
+        val fromMapRestored = DevicePolicyBundle.fromMap(firestoreDoc)
+        assertEquals(true, fromMapRestored.wardHasAccessibilityService)
+        assertEquals(false, fromMapRestored.wardHasUsageStats)
+        assertEquals(true, fromMapRestored.wardCanWriteSecureSettings)
+        assertEquals(1791234567890L, fromMapRestored.wardCapabilitiesUpdatedAt)
+        assertEquals(1791234500000L, fromMapRestored.wardA11yTamperAt)
+        assertEquals(35, fromMapRestored.wardSdkInt)
+
+        // toJson() + fromJson() round-trip all 6 keys cleanly for local cache and activity Intent extras
+        val jsonStr = populated.toJson()
+        val fromJsonRestored = DevicePolicyBundle.fromJson(jsonStr)
+        assertEquals(true, fromJsonRestored.wardHasAccessibilityService)
+        assertEquals(false, fromJsonRestored.wardHasUsageStats)
+        assertEquals(true, fromJsonRestored.wardCanWriteSecureSettings)
+        assertEquals(1791234567890L, fromJsonRestored.wardCapabilitiesUpdatedAt)
+        assertEquals(1791234500000L, fromJsonRestored.wardA11yTamperAt)
+        assertEquals(35, fromJsonRestored.wardSdkInt)
+
+        // Default null/0 values round-trip cleanly too
+        val defaultJsonRestored = DevicePolicyBundle.fromJson(DevicePolicyBundle.defaultPolicy().toJson())
+        assertNull(defaultJsonRestored.wardHasAccessibilityService)
+        assertNull(defaultJsonRestored.wardHasUsageStats)
+        assertNull(defaultJsonRestored.wardCanWriteSecureSettings)
+        assertEquals(0L, defaultJsonRestored.wardCapabilitiesUpdatedAt)
+        assertEquals(0L, defaultJsonRestored.wardA11yTamperAt)
+        assertNull(defaultJsonRestored.wardSdkInt)
+    }
+
+    @Test
+    fun testWaqfaUseInstantAccessibilityMode_defaultFalseAndRoundTripsTrueInMapAndJson() {
+        val defaultWaqfa = com.drmohammed.antiporn.waqfa.model.WaqfaConfig()
+        assertFalse(defaultWaqfa.useInstantAccessibilityMode)
+
+        // Legacy payload missing useInstantAccessibilityMode defaults to false
+        assertFalse(
+            com.drmohammed.antiporn.waqfa.model.WaqfaConfig.fromMap(mapOf("isEnabled" to true)).useInstantAccessibilityMode
+        )
+        assertFalse(
+            com.drmohammed.antiporn.waqfa.model.WaqfaConfig.fromJson(org.json.JSONObject("""{"isEnabled": true}""")).useInstantAccessibilityMode
+        )
+
+        // Round-trip true in Map & JSON via DevicePolicyBundle
+        val instantBundle = DevicePolicyBundle.defaultPolicy().copy(
+            waqfaConfig = com.drmohammed.antiporn.waqfa.model.WaqfaConfig(
+                isEnabled = true,
+                targetPackages = setOf("com.instagram.android"),
+                useInstantAccessibilityMode = true
+            )
+        )
+
+        val restoredFromMap = DevicePolicyBundle.fromMap(instantBundle.toMap())
+        assertTrue(restoredFromMap.waqfaConfig.useInstantAccessibilityMode)
+        assertEquals(setOf("com.instagram.android"), restoredFromMap.waqfaConfig.targetPackages)
+
+        val restoredFromJson = DevicePolicyBundle.fromJson(instantBundle.toJson())
+        assertTrue(restoredFromJson.waqfaConfig.useInstantAccessibilityMode)
+        assertEquals(setOf("com.instagram.android"), restoredFromJson.waqfaConfig.targetPackages)
     }
 }

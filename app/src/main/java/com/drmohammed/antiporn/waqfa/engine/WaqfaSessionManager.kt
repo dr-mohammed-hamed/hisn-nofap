@@ -55,7 +55,7 @@ class WaqfaSessionManager(
                     WaqfaAlarmScheduler.scheduleSessionTimeoutAlarm(context, restored)
                     WaqfaAlarmScheduler.schedulePreTimeoutWarningAlarm(context, restored)
                 }
-                Timber.tag(TAG).i("Restored active Waqfa session from DB for %s (isOpen=%b)", restored.packageName, restored.isOpenSession)
+                Timber.tag(TAG).i("Restored active Waqfa session from DB for ${restored.packageName} (isOpen=${restored.isOpenSession})")
             }
         } catch (e: Exception) {
             Timber.tag(TAG).w(e, "Failed restoring initial active Waqfa session from DB")

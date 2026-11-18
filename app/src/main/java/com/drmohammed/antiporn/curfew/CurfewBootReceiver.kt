@@ -4,6 +4,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator
+import com.drmohammed.antiporn.banking.BankingCloakManager
 import com.drmohammed.antiporn.core.engine.ProtectionEngine
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
 import com.drmohammed.antiporn.curfew.notification.ProtectionNotificationCoordinator
@@ -49,6 +51,9 @@ class CurfewBootReceiver : BroadcastReceiver() {
                 CurfewScheduler.scheduleNextAlarms(appContext)
 
                 if (action == Intent.ACTION_BOOT_COMPLETED || action == Intent.ACTION_MY_PACKAGE_REPLACED) {
+                    if (action == Intent.ACTION_BOOT_COMPLETED) {
+                        restoreBankingCloakAfterBoot(appContext)
+                    }
                     rescheduleNapIfNeeded(appContext)
                     rescheduleSnoozeIfNeeded(appContext)
                     CurfewEnforcer.repairStuckSuspendedApps(appContext)
@@ -73,6 +78,19 @@ class CurfewBootReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "AntiPorn_BootReceiver"
+
+        private fun restoreBankingCloakAfterBoot(appContext: Context) {
+            try {
+                if (AccessibilitySelfActivator.hasPendingCloakFlag(appContext) ||
+                    BankingCloakManager.isCloaked(appContext)
+                ) {
+                    Log.i(TAG, "Pending or active banking cloak detected on boot; restoring protection")
+                    BankingCloakManager.restoreProtection(appContext)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error restoring banking cloak after boot", e)
+            }
+        }
 
         private fun rescheduleNapIfNeeded(appContext: Context) {
             try {

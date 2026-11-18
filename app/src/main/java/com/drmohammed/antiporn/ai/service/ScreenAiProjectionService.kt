@@ -20,6 +20,10 @@ import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.drmohammed.antiporn.MainActivity
 import com.drmohammed.antiporn.R
+import com.drmohammed.antiporn.accessibility.HisnAccessibilityService
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Clean Foreground Service coordinating screen capture and AI modesty/nudity detection.
@@ -47,6 +51,14 @@ class ScreenAiProjectionService : Service() {
         @Volatile
         var isRunning: Boolean = false
             private set
+
+        private val _isRunningFlow = MutableStateFlow(false)
+        val isRunningFlow: StateFlow<Boolean> = _isRunningFlow.asStateFlow()
+
+        private fun updateRunningState(running: Boolean) {
+            isRunning = running
+            _isRunningFlow.value = running
+        }
 
         @Volatile
         var isStopping: Boolean = false
@@ -84,16 +96,6 @@ class ScreenAiProjectionService : Service() {
         initError = ""
         Log.i(TAG, "ScreenAiProjectionService onCreate")
 
-        inferenceCoordinator = AiInferenceCoordinator(
-            context = applicationContext,
-            mainHandler = mainHandler,
-            onDetectionUpdated = { label, confidence ->
-                lastDetection = LastDetection(label, confidence)
-                lastDetectedLabel = label
-                lastConfidence = confidence
-            }
-        )
-
         streamManager = ScreenFrameStreamManager(
             context = applicationContext,
             onFrameAcquired = { image, width, height ->
@@ -112,14 +114,46 @@ class ScreenAiProjectionService : Service() {
             }
         )
 
-        inferenceCoordinator.initialize {
-            initError = inferenceCoordinator.initError
-        }
+        initializeInferenceCoordinator()
         createNotificationChannel()
     }
 
+    private fun initializeInferenceCoordinator() {
+        val coordinator = AiInferenceCoordinator(
+            context = applicationContext,
+            mainHandler = mainHandler,
+            onDetectionUpdated = { label, confidence ->
+                lastDetection = LastDetection(label, confidence)
+                lastDetectedLabel = label
+                lastConfidence = confidence
+            }
+        )
+        inferenceCoordinator = coordinator
+        coordinator.initialize { success ->
+            if (inferenceCoordinator !== coordinator) return@initialize
+            initError = coordinator.initError
+            if (!success && isRunning) {
+                val errorMsg = initError.ifBlank { "AI detectors failed to initialize" }
+                Log.e(TAG, "Async detector initialization failed while service is running: $errorMsg")
+                mainHandler.post {
+                    Toast.makeText(applicationContext, errorMsg, Toast.LENGTH_LONG).show()
+                    if (isRunning && inferenceCoordinator === coordinator) {
+                        handleStopAction()
+                    }
+                }
+            }
+        }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val action = intent?.action ?: return START_NOT_STICKY
+        val action = intent?.action
+        if (action == null) {
+            Log.w(TAG, "onStartCommand received null intent/action; satisfying FGS contract and stopping cleanly")
+            if (!isRunning) {
+                stopSafelyWithFgsContract()
+            }
+            return START_NOT_STICKY
+        }
 
         if (action == ACTION_STOP) {
             handleStopAction()
@@ -128,15 +162,27 @@ class ScreenAiProjectionService : Service() {
 
         if (action == ACTION_START) {
             handleStartAction(intent)
+        } else {
+            Log.w(TAG, "onStartCommand received unknown action=$action; stopping cleanly")
+            if (!isRunning) {
+                stopSafelyWithFgsContract()
+            }
         }
 
         return START_NOT_STICKY
     }
 
     private fun handleStartAction(intent: Intent) {
-        if (isRunning || isStopping) {
-            Log.w(TAG, "Duplicate/reentrant ACTION_START ignored; running=$isRunning stopping=$isStopping")
+        if (isRunning) {
+            Log.w(TAG, "Duplicate/reentrant ACTION_START ignored; already running")
             return
+        }
+
+        if (isStopping) {
+            Log.i(TAG, "ACTION_START received while stopping; resetting state and re-initializing inference coordinator")
+            isStopping = false
+            initError = ""
+            initializeInferenceCoordinator()
         }
 
         if (initError.isNotEmpty()) {
@@ -144,7 +190,7 @@ class ScreenAiProjectionService : Service() {
             mainHandler.post {
                 Toast.makeText(applicationContext, initError, Toast.LENGTH_LONG).show()
             }
-            stopSelf()
+            stopSafelyWithFgsContract()
             return
         }
 
@@ -157,24 +203,36 @@ class ScreenAiProjectionService : Service() {
         }
 
         if (resultCode == android.app.Activity.RESULT_OK && resultData != null) {
+            // Unconditionally stop any active or in-flight standalone A11y coordinator before starting projection
+            HisnAccessibilityService.instance?.syncStandaloneAiState(false)
             startForegroundWithNotification()
+            // Re-assert after isRunning=true so no concurrent init callback can start a second coordinator
+            HisnAccessibilityService.instance?.syncStandaloneAiState(false)
             initMediaProjection(resultCode, resultData)
         } else {
             Log.e(TAG, "Invalid projection token parameters")
-            try {
-                startForegroundWithNotification()
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed startForeground fallback", e)
-            }
-            isRunning = false
-            isStopping = false
-            stopForeground(Service.STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            stopSafelyWithFgsContract()
         }
     }
 
+    private fun stopSafelyWithFgsContract() {
+        try {
+            startForegroundWithNotification(markRunning = false)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed startForeground fallback before stopping", e)
+        }
+        updateRunningState(false)
+        isStopping = false
+        try {
+            stopForeground(Service.STOP_FOREGROUND_REMOVE)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed stopForeground fallback", e)
+        }
+        stopSelf()
+    }
+
     private fun handleStopAction() {
-        isRunning = false
+        updateRunningState(false)
         isStopping = true
 
         streamManager.stop()
@@ -184,10 +242,12 @@ class ScreenAiProjectionService : Service() {
         stopSelf()
     }
 
-    private fun startForegroundWithNotification() {
-        lastDetection = LastDetection()
-        lastDetectedLabel = ""
-        lastConfidence = 0f
+    private fun startForegroundWithNotification(markRunning: Boolean = true) {
+        if (markRunning) {
+            lastDetection = LastDetection()
+            lastDetectedLabel = ""
+            lastConfidence = 0f
+        }
 
         val notification = buildServiceNotification()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -199,13 +259,15 @@ class ScreenAiProjectionService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
-        isRunning = true
+        if (markRunning) {
+            updateRunningState(true)
+        }
     }
 
     private fun initMediaProjection(resultCode: Int, resultData: Intent) {
         val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
         if (mpManager == null) {
-            isRunning = false
+            updateRunningState(false)
             isStopping = false
             stopSelf()
             return
@@ -214,7 +276,7 @@ class ScreenAiProjectionService : Service() {
         try {
             val mp = mpManager.getMediaProjection(resultCode, resultData) ?: run {
                 Log.e(TAG, "getMediaProjection returned null")
-                isRunning = false
+                updateRunningState(false)
                 isStopping = false
                 stopSelf()
                 return
@@ -237,11 +299,13 @@ class ScreenAiProjectionService : Service() {
             projectionCallback = callback
             mp.registerCallback(callback, mainHandler)
 
+            // Guarantee mutual exclusion even if standalone coordinator was mid-initialization
+            HisnAccessibilityService.instance?.syncStandaloneAiState(false)
             inferenceCoordinator.start()
             streamManager.start(mp)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize MediaProjection", e)
-            isRunning = false
+            updateRunningState(false)
             isStopping = false
             stopSelf()
         }
@@ -323,7 +387,7 @@ class ScreenAiProjectionService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         Log.i(TAG, "ScreenAiProjectionService onDestroy")
-        isRunning = false
+        updateRunningState(false)
         isStopping = false
 
         streamManager.stop()

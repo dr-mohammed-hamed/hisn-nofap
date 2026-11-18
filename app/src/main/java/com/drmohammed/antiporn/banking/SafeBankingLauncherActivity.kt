@@ -30,6 +30,12 @@ class SafeBankingLauncherActivity : Activity() {
     }
 
     private fun handleLauncherIntent(intent: Intent?) {
+        if (intent?.action == BankingCloakManager.ACTION_OPEN_A11Y_AFTER_BANKING) {
+            Timber.tag(TAG).i("Handling direct notification tap to restore Accessibility after banking")
+            BankingCloakManager.handleOpenAccessibilityAfterBanking(this)
+            return
+        }
+
         val now = SystemClock.elapsedRealtime()
         if (now - lastLaunchTimeMs < DEBOUNCE_WINDOW_MS) {
             Timber.tag(TAG).d("Ignoring rapid duplicate launcher attempt within debounce window")

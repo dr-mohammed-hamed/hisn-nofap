@@ -6,6 +6,7 @@ import android.os.Build
 import androidx.core.content.pm.PackageInfoCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.drmohammed.antiporn.accessibility.HisnAccessibilityService
 import com.drmohammed.antiporn.ai.service.ScreenAiProjectionService
 import com.drmohammed.antiporn.cloud.auth.GoogleAuthManager
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
@@ -44,8 +45,22 @@ class SettingsViewModel(
         loadAppVersion()
         observeOtaUpdates()
         observePolicy()
+        observeAiEngineState()
         startCountdownTicker()
         refreshAll()
+    }
+
+    private fun observeAiEngineState() {
+        viewModelScope.launch {
+            ScreenAiProjectionService.isRunningFlow.collect {
+                refreshAiState()
+            }
+        }
+        viewModelScope.launch {
+            HisnAccessibilityService.isStandaloneAiActiveFlow.collect {
+                refreshAiState()
+            }
+        }
     }
 
     private fun startCountdownTicker() {
@@ -80,8 +95,12 @@ class SettingsViewModel(
                     ((policy.deactivationUnlockAt ?: 0L) - now).coerceAtLeast(0L)
                 } else 0L
 
+                val isAiRunningNow = ScreenAiProjectionService.isRunning || HisnAccessibilityService.isStandaloneAiActive
+                val isAiLocked = policy.isSupervised && !policy.isSelfControlAllowed
                 _uiState.update { current ->
                     current.copy(
+                        isAiRunning = isAiRunningNow,
+                        isAiControlLocked = isAiLocked,
                         isDeviceOwner = isDo,
                         isSupervised = policy.isSupervised,
                         isSelfControlAllowed = policy.isSelfControlAllowed,
@@ -147,7 +166,9 @@ class SettingsViewModel(
     }
 
     fun refreshAiState() {
-        val isRunning = ScreenAiProjectionService.isRunning
+        val isRunning = ScreenAiProjectionService.isRunning || HisnAccessibilityService.isStandaloneAiActive
+        val policy = policyRepository.getCurrentPolicy()
+        val isAiLocked = policy.isSupervised && !policy.isSelfControlAllowed
         val initError = ScreenAiProjectionService.initError
         val fps = ScreenAiProjectionService.currentFps
         val lastDetection = ScreenAiProjectionService.lastDetection
@@ -156,6 +177,7 @@ class SettingsViewModel(
         _uiState.update { current ->
             current.copy(
                 isAiRunning = isRunning,
+                isAiControlLocked = isAiLocked,
                 aiInitError = initError,
                 aiFps = fps,
                 aiLastDetectionLabel = lastDetection.label,
@@ -186,11 +208,13 @@ class SettingsViewModel(
             ((policy.deactivationUnlockAt ?: 0L) - now).coerceAtLeast(0L)
         } else 0L
 
+        val isAiLocked = policy.isSupervised && !policy.isSelfControlAllowed
         _uiState.update {
             it.copy(
                 isDeviceOwner = isDo,
                 isSupervised = policy.isSupervised,
                 isSelfControlAllowed = policy.isSelfControlAllowed,
+                isAiControlLocked = isAiLocked,
                 isDeactivationPending = isPending,
                 deactivationUnlockAt = policy.deactivationUnlockAt,
                 remainingDeactivationMs = remaining

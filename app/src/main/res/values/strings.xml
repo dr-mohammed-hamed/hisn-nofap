@@ -1364,6 +1364,11 @@
     <string name="btn_safe_launch">تشغيل آمن</string>
     <string name="btn_pin_shortcut">اختصار</string>
     <string name="no_banking_apps_installed">لا توجد تطبيقات بنكية مثبتة</string>
+    <string name="notif_banking_cloak_active_title">الوضع البنكي الآمن نشط</string>
+    <string name="notif_banking_cloak_active_auto_msg">تم إيقاف خدمة الوصول مؤقتاً لحماية معاملاتك البنكية. اضغط هنا لاستعادة الحماية فوراً عند الانتهاء.</string>
+    <string name="notif_banking_cloak_active_manual_msg">تم إيقاف خدمة الوصول مؤقتاً لحماية معاملاتك البنكية. اضغط هنا لفتح إعدادات إمكانية الوصول وإعادة تفعيلها عند الانتهاء.</string>
+    <string name="notif_banking_manual_restore_title">أعِد تفعيل خدمة الوصول</string>
+    <string name="notif_banking_manual_restore_msg">انتهت جلستك البنكية. اضغط هنا لفتح إعدادات إمكانية الوصول وإعادة تفعيل حماية حصن.</string>
     <string name="bottom_sheet_do_title">صلاحية مسؤول الجهاز</string>
     <string name="bottom_sheet_do_subtitle">إدارة الصلاحية السيادية والتفكيك الآمن</string>
     <string name="card_do_status_active_title">الصلاحية نشطة ومحمية</string>
@@ -1404,4 +1409,77 @@
     <string name="page_shield_guardian_card_title">درع الصفحات (عن بُعد)</string>
     <string name="page_shield_registered_apps_header">التطبيقات المدعومة</string>
     <string name="page_shield_freeze_range_error">مدة التجميد يجب أن تكون بين 1 و 1440 دقيقة</string>
+
+    <!-- Remote Accessibility, Capability Sync & Guardian Vision Guard AI -->
+    <string name="feature_name_page_shield">درع الصفحات</string>
+    <string name="feature_name_waqfa">نظام «وَقْفَة»</string>
+    <string name="feature_name_vision_ai">حارس غض البصر (الذكاء الاصطناعي)</string>
+    <string name="list_separator">، </string>
+    <string name="notif_remote_a11y_required_title">يلزم تفعيل خدمة الوصول للحماية</string>
+    <string name="notif_remote_a11y_required_msg">تتطلب إعدادات الحماية (%1$s) تفعيل خدمة إمكانية الوصول لتطبيق الحصن. اضغط هنا لفتح الإعدادات وتفعيلها.</string>
+    <string name="notif_remote_usage_access_required_title">يلزم منح إذن الوصول لبيانات الاستخدام</string>
+    <string name="notif_remote_usage_access_required_msg">يتطلب نظام «وَقْفَة» منح إذن الوصول لبيانات الاستخدام لمراقبة التطبيقات المستهدفة. اضغط هنا لفتح الإعدادات.</string>
+    <string name="guardian_vision_ai_title">حارس غض البصر (الذكاء الاصطناعي)</string>
+    <string name="guardian_vision_ai_desc">تفعيل الفحص الذكي اللحظي لحفظ العورات على جهاز المكفول</string>
+    <string name="guardian_alert_a11y_tamper_title">تنبيه: تم إيقاف خدمة الوصول على جهاز المكفول</string>
+    <string name="guardian_alert_a11y_tamper_msg">قام المكفول بتعطيل خدمة إمكانية الوصول المطلوبة لتشغيل الحماية المفعّلة. يرجى متابعة الجهاز وإعادة تفعيلها.</string>
+    <string name="guardian_alert_a11y_pending_qr_title">بانتظار تفعيل خدمة الوصول يدوياً</string>
+    <string name="guardian_alert_a11y_pending_qr_msg">الحماية المفعّلة تتطلب تفعيل خدمة الوصول يدوياً على جهاز المكفول (بسبب التفعيل عبر QR بدون صلاحية النظام). تم إرسال إشعار توجيهي للجهاز.</string>
+    <string name="guardian_alert_usage_access_pending_title">بانتظار إذن الوصول لبيانات الاستخدام</string>
+    <string name="guardian_alert_usage_access_pending_msg">يتطلب نظام «وَقْفَة» تفعيل إذن الوصول لبيانات الاستخدام على جهاز المكفول ليعمل بشكل كامل. تم إرسال إشعار توجيهي للجهاز.</string>
+
+    <!-- Wave 3: Accessibility Onboarding, Banking Shortcut Prompt & Smart Engine UX -->
+    <string name="a11y_onboarding_title">تفعيل خدمة إمكانية الوصول</string>
+    <string name="a11y_onboarding_step1_badge">الخطوة 1</string>
+    <string name="a11y_onboarding_step2_badge">الخطوة 2</string>
+    <string name="a11y_onboarding_step3_badge">الخطوة 3 (أندرويد 13+)</string>
+    <string name="a11y_onboarding_reason_page_shield">لحجب مقاطع Shorts والريلز فور ظهورها داخل التطبيقات، يحتاج تطبيق «الحِصْن» إلى تشغيل خدمة إمكانية الوصول.</string>
+    <string name="a11y_onboarding_reason_waqfa">لتشغيل نظام «وَقْفَة» بالوضع الفوري السريع (0ms) واعتراض التطبيقات لحظة فتحها، يحتاج تطبيق «الحِصْن» إلى خدمة إمكانية الوصول.</string>
+    <string name="a11y_onboarding_reason_vision_ai">لتشغيل «حارس غض البصر» بالذكاء الاصطناعي وفحص الشاشة تلقائياً على هذا الإصدار من أندرويد، يحتاج تطبيق «الحِصْن» إلى خدمة إمكانية الوصول.</string>
+    <string name="a11y_onboarding_reason_guardian">قام مشرفك بتفعيل درع حماية يتطلب تشغيل خدمة إمكانية الوصول لتطبيق «الحِصْن» ليعمل بشكل كامل على جهازك.</string>
+    <string name="a11y_onboarding_reason_general">لتشغيل دروع الحماية الفورية المفعّلة بكفاءة تامة، يحتاج تطبيق «الحِصْن» إلى تشغيل خدمة إمكانية الوصول.</string>
+    <string name="a11y_onboarding_step2_desc">ابحث عن «الحِصْن» داخل قائمة الخدمات المثبّتة، ثم قم بتفعيل المفتاح والموافقة على التشغيل.</string>
+    <string name="a11y_onboarding_open_settings_btn">فتح إعدادات إمكانية الوصول الآن</string>
+    <string name="a11y_onboarding_restricted_title">هل ظهرت رسالة «إعداد مقيد»؟</string>
+    <string name="a11y_onboarding_restricted_desc">في أندرويد 13 وما فوق، قد يحظر النظام الزر مؤقتاً. اضغط «فتح معلومات التطبيق» أدناه، ثم اضغط النقاط الثلاث (⋮) بالأعلى واختر «السماح بالإعدادات المقيدة»، ثم عُد لتفعيل الخدمة.</string>
+    <string name="a11y_onboarding_open_app_info_btn">فتح معلومات التطبيق</string>
+    <string name="a11y_onboarding_later_btn">لاحقاً</string>
+    <string name="a11y_onboarding_enabled_success_toast">تم تفعيل خدمة إمكانية الوصول بنجاح! الحماية نشطة الآن.</string>
+
+    <string name="banking_shortcut_prompt_title">اختصار الدخول البنكي الآمن</string>
+    <string name="banking_shortcut_prompt_msg">تم تفعيل الحماية الفورية. لفتح إنستاباي وتطبيقات البنوك دون تعارض، يمكنك إضافة اختصار الدخول البنكي الآمن للشاشة الرئيسية</string>
+    <string name="banking_shortcut_prompt_add_btn">إضافة الاختصار الآن</string>
+    <string name="banking_shortcut_prompt_later_btn">لاحقاً</string>
+
+    <string name="waqfa_instant_mode_title">الوضع الفوري السريع (0ms)</string>
+    <string name="waqfa_instant_mode_desc" formatted="false">إبقاء هذا الخيار مغلقاً يضمن توافقاً كاملاً (100%) مع إنستاباي وتطبيقات البنوك. إذا كان درع الصفحات أو حارس غض البصر مفعّلاً، يعمل النظام تلقائياً بسرعة 0ms ويعود لاختيارك فور إيقافهما.</string>
+    <string name="waqfa_instant_mode_desc_auto_upgraded">النظام يعمل حالياً بالوضع الفوري (0ms) تلقائياً لأن درع الصفحات أو حارس غض البصر نشط، وسيعود تلقائياً للوضع المتوافق مع البنوك فور إيقافهما.</string>
+    <string name="waqfa_engine_status_auto_upgraded">الوضع الفوري (0ms) نشط تلقائياً عبر الحماية المفعّلة</string>
+    <string name="waqfa_engine_status_bank_compatible">الوضع المتوافق مع البنوك نشط (إذن الاستخدام)</string>
+    <string name="waqfa_engine_status_bank_compatible_toast">الوضع المتوافق مع البنوك نشط ويعمل دون الحاجة لخدمة الوصول</string>
+    <string name="waqfa_remote_warning_a11y_qr">تنبيه: جهاز المكفول مُفعّل عبر QR ولا يمتلك صلاحية التفعيل التلقائي. سيتطلب الوضع الفوري (0ms) موافقة المكفول يدوياً على خدمة الوصول من الإعدادات.</string>
+    <string name="waqfa_remote_warning_usage_access">تنبيه: لم يتم منح إذن الوصول لبيانات الاستخدام على جهاز المكفول بعد. سيصل تنبيه للجهاز ويلزم منحه ليعمل نظام «وَقْفَة».</string>
+    <string name="waqfa_usage_access_dialog_title">يلزم إذن الوصول لبيانات الاستخدام</string>
+    <string name="waqfa_usage_access_dialog_msg">تم حفظ إعدادات «وَقْفَة» بالوضع المتوافق مع البنوك. امنح إذن «الوصول لبيانات الاستخدام» لتطبيق الحصن الآن لتفعيل مراقبة التطبيقات المختارة.</string>
+    <string name="waqfa_usage_access_dialog_open_btn">فتح إعدادات الاستخدام</string>
+    <string name="waqfa_usage_access_granted_toast">تم منح إذن الوصول لبيانات الاستخدام بنجاح!</string>
+
+    <string name="page_shield_engine_status_active">محرك درع الصفحات نشط (خدمة الوصول تعمل)</string>
+    <string name="page_shield_engine_status_auto_ready">جاهز للتفعيل التلقائي فور الحفظ (صلاحية النظام متوفرة)</string>
+    <string name="page_shield_engine_status_needs_manual">يلزم تفعيل خدمة الوصول يدوياً • اضغط للإعداد</string>
+    <string name="page_shield_engine_status_active_toast">خدمة الوصول نشطة ودرع الصفحات يعمل بأعلى كفاءة</string>
+    <string name="page_shield_engine_status_remote_active">خدمة الوصول نشطة على جهاز المكفول</string>
+    <string name="page_shield_engine_status_remote_auto_ready">جهاز المكفول يدعم التفعيل التلقائي عند الحفظ</string>
+    <string name="page_shield_engine_status_remote_needs_manual">سيتطلب تفعيله موافقة يدوية لخدمة الوصول على جهاز المكفول</string>
+    <string name="page_shield_remote_warning_a11y_qr">تنبيه: جهاز المكفول مُفعّل عبر QR ولا يدعم التفعيل الصامت لخدمة الوصول. سيصل إشعار للمكفول لتفعيل الخدمة يدوياً بعد الحفظ.</string>
+
+    <string name="home_a11y_required_title">أكمل تفعيل خدمة الوصول</string>
+    <string name="home_a11y_required_desc">بعض دروع الحماية المفعّلة تحتاج إلى تشغيل خدمة إمكانية الوصول لتطبيق «الحِصْن» حتى تعمل بكفاءة.</string>
+    <string name="home_a11y_required_title_guardian">إجراء مطلوب: تفعيل خدمة الوصول</string>
+    <string name="home_a11y_required_desc_guardian">قام مشرفك بتفعيل حماية تتطلب تشغيل خدمة إمكانية الوصول لتطبيق «الحِصْن». اضغط أدناه لإكمال التفعيل.</string>
+    <string name="home_a11y_required_btn">إكمال التفعيل الآن</string>
+
+    <string name="banking_mode_hint_a11y_off">إنستاباي وتطبيقات البنوك تعمل الآن مباشرة من الشاشة الرئيسية دون الحاجة لهذه القائمة.</string>
+    <string name="banking_mode_hint_a11y_on_adb">سيتم إيقاف الحماية لحظياً عند فتح البنك وإعادتها تلقائياً فور خروجك.</string>
+    <string name="banking_mode_hint_a11y_on_qr">سيتم إيقاف خدمة الوصول نظيفاً لفتح البنك، وستحتاج ضغطة واحدة من الإشعار لإعادة تفعيل الدرع بعد الانتهاء.</string>
 </resources>

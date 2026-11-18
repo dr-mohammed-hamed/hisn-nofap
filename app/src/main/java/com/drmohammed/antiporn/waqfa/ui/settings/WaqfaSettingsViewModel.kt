@@ -1,9 +1,13 @@
 package com.drmohammed.antiporn.waqfa.ui.settings
 
 import android.app.Application
+import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.drmohammed.antiporn.accessibility.HisnAccessibilityService
 import com.drmohammed.antiporn.accessibility.bus.ForegroundAppEventBus
+import com.drmohammed.antiporn.accessibility.control.AccessibilityPolicyCoordinator
+import com.drmohammed.antiporn.accessibility.control.AccessibilityReconcileResult
 import com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.curfew.CurfewForegroundWatcher
@@ -11,11 +15,14 @@ import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.waqfa.engine.WaqfaSessionManager
 import com.drmohammed.antiporn.waqfa.model.WaqfaConfig
 import com.drmohammed.antiporn.waqfa.model.WaqfaTimeoutReactionType
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import timber.log.Timber
 
 enum class WaqfaEngineType {
@@ -32,7 +39,15 @@ data class WaqfaSettingsUiState(
     val isSaved: Boolean = false,
     val errorMessage: String? = null,
     val engineType: WaqfaEngineType = WaqfaEngineType.DORMANT,
-    val showPermissionDialog: Boolean = false
+    val showPermissionDialog: Boolean = false,
+    val isAutoUpgradedByOtherFeature: Boolean = false,
+    val hasUsageStatsPermission: Boolean = false,
+    val isAccessibilityActive: Boolean = false,
+    val wardHasAccessibilityService: Boolean? = null,
+    val wardHasUsageStats: Boolean? = null,
+    val wardCanWriteSecureSettings: Boolean? = null,
+    val pendingManualActivation: AccessibilityReconcileResult.NeedsManualActivation? = null,
+    val pendingUsageAccessPrompt: Boolean = false
 )
 
 class WaqfaSettingsViewModel(
@@ -59,55 +74,91 @@ class WaqfaSettingsViewModel(
         }
 
         initialPolicy = policy
+        val autoUpgraded = computeAutoUpgradedByOtherFeature(policy)
+
         _uiState.update {
             it.copy(
                 config = policy.waqfaConfig,
                 isRemote = isRemote,
-                wardId = wardId
+                wardId = wardId,
+                isAutoUpgradedByOtherFeature = autoUpgraded,
+                wardHasAccessibilityService = policy.wardHasAccessibilityService,
+                wardHasUsageStats = policy.wardHasUsageStats,
+                wardCanWriteSecureSettings = policy.wardCanWriteSecureSettings
             )
         }
 
-        if (!isRemote) {
-            viewModelScope.launch {
-                AccessibilitySelfActivator.enableSilently(getApplication())
-                refreshEngineStatus()
-            }
-        }
+        refreshEngineStatus()
     }
 
     fun refreshEngineStatus() {
+        val currentState = _uiState.value
+        if (currentState.isRemote) {
+            val remoteEngine = when {
+                currentState.wardHasAccessibilityService == true -> WaqfaEngineType.INSTANT_0MS
+                currentState.wardHasUsageStats == true -> WaqfaEngineType.USAGE_STATS_FALLBACK
+                else -> WaqfaEngineType.DORMANT
+            }
+            _uiState.update { it.copy(engineType = remoteEngine) }
+            return
+        }
+
         val app = getApplication<Application>()
-        val a11yActive = ForegroundAppEventBus.getInstance(app).isAccessibilityActive.value ||
+        val latestPolicy = try {
+            policyRepository.getCurrentPolicy()
+        } catch (_: Throwable) {
+            initialPolicy
+        }
+        val autoUpgraded = computeAutoUpgradedByOtherFeature(latestPolicy)
+
+        val a11yActive = HisnAccessibilityService.instance != null ||
+            ForegroundAppEventBus.getInstance(app).isAccessibilityActive.value ||
             AccessibilitySelfActivator.isServiceEnabledInSettings(app)
 
         val hasUsage = CurfewForegroundWatcher.hasUsageStatsPermission(app)
+        val useInstant = currentState.config.useInstantAccessibilityMode
 
         val engine = when {
-            a11yActive -> WaqfaEngineType.INSTANT_0MS
-            hasUsage -> WaqfaEngineType.USAGE_STATS_FALLBACK
-            else -> WaqfaEngineType.DORMANT
+            autoUpgraded && a11yActive -> WaqfaEngineType.INSTANT_0MS
+            useInstant -> if (a11yActive) WaqfaEngineType.INSTANT_0MS else WaqfaEngineType.DORMANT
+            else -> when {
+                a11yActive -> WaqfaEngineType.INSTANT_0MS
+                hasUsage -> WaqfaEngineType.USAGE_STATS_FALLBACK
+                else -> WaqfaEngineType.DORMANT
+            }
         }
 
-        _uiState.update { it.copy(engineType = engine) }
+        _uiState.update {
+            it.copy(
+                engineType = engine,
+                isAutoUpgradedByOtherFeature = autoUpgraded,
+                hasUsageStatsPermission = hasUsage,
+                isAccessibilityActive = a11yActive
+            )
+        }
     }
 
     fun setWaqfaEnabled(enabled: Boolean) {
-        val state = _uiState.value
         _uiState.update { it.copy(config = it.config.copy(isEnabled = enabled)) }
+        refreshEngineStatus()
+    }
 
-        if (enabled && !state.isRemote) {
-            val app = getApplication<Application>()
-            val healed = AccessibilitySelfActivator.enableSilently(app)
-
-            if (!healed && !AccessibilitySelfActivator.isServiceEnabledInSettings(app)) {
-                _uiState.update { it.copy(showPermissionDialog = true) }
-            }
-            refreshEngineStatus()
-        }
+    fun setUseInstantAccessibilityMode(enabled: Boolean) {
+        _uiState.update { it.copy(config = it.config.copy(useInstantAccessibilityMode = enabled)) }
+        refreshEngineStatus()
     }
 
     fun dismissPermissionDialog() {
         _uiState.update { it.copy(showPermissionDialog = false) }
+    }
+
+    fun clearPendingPrompts() {
+        _uiState.update {
+            it.copy(
+                pendingManualActivation = null,
+                pendingUsageAccessPrompt = false
+            )
+        }
     }
 
     fun setTargetPackages(packages: Set<String>) {
@@ -157,10 +208,29 @@ class WaqfaSettingsViewModel(
         return removed
     }
 
+    /**
+     * واجهة متوافقة مع الإصدارات السابقة لحفظ الإعدادات.
+     */
     fun saveSettings(onComplete: (Boolean, DevicePolicyBundle?) -> Unit) {
-        if (_uiState.value.isLoading) return
+        saveSettings { success, updatedPolicy, _ ->
+            onComplete(success, updatedPolicy)
+        }
+    }
+
+    fun saveSettings(onComplete: (Boolean, DevicePolicyBundle?, AccessibilityReconcileResult?) -> Unit) {
+        if (_uiState.value.isLoading) {
+            onComplete(false, null, null)
+            return
+        }
         val state = _uiState.value
-        _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+        _uiState.update {
+            it.copy(
+                isLoading = true,
+                errorMessage = null,
+                pendingManualActivation = null,
+                pendingUsageAccessPrompt = false
+            )
+        }
 
         viewModelScope.launch {
             try {
@@ -175,27 +245,72 @@ class WaqfaSettingsViewModel(
                     }
 
                     _uiState.update { it.copy(isLoading = false, isSaved = success) }
-                    onComplete(success, updated)
+                    onComplete(success, updated, null)
                 } else {
+                    val app = getApplication<Application>()
+                    val wasA11yActiveBeforeSave = HisnAccessibilityService.instance != null ||
+                        withContext(Dispatchers.IO) {
+                            AccessibilitySelfActivator.isServiceEnabledInSettings(app)
+                        }
+
                     val current = policyRepository.getCurrentPolicy()
                     val updatedPolicy = current.copy(waqfaConfig = state.config)
                     val success = policyRepository.saveAndEnforceSelfPolicy(updatedPolicy)
 
+                    var reconcileResult: AccessibilityReconcileResult? = null
                     if (success) {
                         sessionManager.updateConfig(state.config)
-                        _uiState.update { it.copy(isLoading = false, isSaved = true) }
+                        val rawReconcile = withContext(Dispatchers.IO) {
+                            AccessibilityPolicyCoordinator.reconcile(app, updatedPolicy)
+                        }
+                        reconcileResult = if (!wasA11yActiveBeforeSave && rawReconcile is AccessibilityReconcileResult.AlreadyActive) {
+                            AccessibilityReconcileResult.EnabledSilently
+                        } else {
+                            rawReconcile
+                        }
+                        refreshEngineStatus()
+
+                        val autoUpgraded = computeAutoUpgradedByOtherFeature(updatedPolicy)
+                        val hasUsage = CurfewForegroundWatcher.hasUsageStatsPermission(app)
+                        val isA11yNowActive = _uiState.value.isAccessibilityActive
+                        val needsUsagePrompt = !updatedPolicy.waqfaConfig.useInstantAccessibilityMode &&
+                            updatedPolicy.waqfaConfig.isEnabled &&
+                            updatedPolicy.waqfaConfig.targetPackages.isNotEmpty() &&
+                            !autoUpgraded &&
+                            !hasUsage &&
+                            !isA11yNowActive
+                        val manualActivation = reconcileResult as? AccessibilityReconcileResult.NeedsManualActivation
+
+                        _uiState.update {
+                            it.copy(
+                                isLoading = false,
+                                isSaved = true,
+                                pendingManualActivation = manualActivation,
+                                pendingUsageAccessPrompt = needsUsagePrompt
+                            )
+                        }
                     } else {
-                        val failedMsg = getApplication<Application>().getString(com.drmohammed.antiporn.R.string.waqfa_settings_save_failed_toast)
+                        val failedMsg = app.getString(com.drmohammed.antiporn.R.string.waqfa_settings_save_failed_toast)
                         _uiState.update { it.copy(isLoading = false, errorMessage = failedMsg) }
                     }
-                    onComplete(success, updatedPolicy)
+                    onComplete(success, updatedPolicy, reconcileResult)
                 }
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
                 Timber.tag(TAG).e(e, "Error saving waqfa settings")
                 _uiState.update { it.copy(isLoading = false, errorMessage = e.message) }
-                onComplete(false, null)
+                onComplete(false, null, null)
             }
         }
+    }
+
+    private fun computeAutoUpgradedByOtherFeature(policy: DevicePolicyBundle?): Boolean {
+        if (policy == null) return false
+        val pageShieldActive = policy.pageShieldConfig.isEnabled &&
+            policy.pageShieldConfig.getTargetPackages().isNotEmpty()
+        val visionAiApi34Active = policy.isScreenAiEnabledGlobally &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+        return pageShieldActive || visionAiApi34Active
     }
 
     companion object {

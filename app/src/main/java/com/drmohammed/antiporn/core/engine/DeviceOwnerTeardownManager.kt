@@ -238,7 +238,7 @@ object DeviceOwnerTeardownManager {
 
             // 7b. إلغاء خدمة الوصول وتعطيلها بنظافة
             try {
-                com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator.disableAndCloakSilently(appContext, isTemporaryCloak = false)
+                com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator.disableCleanly(appContext, isTemporaryCloak = false)
                 Timber.tag(TAG).i("HisnAccessibilityService disabled cleanly during teardown")
             } catch (e: Exception) {
                 Timber.tag(TAG).w("Error disabling accessibility service during teardown: ${e.message}")
@@ -250,7 +250,11 @@ object DeviceOwnerTeardownManager {
                     val myUid = AccountabilityRepository.getInstance(appContext).getCachedUid()
                     val updates = mapOf(
                         "deactivationStatus" to DevicePolicyBundle.DEACTIVATION_STATUS_COMPLETED,
+                        "deactivationRequestedAt" to null,
                         "deactivationUnlockAt" to null,
+                        "guardianUid" to null,
+                        "guardianName" to null,
+                        "isSupervised" to false,
                         "updatedAt" to now
                     )
                     FirebaseFirestore.getInstance()
@@ -268,6 +272,7 @@ object DeviceOwnerTeardownManager {
             try {
                 val updated = currentPolicy.copy(
                     deactivationStatus = DevicePolicyBundle.DEACTIVATION_STATUS_COMPLETED,
+                    deactivationRequestedAt = null,
                     deactivationUnlockAt = null,
                     isSupervised = false,
                     guardianUid = null,

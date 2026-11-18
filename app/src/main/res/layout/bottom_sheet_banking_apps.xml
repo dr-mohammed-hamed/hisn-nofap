@@ -67,6 +67,31 @@
         </LinearLayout>
     </LinearLayout>
 
+    <!-- Dynamic Banking Mode Status Hint -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/cardBankingModeHint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="14dp"
+        app:cardBackgroundColor="?attr/colorSurfaceContainer"
+        app:cardCornerRadius="14dp"
+        app:cardElevation="0dp"
+        app:strokeColor="?attr/colorOutlineVariant"
+        app:strokeWidth="1dp">
+
+        <TextView
+            android:id="@+id/tvBankingModeHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="@font/tajawal"
+            android:lineSpacingExtra="2dp"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="10dp"
+            android:textColor="?attr/colorOnSurface"
+            android:textSize="12.5sp"
+            tools:text="@string/banking_mode_hint_a11y_off" />
+    </com.google.android.material.card.MaterialCardView>
+
     <!-- Empty State (Minimal text as requested) -->
     <LinearLayout
         android:id="@+id/layoutEmptyState"

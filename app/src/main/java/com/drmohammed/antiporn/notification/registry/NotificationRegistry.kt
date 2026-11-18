@@ -108,4 +108,16 @@ object NotificationRegistry {
     /** Page Shield unfreeze event notification ID. */
     const val EVENT_PAGE_SHIELD_UNFROZEN_ID = 9002
 
+    /** Ongoing notification shown while Banking Cloak temporarily pauses Accessibility. */
+    const val EVENT_BANKING_CLOAK_ACTIVE_ID = 9101
+
+    /** High-priority prompt when Accessibility must be manually re-enabled after banking (QR OOBE / no WRITE_SECURE_SETTINGS). */
+    const val EVENT_BANKING_MANUAL_RESTORE_ID = 9102
+
+    /** High-priority prompt when a guardian-pushed policy requires Accessibility activation on the ward device. */
+    const val EVENT_REMOTE_A11Y_REQUIRED_ID = 9103
+
+    /** High-priority prompt when a guardian-pushed policy requires Usage Access permission on the ward device. */
+    const val EVENT_REMOTE_USAGE_ACCESS_REQUIRED_ID = 9104
+
 }

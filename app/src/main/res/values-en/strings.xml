@@ -1087,6 +1087,11 @@
     <string name="btn_safe_launch">Safe Launch</string>
     <string name="btn_pin_shortcut">Shortcut</string>
     <string name="no_banking_apps_installed">No banking apps installed</string>
+    <string name="notif_banking_cloak_active_title">Safe Banking Mode Active</string>
+    <string name="notif_banking_cloak_active_auto_msg">Accessibility is temporarily paused for your banking session. Tap here to restore protection immediately when finished.</string>
+    <string name="notif_banking_cloak_active_manual_msg">Accessibility is temporarily paused for your banking session. Tap here to open Accessibility Settings and re-enable it when finished.</string>
+    <string name="notif_banking_manual_restore_title">Re-enable Accessibility Protection</string>
+    <string name="notif_banking_manual_restore_msg">Your banking session has ended. Tap here to open Accessibility Settings and re-enable Hisn protection.</string>
     <string name="bottom_sheet_do_title">Device Owner Authority</string>
     <string name="bottom_sheet_do_subtitle">Sovereign authority management &amp; safe teardown</string>
     <string name="card_do_status_active_title">Authority Active &amp; Protected</string>
@@ -1127,4 +1132,77 @@
     <string name="page_shield_guardian_card_title">Page Shield (Remote)</string>
     <string name="page_shield_registered_apps_header">Supported Applications</string>
     <string name="page_shield_freeze_range_error">Freeze duration must be between 1 and 1440 minutes</string>
+
+    <!-- Remote Accessibility, Capability Sync & Guardian Vision Guard AI -->
+    <string name="feature_name_page_shield">Page Shield</string>
+    <string name="feature_name_waqfa">Waqfa</string>
+    <string name="feature_name_vision_ai">Vision Guard AI</string>
+    <string name="list_separator">, </string>
+    <string name="notif_remote_a11y_required_title">Accessibility Required for Protection</string>
+    <string name="notif_remote_a11y_required_msg">Protection settings (%1$s) require Hisn Accessibility Service to be enabled. Tap here to open Settings.</string>
+    <string name="notif_remote_usage_access_required_title">Usage Access Permission Required</string>
+    <string name="notif_remote_usage_access_required_msg">Waqfa requires Usage Access permission to monitor target apps. Tap here to open Settings.</string>
+    <string name="guardian_vision_ai_title">Vision Guard AI</string>
+    <string name="guardian_vision_ai_desc">Enable on-device real-time modesty inspection on the ward device</string>
+    <string name="guardian_alert_a11y_tamper_title">Alert: Accessibility Service Disabled on Ward Device</string>
+    <string name="guardian_alert_a11y_tamper_msg">The ward disabled the Accessibility Service required for active protections. Please review the device and re-enable it.</string>
+    <string name="guardian_alert_a11y_pending_qr_title">Waiting for Manual Accessibility Activation</string>
+    <string name="guardian_alert_a11y_pending_qr_msg">Active protections require manual Accessibility activation on the ward device (QR provisioning without secure-settings privilege). A prompt notification has been sent.</string>
+    <string name="guardian_alert_usage_access_pending_title">Waiting for Usage Access Permission</string>
+    <string name="guardian_alert_usage_access_pending_msg">Waqfa requires Usage Access permission on the ward device to operate properly. A prompt notification has been sent.</string>
+
+    <!-- Wave 3: Accessibility Onboarding, Banking Shortcut Prompt & Smart Engine UX -->
+    <string name="a11y_onboarding_title">Enable Accessibility Service</string>
+    <string name="a11y_onboarding_step1_badge">Step 1</string>
+    <string name="a11y_onboarding_step2_badge">Step 2</string>
+    <string name="a11y_onboarding_step3_badge">Step 3 (Android 13+)</string>
+    <string name="a11y_onboarding_reason_page_shield">To block Shorts and Reels instantly inside apps, Hisn needs the Accessibility Service enabled.</string>
+    <string name="a11y_onboarding_reason_waqfa">To run Waqfa in Instant Fast Mode (0ms) and intercept apps the moment they open, Hisn needs the Accessibility Service enabled.</string>
+    <string name="a11y_onboarding_reason_vision_ai">To run Vision Guard AI automatic screen inspection on this Android version, Hisn needs the Accessibility Service enabled.</string>
+    <string name="a11y_onboarding_reason_guardian">Your guardian enabled a protection shield that requires Hisn Accessibility Service to work properly on your device.</string>
+    <string name="a11y_onboarding_reason_general">To run your enabled instant protection shields reliably, Hisn needs the Accessibility Service enabled.</string>
+    <string name="a11y_onboarding_step2_desc">Find “Hisn” in Installed Services, switch it ON, and confirm activation.</string>
+    <string name="a11y_onboarding_open_settings_btn">Open Accessibility Settings Now</string>
+    <string name="a11y_onboarding_restricted_title">Seeing “Restricted setting”?</string>
+    <string name="a11y_onboarding_restricted_desc">On Android 13 and newer, Android may temporarily block the toggle. Tap “Open App Info” below, tap the 3-dot menu (⋮) at the top, choose “Allow restricted settings”, then return and turn the service ON.</string>
+    <string name="a11y_onboarding_open_app_info_btn">Open App Info</string>
+    <string name="a11y_onboarding_later_btn">Later</string>
+    <string name="a11y_onboarding_enabled_success_toast">Accessibility Service enabled successfully! Protection is now active.</string>
+
+    <string name="banking_shortcut_prompt_title">Safe Banking Shortcut</string>
+    <string name="banking_shortcut_prompt_msg">Instant protection is now active. To open InstaPay and banking apps without conflict, you can add a Safe Banking shortcut to your home screen.</string>
+    <string name="banking_shortcut_prompt_add_btn">Add Shortcut Now</string>
+    <string name="banking_shortcut_prompt_later_btn">Later</string>
+
+    <string name="waqfa_instant_mode_title">Instant Fast Mode (0ms)</string>
+    <string name="waqfa_instant_mode_desc" formatted="false">Keeping this OFF guarantees 100% compatibility with InstaPay and banking apps. If Page Shield or Vision Guard is active, Waqfa automatically runs at 0ms and returns to your choice once they are turned off.</string>
+    <string name="waqfa_instant_mode_desc_auto_upgraded">Currently running in Instant Mode (0ms) automatically because Page Shield or Vision Guard is active, and will revert to bank-compatible mode once they turn off.</string>
+    <string name="waqfa_engine_status_auto_upgraded">Instant Mode (0ms) auto-active via enabled shield</string>
+    <string name="waqfa_engine_status_bank_compatible">Bank-compatible mode active (Usage Access)</string>
+    <string name="waqfa_engine_status_bank_compatible_toast">Bank-compatible mode is active without needing Accessibility Service</string>
+    <string name="waqfa_remote_warning_a11y_qr">Notice: The ward device was provisioned via QR without automatic activation privilege. Instant Mode (0ms) will require the ward to manually approve Accessibility in Settings.</string>
+    <string name="waqfa_remote_warning_usage_access">Notice: Usage Access permission has not been granted on the ward device yet. A prompt will be sent and must be granted for Waqfa to operate.</string>
+    <string name="waqfa_usage_access_dialog_title">Usage Access Permission Required</string>
+    <string name="waqfa_usage_access_dialog_msg">Waqfa settings were saved in Bank-Compatible mode. Grant “Usage Access” to Hisn now so selected apps can be monitored.</string>
+    <string name="waqfa_usage_access_dialog_open_btn">Open Usage Access Settings</string>
+    <string name="waqfa_usage_access_granted_toast">Usage Access permission granted!</string>
+
+    <string name="page_shield_engine_status_active">Page Shield engine active (Accessibility running)</string>
+    <string name="page_shield_engine_status_auto_ready">Ready to auto-enable on save (System privilege available)</string>
+    <string name="page_shield_engine_status_needs_manual">Manual Accessibility activation required • Tap to set up</string>
+    <string name="page_shield_engine_status_active_toast">Accessibility is active and Page Shield is running at full efficiency</string>
+    <string name="page_shield_engine_status_remote_active">Accessibility service is active on ward device</string>
+    <string name="page_shield_engine_status_remote_auto_ready">Ward device supports automatic activation on save</string>
+    <string name="page_shield_engine_status_remote_needs_manual">Enabling this will require manual Accessibility approval on ward device</string>
+    <string name="page_shield_remote_warning_a11y_qr">Notice: The ward device was provisioned via QR and does not support silent Accessibility activation. A notification will prompt the ward to enable it manually after saving.</string>
+
+    <string name="home_a11y_required_title">Complete Accessibility Setup</string>
+    <string name="home_a11y_required_desc">Some active protection shields need Hisn Accessibility Service turned on to operate properly.</string>
+    <string name="home_a11y_required_title_guardian">Action Required: Enable Accessibility</string>
+    <string name="home_a11y_required_desc_guardian">Your guardian enabled protection that requires Hisn Accessibility Service. Tap below to complete setup.</string>
+    <string name="home_a11y_required_btn">Complete Setup Now</string>
+
+    <string name="banking_mode_hint_a11y_off">InstaPay and banking apps now work directly from your home screen without needing this menu.</string>
+    <string name="banking_mode_hint_a11y_on_adb">Protection will pause momentarily when opening your bank and automatically resume as soon as you leave.</string>
+    <string name="banking_mode_hint_a11y_on_qr">Accessibility will turn off cleanly to open your bank, and you will need one tap from the notification to re-enable the shield afterwards.</string>
 </resources>

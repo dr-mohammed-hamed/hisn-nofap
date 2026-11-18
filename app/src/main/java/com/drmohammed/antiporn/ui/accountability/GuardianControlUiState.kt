@@ -32,11 +32,18 @@ data class GuardianControlUiState(
     val isDateTimeLocked: Boolean = true,
     val isYouTubeRestrictedModeEnabled: Boolean = false,
     val isTelegramWebBlocked: Boolean = true,
+    val isScreenAiEnabledGlobally: Boolean = false,
     val dnsHost: String = "",
     val version: Long = 0L,
     val acknowledgedVersion: Long = 0L,
     val lastAcknowledgedAt: Long = 0L,
     val lastHeartbeat: Long = 0L,
+    val wardHasAccessibilityService: Boolean? = null,
+    val wardHasUsageStats: Boolean? = null,
+    val wardCanWriteSecureSettings: Boolean? = null,
+    val wardCapabilitiesUpdatedAt: Long = 0L,
+    val wardA11yTamperAt: Long = 0L,
+    val wardSdkInt: Int? = null,
     val errorMessage: String? = null
 ) {
     val hasUnsavedChanges: Boolean
@@ -61,6 +68,7 @@ data class GuardianControlUiState(
                     isDateTimeLocked != initial.isDateTimeLocked ||
                     isYouTubeRestrictedModeEnabled != initial.isYouTubeRestrictedModeEnabled ||
                     isTelegramWebBlocked != initial.isTelegramWebBlocked ||
+                    isScreenAiEnabledGlobally != initial.isScreenAiEnabledGlobally ||
                     dnsHost.trim() != initial.dnsHost.trim() ||
                     currentPolicy.customBlockedUrls != initial.customBlockedUrls ||
                     currentPolicy.customAllowedUrls != initial.customAllowedUrls ||

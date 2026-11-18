@@ -2,6 +2,7 @@ package com.drmohammed.antiporn.ui.accountability
 
 import android.app.Activity
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.View
@@ -12,12 +13,14 @@ import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.drmohammed.antiporn.R
+import com.drmohammed.antiporn.accessibility.control.AccessibilityPolicyCoordinator
 import com.drmohammed.antiporn.ui.control.curfew.CurfewSettingsActivity
 import com.drmohammed.antiporn.ui.control.other.OtherSettingsActivity
 import com.drmohammed.antiporn.ui.control.web.WebFilterSettingsActivity
@@ -25,6 +28,7 @@ import com.drmohammed.antiporn.waqfa.ui.settings.WaqfaSettingsActivity
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
+import com.google.android.material.color.MaterialColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.textfield.TextInputEditText
@@ -52,6 +56,11 @@ class GuardianControlActivity : AppCompatActivity() {
     private lateinit var cardOfflineBanner: MaterialCardView
     private lateinit var tvOfflineStatus: TextView
     private lateinit var btnRetryLoadPolicy: MaterialButton
+    private lateinit var cardWardCapabilityAlert: MaterialCardView
+    private lateinit var ivWardCapabilityAlertIcon: ImageView
+    private lateinit var tvWardCapabilityAlertTitle: TextView
+    private lateinit var tvWardCapabilityAlertMsg: TextView
+    private lateinit var switchGuardianVisionAi: MaterialSwitch
     private lateinit var alertsViewBinder: GuardianAlertsViewBinder
 
     private lateinit var layoutWardApprovalsSection: LinearLayout
@@ -130,6 +139,11 @@ class GuardianControlActivity : AppCompatActivity() {
         cardOfflineBanner = findViewById(R.id.cardOfflineBanner)
         tvOfflineStatus = findViewById(R.id.tvOfflineStatus)
         btnRetryLoadPolicy = findViewById(R.id.btnRetryLoadPolicy)
+        cardWardCapabilityAlert = findViewById(R.id.cardWardCapabilityAlert)
+        ivWardCapabilityAlertIcon = findViewById(R.id.ivWardCapabilityAlertIcon)
+        tvWardCapabilityAlertTitle = findViewById(R.id.tvWardCapabilityAlertTitle)
+        tvWardCapabilityAlertMsg = findViewById(R.id.tvWardCapabilityAlertMsg)
+        switchGuardianVisionAi = findViewById(R.id.switchGuardianVisionAi)
 
         alertsViewBinder = GuardianAlertsViewBinder(
             activity = this,
@@ -294,6 +308,14 @@ class GuardianControlActivity : AppCompatActivity() {
         btnRetryLoadPolicy.isEnabled = !state.isLoading
 
         alertsViewBinder.renderPolicyAlerts(state.currentPolicy)
+        renderWardCapabilityAlert(state)
+
+        switchGuardianVisionAi.setOnCheckedChangeListener(null)
+        switchGuardianVisionAi.isChecked = state.isScreenAiEnabledGlobally
+        switchGuardianVisionAi.isEnabled = !state.isLoading && !state.isSaving
+        switchGuardianVisionAi.setOnCheckedChangeListener { _, isChecked ->
+            viewModel.updateScreenAiEnabledImmediately(isChecked)
+        }
 
         liveSyncViewBinder.updateLiveSyncBadge(
             version = state.version,
@@ -301,6 +323,68 @@ class GuardianControlActivity : AppCompatActivity() {
             lastAcknowledgedAt = state.lastAcknowledgedAt,
             lastHeartbeat = state.lastHeartbeat
         )
+    }
+
+    private fun renderWardCapabilityAlert(state: GuardianControlUiState) {
+        val currentPolicy = state.currentPolicy
+        val wardSdk = state.wardSdkInt ?: Build.VERSION.SDK_INT
+        val isA11yRequired = AccessibilityPolicyCoordinator.isAccessibilityRequired(
+            currentPolicy,
+            sdkInt = wardSdk
+        )
+        val isUsageRequired = AccessibilityPolicyCoordinator.isUsageAccessRequired(
+            currentPolicy,
+            isA11yActive = state.wardHasAccessibilityService == true,
+            sdkInt = wardSdk
+        )
+
+        when {
+            state.wardA11yTamperAt > 0L &&
+                state.wardHasAccessibilityService == false &&
+                isA11yRequired -> {
+                val red = ContextCompat.getColor(this, R.color.status_red)
+                val redBg = ContextCompat.getColor(this, R.color.status_red_bg)
+                cardWardCapabilityAlert.visibility = View.VISIBLE
+                cardWardCapabilityAlert.setCardBackgroundColor(redBg)
+                cardWardCapabilityAlert.strokeColor = red
+                ivWardCapabilityAlertIcon.setColorFilter(red)
+                tvWardCapabilityAlertTitle.setTextColor(red)
+                tvWardCapabilityAlertMsg.setTextColor(red)
+                tvWardCapabilityAlertTitle.setText(R.string.guardian_alert_a11y_tamper_title)
+                tvWardCapabilityAlertMsg.setText(R.string.guardian_alert_a11y_tamper_msg)
+            }
+            state.wardHasAccessibilityService == false &&
+                state.wardCanWriteSecureSettings == false &&
+                isA11yRequired -> {
+                val amber = ContextCompat.getColor(this, R.color.shield_amber_calm)
+                val amberBg = ContextCompat.getColor(this, R.color.shield_amber_subtle)
+                val onSurface = MaterialColors.getColor(cardWardCapabilityAlert, com.google.android.material.R.attr.colorOnSurface)
+                cardWardCapabilityAlert.visibility = View.VISIBLE
+                cardWardCapabilityAlert.setCardBackgroundColor(amberBg)
+                cardWardCapabilityAlert.strokeColor = amber
+                ivWardCapabilityAlertIcon.setColorFilter(amber)
+                tvWardCapabilityAlertTitle.setTextColor(onSurface)
+                tvWardCapabilityAlertMsg.setTextColor(onSurface)
+                tvWardCapabilityAlertTitle.setText(R.string.guardian_alert_a11y_pending_qr_title)
+                tvWardCapabilityAlertMsg.setText(R.string.guardian_alert_a11y_pending_qr_msg)
+            }
+            state.wardHasUsageStats == false && isUsageRequired -> {
+                val amber = ContextCompat.getColor(this, R.color.shield_amber_calm)
+                val amberBg = ContextCompat.getColor(this, R.color.shield_amber_subtle)
+                val onSurface = MaterialColors.getColor(cardWardCapabilityAlert, com.google.android.material.R.attr.colorOnSurface)
+                cardWardCapabilityAlert.visibility = View.VISIBLE
+                cardWardCapabilityAlert.setCardBackgroundColor(amberBg)
+                cardWardCapabilityAlert.strokeColor = amber
+                ivWardCapabilityAlertIcon.setColorFilter(amber)
+                tvWardCapabilityAlertTitle.setTextColor(onSurface)
+                tvWardCapabilityAlertMsg.setTextColor(onSurface)
+                tvWardCapabilityAlertTitle.setText(R.string.guardian_alert_usage_access_pending_title)
+                tvWardCapabilityAlertMsg.setText(R.string.guardian_alert_usage_access_pending_msg)
+            }
+            else -> {
+                cardWardCapabilityAlert.visibility = View.GONE
+            }
+        }
     }
 
     private fun updateWardTitle(name: String) {

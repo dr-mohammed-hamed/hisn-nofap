@@ -15,7 +15,8 @@ data class WaqfaConfig(
     val timeoutReactionType: WaqfaTimeoutReactionType = WaqfaTimeoutReactionType.EXIT_ONLY,
     val cooldownMinutes: Int = DEFAULT_COOLDOWN_MINUTES,
     val allowOpenSession: Boolean = false,
-    val allowCustomDuration: Boolean = true
+    val allowCustomDuration: Boolean = true,
+    val useInstantAccessibilityMode: Boolean = false
 ) {
     fun toMap(): Map<String, Any?> = mapOf(
         "isEnabled" to isEnabled,
@@ -25,7 +26,8 @@ data class WaqfaConfig(
         "timeoutReactionType" to timeoutReactionType.name,
         "cooldownMinutes" to cooldownMinutes,
         "allowOpenSession" to allowOpenSession,
-        "allowCustomDuration" to allowCustomDuration
+        "allowCustomDuration" to allowCustomDuration,
+        "useInstantAccessibilityMode" to useInstantAccessibilityMode
     )
 
     fun toJson(): JSONObject = JSONObject().apply {
@@ -37,6 +39,7 @@ data class WaqfaConfig(
         put("cooldownMinutes", cooldownMinutes)
         put("allowOpenSession", allowOpenSession)
         put("allowCustomDuration", allowCustomDuration)
+        put("useInstantAccessibilityMode", useInstantAccessibilityMode)
     }
 
     companion object {
@@ -69,7 +72,8 @@ data class WaqfaConfig(
                 timeoutReactionType = reaction,
                 cooldownMinutes = cooldown,
                 allowOpenSession = typedMap["allowOpenSession"] as? Boolean ?: false,
-                allowCustomDuration = typedMap["allowCustomDuration"] as? Boolean ?: true
+                allowCustomDuration = typedMap["allowCustomDuration"] as? Boolean ?: true,
+                useInstantAccessibilityMode = typedMap["useInstantAccessibilityMode"] as? Boolean ?: false
             )
         }
 
@@ -105,7 +109,8 @@ data class WaqfaConfig(
                 timeoutReactionType = reaction,
                 cooldownMinutes = cooldown,
                 allowOpenSession = json.optBoolean("allowOpenSession", false),
-                allowCustomDuration = json.optBoolean("allowCustomDuration", true)
+                allowCustomDuration = json.optBoolean("allowCustomDuration", true),
+                useInstantAccessibilityMode = json.optBoolean("useInstantAccessibilityMode", false)
             )
         }
     }

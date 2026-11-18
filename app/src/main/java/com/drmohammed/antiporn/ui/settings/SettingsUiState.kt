@@ -8,6 +8,7 @@ import com.drmohammed.antiporn.ota.model.OtaUpdateState
  */
 data class SettingsUiState(
     val isAiRunning: Boolean = false,
+    val isAiControlLocked: Boolean = false,
     val aiInitError: String = "",
     val aiFps: Float = 0f,
     val aiLastDetectionLabel: String = "",

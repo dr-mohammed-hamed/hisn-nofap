@@ -4,14 +4,15 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
+import com.drmohammed.antiporn.accessibility.HisnAccessibilityService
 import com.drmohammed.antiporn.accessibility.hook.AccessibilityEventHook
 import com.drmohammed.antiporn.accessibility.hook.AccessibilityHookRegistry
-import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.pageshield.model.AppPageShieldPolicy
 import com.drmohammed.antiporn.pageshield.model.PageShieldConfig
 import com.drmohammed.antiporn.pageshield.registry.PageShieldRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -23,7 +24,11 @@ import java.util.concurrent.atomic.AtomicLong
  * خطاف خدمة الوصول لدرع الصفحات (Page Shield Accessibility Hook).
  * يراقب ويتعرف على الصفحات المحظورة داخل التطبيقات المستهدفة بأقصى كفاءة للبطارية وخنق زمني دقيق.
  */
-class PageShieldAccessibilityHook private constructor() : AccessibilityEventHook {
+class PageShieldAccessibilityHook internal constructor(
+    private val getServiceInfo: (AccessibilityService) -> AccessibilityServiceInfo? = { it.serviceInfo },
+    private val setServiceInfo: (AccessibilityService, AccessibilityServiceInfo) -> Unit = { svc, info -> svc.serviceInfo = info },
+    private val activeServiceProvider: () -> AccessibilityService? = { HisnAccessibilityService.instance }
+) : AccessibilityEventHook {
 
     private val hookScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -33,12 +38,33 @@ class PageShieldAccessibilityHook private constructor() : AccessibilityEventHook
     @Volatile
     private var currentForegroundPackage: String? = null
 
+    @Volatile
+    private var inAppEventsEnabled: Boolean = false
+
     private val lastCheckTime = AtomicLong(0L)
     private val lastTriggerTime = ConcurrentHashMap<String, Long>()
+    private val pendingRetryJobs = ConcurrentHashMap<String, Job>()
 
     fun updateConfig(config: PageShieldConfig) {
         cachedConfig = config
         Timber.tag(TAG).i("PageShield config updated: isEnabled=${config.isEnabled}, targets=${config.getTargetPackages()}")
+        val activeService = activeServiceProvider()
+        val fgPkg = currentForegroundPackage
+        if (activeService != null && fgPkg != null) {
+            val shouldEnable = config.hasActiveRulesForPackage(fgPkg)
+            if (shouldEnable && !inAppEventsEnabled) {
+                enableInAppEvents(activeService)
+            } else if (!shouldEnable && inAppEventsEnabled) {
+                disableInAppEvents(activeService)
+            }
+        }
+    }
+
+    fun onServiceDisconnected() {
+        inAppEventsEnabled = false
+        currentForegroundPackage = null
+        pendingRetryJobs.values.forEach { it.cancel() }
+        pendingRetryJobs.clear()
     }
 
     override fun onWindowStateChanged(
@@ -46,20 +72,19 @@ class PageShieldAccessibilityHook private constructor() : AccessibilityEventHook
         packageName: String,
         className: String?
     ): Boolean {
-        val previousPackage = currentForegroundPackage
         currentForegroundPackage = packageName
 
         // Dynamic AccessibilityServiceInfo EventTypes management for battery conservation
         val isTarget = cachedConfig.hasActiveRulesForPackage(packageName)
-        val wasTarget = previousPackage != null && cachedConfig.hasActiveRulesForPackage(previousPackage)
 
-        if (isTarget && !wasTarget) {
+        if (isTarget && !inAppEventsEnabled) {
             enableInAppEvents(service)
-        } else if (!isTarget && wasTarget) {
+        } else if (!isTarget && inAppEventsEnabled) {
             disableInAppEvents(service)
         }
 
         if (!isTarget) {
+            pendingRetryJobs.remove(packageName)?.cancel()
             return false
         }
 
@@ -109,15 +134,26 @@ class PageShieldAccessibilityHook private constructor() : AccessibilityEventHook
 
         // 1. Direct Evaluation
         if (checkAndExecuteMatch(service, event, packageName, policy, width, height)) {
+            pendingRetryJobs.remove(packageName)?.cancel()
             return true
         }
 
         // 2. Incremental Retry after 150ms for asynchronous UI rendering (without retaining AccessibilityNodeInfo)
-        hookScope.launch {
+        val retryJob = hookScope.launch {
             delay(150L)
-            if (currentForegroundPackage == packageName) {
-                checkAndExecuteMatch(service, null, packageName, policy, width, height)
+            if (currentForegroundPackage == packageName && activeServiceProvider() === service) {
+                val freshConfig = cachedConfig
+                if (freshConfig.hasActiveRulesForPackage(packageName)) {
+                    val freshPolicy = freshConfig.appPolicies[packageName]
+                    if (freshPolicy != null) {
+                        checkAndExecuteMatch(service, null, packageName, freshPolicy, width, height)
+                    }
+                }
             }
+        }
+        pendingRetryJobs.put(packageName, retryJob)?.cancel()
+        retryJob.invokeOnCompletion {
+            pendingRetryJobs.remove(packageName, retryJob)
         }
 
         return false
@@ -147,8 +183,20 @@ class PageShieldAccessibilityHook private constructor() : AccessibilityEventHook
             )
 
             if (detected) {
+                var claimed = false
+                val triggerNow = SystemClock.elapsedRealtime()
+                lastTriggerTime.compute(packageName) { _, existing ->
+                    if (existing != null && triggerNow - existing < POST_TRIGGER_COOLDOWN_MS) {
+                        existing
+                    } else {
+                        claimed = true
+                        triggerNow
+                    }
+                }
+                if (!claimed) {
+                    return false
+                }
                 Timber.tag(TAG).i("Target page $pageId DETECTED in $packageName!")
-                lastTriggerTime[packageName] = SystemClock.elapsedRealtime()
                 PageShieldReactionExecutor.executeReaction(service, packageName, pageId, policy)
                 return true
             }
@@ -156,34 +204,40 @@ class PageShieldAccessibilityHook private constructor() : AccessibilityEventHook
         return false
     }
 
-    private fun enableInAppEvents(service: AccessibilityService) {
+    internal fun enableInAppEvents(service: AccessibilityService) {
         try {
-            val info = service.serviceInfo ?: AccessibilityServiceInfo()
-            val targetFlags = AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
-                AccessibilityEvent.TYPE_VIEW_SCROLLED or
+            val info = getServiceInfo(service) ?: AccessibilityServiceInfo()
+            val extraFlags = AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
                 AccessibilityEvent.TYPE_VIEW_CLICKED or
-                AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
-                AccessibilityEvent.TYPE_WINDOWS_CHANGED
-            if (info.eventTypes != targetFlags) {
-                info.eventTypes = targetFlags
-                service.serviceInfo = info
+                AccessibilityEvent.TYPE_VIEW_SCROLLED
+            val updatedFlags = info.eventTypes or extraFlags
+            if (info.eventTypes != updatedFlags) {
+                info.eventTypes = updatedFlags
+                setServiceInfo(service, info)
                 Timber.tag(TAG).d("Dynamically enabled in-app eventTypes for PageShield target")
             }
+            inAppEventsEnabled = true
         } catch (e: Exception) {
             Timber.tag(TAG).w("Error updating serviceInfo to enable in-app events: ${e.message}")
         }
     }
 
-    private fun disableInAppEvents(service: AccessibilityService) {
+    internal fun disableInAppEvents(service: AccessibilityService) {
         try {
-            val info = service.serviceInfo ?: return
-            val defaultFlags = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
-                AccessibilityEvent.TYPE_WINDOWS_CHANGED
-            if (info.eventTypes != defaultFlags) {
-                info.eventTypes = defaultFlags
-                service.serviceInfo = info
-                Timber.tag(TAG).d("Dynamically reverted eventTypes to default (zero overhead outside targets)")
+            val info = getServiceInfo(service)
+            if (info == null) {
+                inAppEventsEnabled = false
+                return
             }
+            val inAppOnlyFlags = AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
+                AccessibilityEvent.TYPE_VIEW_CLICKED
+            val updatedFlags = info.eventTypes and inAppOnlyFlags.inv()
+            if (info.eventTypes != updatedFlags) {
+                info.eventTypes = updatedFlags
+                setServiceInfo(service, info)
+                Timber.tag(TAG).d("Dynamically reverted in-app eventTypes while preserving baseline events")
+            }
+            inAppEventsEnabled = false
         } catch (e: Exception) {
             Timber.tag(TAG).w("Error updating serviceInfo to disable in-app events: ${e.message}")
         }

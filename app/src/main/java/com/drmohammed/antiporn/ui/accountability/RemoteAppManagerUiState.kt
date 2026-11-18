@@ -31,7 +31,7 @@ data class RemoteAppManagerUiState(
     val initialCurfewVpnBypass: Set<String> = emptySet(),
     val initialProtectedApps: Set<String> = emptySet(),
     val initialLockNewInstalls: Boolean = false,
-    val isScreenAiEnabledGlobally: Boolean = true,
+    val isScreenAiEnabledGlobally: Boolean = false,
     val isScreenAiServiceRunning: Boolean = false,
     val errorMessage: String? = null
 ) {

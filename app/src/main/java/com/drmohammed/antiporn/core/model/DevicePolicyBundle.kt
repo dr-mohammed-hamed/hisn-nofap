@@ -20,7 +20,8 @@ data class DevicePolicyBundle(
     val isVpnBlackholeEnabled: Boolean = com.drmohammed.antiporn.curfew.CurfewConfig.DEFAULT_VPN_BLACKHOLE_ENABLED,
     val isIncognitoBlocked: Boolean = true,
     val lockNewInstallsUntilApproved: Boolean = false,
-    val isScreenAiEnabledGlobally: Boolean = true,
+    val isScreenAiEnabledGlobally: Boolean = false,
+    val screenAiSchemaVersion: Int = CURRENT_SCREEN_AI_SCHEMA_VERSION,
     val customBlacklistPackages: Set<String> = emptySet(),
     val customCurfewWhitelistPackages: Set<String> = emptySet(),
     val customAiScanPackages: Set<String> = emptySet(),
@@ -60,7 +61,14 @@ data class DevicePolicyBundle(
     val selfControlPageShieldAllowed: Boolean = false,
     val version: Long = 1L,
     val updatedAt: Long = 0L,
-    val remoteSelfControlResetRequestedAt: Long? = null
+    val remoteSelfControlResetRequestedAt: Long? = null,
+    // Ward read-only capability telemetry (NEVER written by Guardian toMap() pushes)
+    val wardHasAccessibilityService: Boolean? = null,
+    val wardHasUsageStats: Boolean? = null,
+    val wardCanWriteSecureSettings: Boolean? = null,
+    val wardCapabilitiesUpdatedAt: Long = 0L,
+    val wardA11yTamperAt: Long = 0L,
+    val wardSdkInt: Int? = null
 ) {
 
     fun toMap(): Map<String, Any?> {
@@ -80,6 +88,7 @@ data class DevicePolicyBundle(
             "isIncognitoBlocked" to isIncognitoBlocked,
             "lockNewInstallsUntilApproved" to lockNewInstallsUntilApproved,
             "isScreenAiEnabledGlobally" to isScreenAiEnabledGlobally,
+            "screenAiSchemaVersion" to screenAiSchemaVersion,
             "customBlacklistPackages" to customBlacklistPackages.toList(),
             "customCurfewWhitelistPackages" to customCurfewWhitelistPackages.toList(),
             "customAiScanPackages" to customAiScanPackages.toList(),
@@ -140,6 +149,7 @@ data class DevicePolicyBundle(
         val blacklistArr = JSONArray().apply { customBlacklistPackages.forEach { put(it) } }
         json.put("customBlacklistPackages", blacklistArr)
         json.put("isScreenAiEnabledGlobally", isScreenAiEnabledGlobally)
+        json.put("screenAiSchemaVersion", screenAiSchemaVersion)
 
         val whitelistArr = JSONArray().apply { customCurfewWhitelistPackages.forEach { put(it) } }
         json.put("customCurfewWhitelistPackages", whitelistArr)
@@ -195,11 +205,18 @@ data class DevicePolicyBundle(
         json.put("selfControlPageShieldAllowed", selfControlPageShieldAllowed)
         json.put("version", version)
         json.put("updatedAt", updatedAt)
+        if (wardHasAccessibilityService != null) json.put("wardHasAccessibilityService", wardHasAccessibilityService)
+        if (wardHasUsageStats != null) json.put("wardHasUsageStats", wardHasUsageStats)
+        if (wardCanWriteSecureSettings != null) json.put("wardCanWriteSecureSettings", wardCanWriteSecureSettings)
+        json.put("wardCapabilitiesUpdatedAt", wardCapabilitiesUpdatedAt)
+        json.put("wardA11yTamperAt", wardA11yTamperAt)
+        if (wardSdkInt != null) json.put("wardSdkInt", wardSdkInt)
         return json.toString()
     }
 
     companion object {
         private const val TAG = "AntiPorn_PolicyBundle"
+        const val CURRENT_SCREEN_AI_SCHEMA_VERSION = 2
         const val BROWSER_FILTER_OFF = 0
         const val BROWSER_FILTER_BLOCKLIST = 1
         const val BROWSER_FILTER_BLOCKLIST_ONLY = 1
@@ -281,7 +298,16 @@ data class DevicePolicyBundle(
                 ?: (map["browserFilterMode"] as? String)?.toIntOrNull()
                 ?: BROWSER_FILTER_OFF).coerceIn(0, 2)
             val isFullSystemFilteringEnabled = (map["isFullSystemFilteringEnabled"] as? Boolean) ?: false
-            val isScreenAiEnabledGlobally = (map["isScreenAiEnabledGlobally"] as? Boolean) ?: true
+            val rawScreenAiSchemaVersion = (map["screenAiSchemaVersion"] as? Number)?.toInt() ?: 1
+            val isScreenAiEnabledGlobally: Boolean
+            val screenAiSchemaVersion: Int
+            if (rawScreenAiSchemaVersion < CURRENT_SCREEN_AI_SCHEMA_VERSION) {
+                isScreenAiEnabledGlobally = false
+                screenAiSchemaVersion = CURRENT_SCREEN_AI_SCHEMA_VERSION
+            } else {
+                isScreenAiEnabledGlobally = (map["isScreenAiEnabledGlobally"] as? Boolean) ?: false
+                screenAiSchemaVersion = rawScreenAiSchemaVersion
+            }
             val customBlockedUrls = (map["customBlockedUrls"] as? List<*>)?.filterIsInstance<String>()?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
             val customAllowedUrls = (map["customAllowedUrls"] as? List<*>)?.filterIsInstance<String>()?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
 
@@ -317,6 +343,12 @@ data class DevicePolicyBundle(
 
             val version = (map["version"] as? Number)?.toLong() ?: 1L
             val updatedAt = (map["updatedAt"] as? Number)?.toLong() ?: 0L
+            val wardHasAccessibilityService = map["wardHasAccessibilityService"] as? Boolean
+            val wardHasUsageStats = map["wardHasUsageStats"] as? Boolean
+            val wardCanWriteSecureSettings = map["wardCanWriteSecureSettings"] as? Boolean
+            val wardCapabilitiesUpdatedAt = (map["wardCapabilitiesUpdatedAt"] as? Number)?.toLong() ?: 0L
+            val wardA11yTamperAt = (map["wardA11yTamperAt"] as? Number)?.toLong() ?: 0L
+            val wardSdkInt = (map["wardSdkInt"] as? Number)?.toInt()
 
             return DevicePolicyBundle(
                 curfewStartHour = startHour, curfewStartMinute = startMin,
@@ -329,6 +361,7 @@ data class DevicePolicyBundle(
                 isVpnBlackholeEnabled = vpn, isIncognitoBlocked = incognito,
                 lockNewInstallsUntilApproved = lockNew,
                 isScreenAiEnabledGlobally = isScreenAiEnabledGlobally,
+                screenAiSchemaVersion = screenAiSchemaVersion,
                 customBlacklistPackages = blacklist,
                 customCurfewWhitelistPackages = whitelist,
                 customAiScanPackages = aiScan,
@@ -363,7 +396,13 @@ data class DevicePolicyBundle(
                 pageShieldConfig = pageShield,
                 selfControlPageShieldAllowed = selfControlPageShieldAllowed,
                 version = version, updatedAt = updatedAt,
-                remoteSelfControlResetRequestedAt = remoteResetAt
+                remoteSelfControlResetRequestedAt = remoteResetAt,
+                wardHasAccessibilityService = wardHasAccessibilityService,
+                wardHasUsageStats = wardHasUsageStats,
+                wardCanWriteSecureSettings = wardCanWriteSecureSettings,
+                wardCapabilitiesUpdatedAt = wardCapabilitiesUpdatedAt,
+                wardA11yTamperAt = wardA11yTamperAt,
+                wardSdkInt = wardSdkInt
             )
         }
 
@@ -395,7 +434,20 @@ data class DevicePolicyBundle(
                 val protectedApps = json.optJSONArray("protectedAppPackages").toStringSet()
                 val browserFilterMode = json.optInt("browserFilterMode", BROWSER_FILTER_OFF).coerceIn(0, 2)
                 val isFullSystemFilteringEnabled = json.optBoolean("isFullSystemFilteringEnabled", false)
-                val isScreenAiEnabledGlobally = json.optBoolean("isScreenAiEnabledGlobally", true)
+                val rawScreenAiSchemaVersion = if (json.has("screenAiSchemaVersion") && !json.isNull("screenAiSchemaVersion")) {
+                    json.optInt("screenAiSchemaVersion", 1)
+                } else {
+                    1
+                }
+                val isScreenAiEnabledGlobally: Boolean
+                val screenAiSchemaVersion: Int
+                if (rawScreenAiSchemaVersion < CURRENT_SCREEN_AI_SCHEMA_VERSION) {
+                    isScreenAiEnabledGlobally = false
+                    screenAiSchemaVersion = CURRENT_SCREEN_AI_SCHEMA_VERSION
+                } else {
+                    isScreenAiEnabledGlobally = json.optBoolean("isScreenAiEnabledGlobally", false)
+                    screenAiSchemaVersion = rawScreenAiSchemaVersion
+                }
                 val customBlockedUrls = json.optJSONArray("customBlockedUrls").toStringSet()
                 val customAllowedUrls = json.optJSONArray("customAllowedUrls").toStringSet()
 
@@ -427,6 +479,28 @@ data class DevicePolicyBundle(
                 val waqfa = WaqfaConfig.fromJson(json.optJSONObject("waqfaConfig"))
                 val pageShield = com.drmohammed.antiporn.pageshield.model.PageShieldConfig.fromJson(json.optJSONObject("pageShieldConfig"))
                 val selfControlPageShieldAllowed = json.optBoolean("selfControlPageShieldAllowed", false)
+                val wardHasAccessibilityService = if (json.has("wardHasAccessibilityService") && !json.isNull("wardHasAccessibilityService")) {
+                    json.optBoolean("wardHasAccessibilityService")
+                } else {
+                    null
+                }
+                val wardHasUsageStats = if (json.has("wardHasUsageStats") && !json.isNull("wardHasUsageStats")) {
+                    json.optBoolean("wardHasUsageStats")
+                } else {
+                    null
+                }
+                val wardCanWriteSecureSettings = if (json.has("wardCanWriteSecureSettings") && !json.isNull("wardCanWriteSecureSettings")) {
+                    json.optBoolean("wardCanWriteSecureSettings")
+                } else {
+                    null
+                }
+                val wardCapabilitiesUpdatedAt = json.optLong("wardCapabilitiesUpdatedAt", 0L)
+                val wardA11yTamperAt = json.optLong("wardA11yTamperAt", 0L)
+                val wardSdkInt = if (json.has("wardSdkInt") && !json.isNull("wardSdkInt")) {
+                    json.optInt("wardSdkInt")
+                } else {
+                    null
+                }
 
                 DevicePolicyBundle(
                     curfewStartHour = json.optInt("curfewStartHour", com.drmohammed.antiporn.curfew.CurfewConfig.START_HOUR).coerceIn(0, 23),
@@ -444,6 +518,7 @@ data class DevicePolicyBundle(
                     isIncognitoBlocked = json.optBoolean("isIncognitoBlocked", true),
                     lockNewInstallsUntilApproved = json.optBoolean("lockNewInstallsUntilApproved", false),
                     isScreenAiEnabledGlobally = isScreenAiEnabledGlobally,
+                    screenAiSchemaVersion = screenAiSchemaVersion,
                     customBlacklistPackages = blacklist,
                     customCurfewWhitelistPackages = whitelist,
                     customAiScanPackages = aiScan,
@@ -479,7 +554,13 @@ data class DevicePolicyBundle(
                     selfControlPageShieldAllowed = selfControlPageShieldAllowed,
                     version = json.optLong("version", 1L),
                     updatedAt = json.optLong("updatedAt", 0L),
-                    remoteSelfControlResetRequestedAt = remoteResetAt
+                    remoteSelfControlResetRequestedAt = remoteResetAt,
+                    wardHasAccessibilityService = wardHasAccessibilityService,
+                    wardHasUsageStats = wardHasUsageStats,
+                    wardCanWriteSecureSettings = wardCanWriteSecureSettings,
+                    wardCapabilitiesUpdatedAt = wardCapabilitiesUpdatedAt,
+                    wardA11yTamperAt = wardA11yTamperAt,
+                    wardSdkInt = wardSdkInt
                 )
             } catch (e: Exception) {
                 try {

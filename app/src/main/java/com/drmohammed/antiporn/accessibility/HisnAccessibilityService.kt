@@ -11,8 +11,15 @@ import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import com.drmohammed.antiporn.accessibility.bus.ForegroundAppEventBus
+import com.drmohammed.antiporn.accessibility.control.AccessibilityPolicyCoordinator
+import com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator
 import com.drmohammed.antiporn.accessibility.filter.TransientWindowEventFilter
 import com.drmohammed.antiporn.accessibility.hook.AccessibilityHookRegistry
+import com.drmohammed.antiporn.core.model.DevicePolicyBundle
+import com.drmohammed.antiporn.data.repository.PolicyRepository
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import timber.log.Timber
 
 /**
@@ -23,9 +30,13 @@ import timber.log.Timber
 class HisnAccessibilityService : AccessibilityService() {
 
     private val screenshotExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val aiEngineLock = Any()
     private lateinit var eventBus: ForegroundAppEventBus
     private lateinit var windowFilter: TransientWindowEventFilter
+    @Volatile
     private var standaloneCoordinator: com.drmohammed.antiporn.ai.service.AiInferenceCoordinator? = null
+    @Volatile
+    private var disconnectNotified: Boolean = false
 
     override fun onCreate() {
         super.onCreate()
@@ -36,6 +47,30 @@ class HisnAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        disconnectNotified = false
+
+        val policyRepo = try {
+            PolicyRepository.getInstance(applicationContext)
+        } catch (e: Exception) {
+            Timber.tag(TAG).w(e, "Failed getting PolicyRepository in onServiceConnected; falling back to default")
+            null
+        }
+        val policy = policyRepo?.getCurrentPolicy() ?: DevicePolicyBundle.defaultPolicy()
+        val isInitialPolicyLoaded = policyRepo?.isInitialPolicyLoaded == true
+
+        if (isInitialPolicyLoaded && !AccessibilityPolicyCoordinator.isAccessibilityRequired(policy)) {
+            Timber.tag(TAG).i("HisnAccessibilityService connected but not required by policy; disabling self cleanly")
+            AccessibilitySelfActivator.markIntentionalDisable()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                try {
+                    disableSelf()
+                } catch (e: Exception) {
+                    Timber.tag(TAG).w(e, "Error calling disableSelf() in onServiceConnected")
+                }
+            }
+            return
+        }
+
         instance = this
         try {
             val info = serviceInfo ?: android.accessibilityservice.AccessibilityServiceInfo()
@@ -54,10 +89,11 @@ class HisnAccessibilityService : AccessibilityService() {
         }
         eventBus.setAccessibilityActive(true)
 
-        // تشغيل محرك حارس غض البصر المستقل على أندرويد 14+ بدون الحاجة لـ MediaProjection
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            initStandaloneAiEngine()
-        }
+        // مزامنة محرك حارس غض البصر المستقل على أندرويد 14+ وفقاً للسياسة النشطة فقط
+        syncStandaloneAiState(policy.isScreenAiEnabledGlobally)
+
+        // مزامنة قدرات الجهاز بعد اتصال الخدمة
+        AccessibilityPolicyCoordinator.notifyCapabilitiesChanged(applicationContext, recordTamper = false)
 
         Timber.tag(TAG).i("HisnAccessibilityService connected to Android Framework (Instant 0ms Engine Active)")
         com.drmohammed.antiporn.telemetry.BlackBoxRecorder.recordA11y(
@@ -132,6 +168,7 @@ class HisnAccessibilityService : AccessibilityService() {
         if (::eventBus.isInitialized) {
             eventBus.setAccessibilityActive(false)
         }
+        notifyDisconnectedOnce()
         com.drmohammed.antiporn.telemetry.BlackBoxRecorder.recordA11y(
             context = applicationContext,
             action = "SERVICE_UNBIND",
@@ -154,11 +191,25 @@ class HisnAccessibilityService : AccessibilityService() {
         if (::eventBus.isInitialized) {
             eventBus.setAccessibilityActive(false)
         }
+        notifyDisconnectedOnce()
         com.drmohammed.antiporn.telemetry.BlackBoxRecorder.recordA11y(
             context = applicationContext,
             action = "SERVICE_DESTROYED",
             isSuccess = true
         )
+    }
+
+    private fun notifyDisconnectedOnce() {
+        if (!disconnectNotified) {
+            disconnectNotified = true
+            try {
+                com.drmohammed.antiporn.pageshield.engine.PageShieldAccessibilityHook.getInstance().onServiceDisconnected()
+            } catch (e: Exception) {
+                Timber.tag(TAG).w(e, "Error notifying PageShieldAccessibilityHook of disconnect")
+            }
+            AccessibilityPolicyCoordinator.onServiceDisconnected(applicationContext)
+            AccessibilitySelfActivator.clearIntentionalDisable()
+        }
     }
 
     /**
@@ -259,34 +310,79 @@ class HisnAccessibilityService : AccessibilityService() {
         captureCleanWindowBitmap { bitmap, bounds, _ -> onResult(bitmap, bounds) }
     }
 
-    private fun initStandaloneAiEngine() {
-        if (standaloneCoordinator == null) {
-            try {
-                standaloneCoordinator = com.drmohammed.antiporn.ai.service.AiInferenceCoordinator(
-                    context = applicationContext
-                ).apply {
-                    initialize { success ->
-                        if (success) {
-                            start()
-                            Timber.tag(TAG).i("Standalone Vision Guard engine active inside HisnAccessibilityService on API 34+")
-                        } else {
-                            Timber.tag(TAG).w("Failed to initialize standalone Vision Guard engine")
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                Timber.tag(TAG).e(e, "Error starting standalone Vision Guard engine in A11y service")
+    /**
+     * يزامن حالة محرك حارس غض البصر المستقل (API 34+) وفقاً لتفعيل الميزة في السياسة النشطة.
+     * محمي بقفل متزامن وفحص مزدوج لضمان عدم تشغيل نسختين من [AiInferenceCoordinator] بالتوازي أبداً.
+     */
+    fun syncStandaloneAiState(enabled: Boolean) {
+        synchronized(aiEngineLock) {
+            if (enabled &&
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+                !com.drmohammed.antiporn.ai.service.ScreenAiProjectionService.isRunning
+            ) {
+                initStandaloneAiEngineLocked()
+            } else {
+                stopStandaloneAiEngineLocked()
             }
         }
     }
 
-    private fun stopStandaloneAiEngine() {
+    private fun initStandaloneAiEngineLocked() {
+        if (standaloneCoordinator != null) return
         try {
-            standaloneCoordinator?.stop()
+            val coordinator = com.drmohammed.antiporn.ai.service.AiInferenceCoordinator(
+                context = applicationContext
+            )
+            standaloneCoordinator = coordinator
+            coordinator.initialize { success ->
+                var shouldStopAbandoned = false
+                synchronized(aiEngineLock) {
+                    val projectionRunning = com.drmohammed.antiporn.ai.service.ScreenAiProjectionService.isRunning
+                    if (success && standaloneCoordinator === coordinator && !projectionRunning) {
+                        coordinator.start()
+                        updateStandaloneAiActive(true)
+                        Timber.tag(TAG).i("Standalone Vision Guard engine active inside HisnAccessibilityService on API 34+")
+                    } else {
+                        if (standaloneCoordinator === coordinator) {
+                            standaloneCoordinator = null
+                        }
+                        updateStandaloneAiActive(false)
+                        shouldStopAbandoned = true
+                        Timber.tag(TAG).w(
+                            "Standalone Vision Guard engine aborted or failed init " +
+                                "(success=$success, projectionRunning=$projectionRunning)"
+                        )
+                    }
+                }
+                if (shouldStopAbandoned) {
+                    try {
+                        coordinator.stop()
+                    } catch (e: Exception) {
+                        Timber.tag(TAG).w("Error cleaning up aborted standalone Vision Guard coordinator: ${e.message}")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            standaloneCoordinator = null
+            updateStandaloneAiActive(false)
+            Timber.tag(TAG).e(e, "Error starting standalone Vision Guard engine in A11y service")
+        }
+    }
+
+    private fun stopStandaloneAiEngine() {
+        synchronized(aiEngineLock) {
+            stopStandaloneAiEngineLocked()
+        }
+    }
+
+    private fun stopStandaloneAiEngineLocked() {
+        val existing = standaloneCoordinator
+        standaloneCoordinator = null
+        updateStandaloneAiActive(false)
+        try {
+            existing?.stop()
         } catch (e: Exception) {
             Timber.tag(TAG).w("Error stopping standalone Vision Guard: ${e.message}")
-        } finally {
-            standaloneCoordinator = null
         }
     }
 
@@ -296,5 +392,17 @@ class HisnAccessibilityService : AccessibilityService() {
         @Volatile
         var instance: HisnAccessibilityService? = null
             private set
+
+        @Volatile
+        var isStandaloneAiActive: Boolean = false
+            private set
+
+        private val _isStandaloneAiActiveFlow = MutableStateFlow(false)
+        val isStandaloneAiActiveFlow: StateFlow<Boolean> = _isStandaloneAiActiveFlow.asStateFlow()
+
+        private fun updateStandaloneAiActive(active: Boolean) {
+            isStandaloneAiActive = active
+            _isStandaloneAiActiveFlow.value = active
+        }
     }
 }
