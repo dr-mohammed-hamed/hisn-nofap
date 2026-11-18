@@ -85,11 +85,13 @@
                             <!-- Header Row -->
                             <LinearLayout
                                 android:layout_width="match_parent"
-                                android:layout_height="32dp"
+                                android:layout_height="wrap_content"
+                                android:minHeight="32dp"
                                 android:background="?attr/colorSurfaceContainerHigh"
                                 android:gravity="center_vertical"
                                 android:orientation="horizontal"
-                                android:paddingHorizontal="6dp">
+                                android:paddingHorizontal="6dp"
+                                android:paddingVertical="4dp">
 
                                 <TextView
                                     android:layout_width="0dp"
@@ -198,7 +200,7 @@
                                     android:layout_gravity="center"
                                     android:src="@drawable/ic_check_small"
                                     app:tint="@color/status_green"
-                                    android:contentDescription="@null" />
+                                    android:contentDescription="@string/cd_dns_feature_supported" />
 
                                 <ImageView
                                     android:layout_width="0dp"
@@ -207,7 +209,7 @@
                                     android:layout_gravity="center"
                                     android:src="@drawable/ic_close"
                                     app:tint="?attr/colorOnSurfaceVariant"
-                                    android:contentDescription="@null" />
+                                    android:contentDescription="@string/cd_dns_feature_not_supported" />
 
                                 <ImageView
                                     android:layout_width="0dp"
@@ -216,7 +218,7 @@
                                     android:layout_gravity="center"
                                     android:src="@drawable/ic_check_small"
                                     app:tint="@color/status_green"
-                                    android:contentDescription="@null" />
+                                    android:contentDescription="@string/cd_dns_feature_supported" />
 
                                 <TextView
                                     android:layout_width="0dp"
@@ -282,7 +284,7 @@
                                     android:layout_gravity="center"
                                     android:src="@drawable/ic_check_small"
                                     app:tint="@color/status_green"
-                                    android:contentDescription="@null" />
+                                    android:contentDescription="@string/cd_dns_feature_supported" />
 
                                 <ImageView
                                     android:layout_width="0dp"
@@ -291,7 +293,7 @@
                                     android:layout_gravity="center"
                                     android:src="@drawable/ic_check_small"
                                     app:tint="@color/status_green"
-                                    android:contentDescription="@null" />
+                                    android:contentDescription="@string/cd_dns_feature_supported" />
 
                                 <ImageView
                                     android:layout_width="0dp"
@@ -300,7 +302,7 @@
                                     android:layout_gravity="center"
                                     android:src="@drawable/ic_check_small"
                                     app:tint="@color/status_green"
-                                    android:contentDescription="@null" />
+                                    android:contentDescription="@string/cd_dns_feature_supported" />
 
                                 <TextView
                                     android:layout_width="0dp"
@@ -366,7 +368,7 @@
                                     android:layout_gravity="center"
                                     android:src="@drawable/ic_check_small"
                                     app:tint="@color/status_green"
-                                    android:contentDescription="@null" />
+                                    android:contentDescription="@string/cd_dns_feature_supported" />
 
                                 <ImageView
                                     android:layout_width="0dp"
@@ -375,7 +377,7 @@
                                     android:layout_gravity="center"
                                     android:src="@drawable/ic_check_small"
                                     app:tint="@color/status_green"
-                                    android:contentDescription="@null" />
+                                    android:contentDescription="@string/cd_dns_feature_supported" />
 
                                 <ImageView
                                     android:layout_width="0dp"
@@ -384,7 +386,7 @@
                                     android:layout_gravity="center"
                                     android:src="@drawable/ic_close"
                                     app:tint="?attr/colorOnSurfaceVariant"
-                                    android:contentDescription="@null" />
+                                    android:contentDescription="@string/cd_dns_feature_not_supported" />
 
                                 <TextView
                                     android:layout_width="0dp"
@@ -432,6 +434,7 @@
                             android:inputType="textUri"
                             android:maxLines="1"
                             android:singleLine="true"
+                            android:textDirection="ltr"
                             android:textSize="12sp" />
                     </com.google.android.material.textfield.TextInputLayout>
                 </LinearLayout>
@@ -468,6 +471,7 @@
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
                             android:fontFamily="@font/tajawal"
+                            android:labelFor="@id/switchBlockIncognito"
                             android:text="@string/switch_block_incognito"
                             android:textColor="?attr/colorOnSurface"
                             android:textSize="14sp" />
@@ -496,6 +500,7 @@
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
                             android:fontFamily="@font/tajawal"
+                            android:labelFor="@id/switchBlockTelegramWeb"
                             android:text="@string/switch_block_telegram_web"
                             android:textColor="?attr/colorOnSurface"
                             android:textSize="14sp" />
@@ -524,6 +529,7 @@
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
                             android:fontFamily="@font/tajawal"
+                            android:labelFor="@id/switchYouTubeRestricted"
                             android:text="@string/switch_youtube_restricted"
                             android:textColor="?attr/colorOnSurface"
                             android:textSize="14sp" />
@@ -552,12 +558,42 @@
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
                             android:fontFamily="@font/tajawal"
+                            android:labelFor="@id/switchFullSystemFilter"
                             android:text="@string/switch_full_system_filter"
                             android:textColor="?attr/colorOnSurface"
                             android:textSize="14sp" />
 
                         <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/switchFullSystemFilter"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:background="?attr/colorOutlineVariant" />
+
+                    <!-- Switch 5: Block Ads & Trackers -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:minHeight="48dp"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:fontFamily="@font/tajawal"
+                            android:labelFor="@id/switchBlockAds"
+                            android:text="@string/switch_block_ads"
+                            android:textColor="?attr/colorOnSurface"
+                            android:textSize="14sp" />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/switchBlockAds"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content" />
                     </LinearLayout>
@@ -625,10 +661,11 @@
                             android:id="@+id/btnTabBlocked"
                             style="@style/Widget.Material3.Button.OutlinedButton"
                             android:layout_width="0dp"
-                            android:layout_height="48dp"
+                            android:layout_height="wrap_content"
+                            android:minHeight="48dp"
                             android:layout_weight="1"
                             android:fontFamily="@font/tajawal"
-                            android:paddingVertical="0dp"
+                            android:paddingVertical="4dp"
                             android:text="@string/tab_blocked_websites"
                             android:textSize="12sp" />
 
@@ -636,10 +673,11 @@
                             android:id="@+id/btnTabAllowed"
                             style="@style/Widget.Material3.Button.OutlinedButton"
                             android:layout_width="0dp"
-                            android:layout_height="48dp"
+                            android:layout_height="wrap_content"
+                            android:minHeight="48dp"
                             android:layout_weight="1"
                             android:fontFamily="@font/tajawal"
-                            android:paddingVertical="0dp"
+                            android:paddingVertical="4dp"
                             android:text="@string/tab_allowed_websites"
                             android:textSize="12sp" />
                     </com.google.android.material.button.MaterialButtonToggleGroup>
@@ -669,6 +707,7 @@
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
                                 android:fontFamily="@font/tajawal"
+                                android:labelFor="@id/switchWhitelistOnly"
                                 android:text="@string/switch_whitelist_only"
                                 android:textColor="?attr/colorOnSurface"
                                 android:textSize="13sp" />

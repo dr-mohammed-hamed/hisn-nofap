@@ -30,6 +30,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import timber.log.Timber
 
 /**
  * Unified Single Source of Truth (SSOT) repository for device protection policies.
@@ -50,6 +51,7 @@ class PolicyRepository(
 
     private var firestoreListener: ListenerRegistration? = null
     private val firestoreSyncMutex = Mutex()
+    private val snapshotProcessingMutex = Mutex()
     private val policyPersistMutex = Mutex()
     private val persistSequence = java.util.concurrent.atomic.AtomicLong(0L)
     private val roomSaveChannel = Channel<Pair<Long, DevicePolicyBundle>>(Channel.UNLIMITED)
@@ -90,6 +92,7 @@ class PolicyRepository(
                         (reconciled.version == current.version && reconciled.updatedAt >= current.updatedAt))
                 val wasAdopted = if (isNewerOrEqualReconciled) {
                     _currentPolicyFlow.value = reconciled
+                    com.drmohammed.antiporn.pageshield.engine.PageShieldAccessibilityHook.getInstance().updateConfig(reconciled.pageShieldConfig)
                     com.drmohammed.antiporn.ui.control.gate.SelfControlAccessGateRegistry.isSelfControlAllowedWhenSupervised = reconciled.isSelfControlAllowed
                     if (needsSave || !hasCachedPolicy) {
                         schedulePolicyPersistenceLocked(reconciled)
@@ -316,100 +319,127 @@ class PolicyRepository(
                         val data = snapshot.data
                         if (data != null) {
                             repositoryScope.launch {
-                                try {
-                                    val cloudPolicy = DevicePolicyBundle.fromMap(data)
-                                    val current = _currentPolicyFlow.value
-                                    val isFromGuardian = cloudPolicy.isSupervised && !cloudPolicy.guardianUid.isNullOrBlank()
-                                    val supervisoryChanged = isFromGuardian && (
-                                        cloudPolicy.isSelfControlAllowed != current.isSelfControlAllowed ||
-                                        cloudPolicy.isCurfewEnabled != current.isCurfewEnabled ||
-                                        cloudPolicy.curfewStartHour != current.curfewStartHour ||
-                                        cloudPolicy.curfewStartMinute != current.curfewStartMinute ||
-                                        cloudPolicy.curfewEndHour != current.curfewEndHour ||
-                                        cloudPolicy.curfewEndMinute != current.curfewEndMinute ||
-                                        cloudPolicy.isWeekendCurfewEnabled != current.isWeekendCurfewEnabled ||
-                                        cloudPolicy.weekendCurfewStartHour != current.weekendCurfewStartHour ||
-                                        cloudPolicy.weekendCurfewStartMinute != current.weekendCurfewStartMinute ||
-                                        cloudPolicy.weekendCurfewEndHour != current.weekendCurfewEndHour ||
-                                        cloudPolicy.weekendCurfewEndMinute != current.weekendCurfewEndMinute ||
-                                        cloudPolicy.isVpnBlackholeEnabled != current.isVpnBlackholeEnabled ||
-                                        cloudPolicy.isInstantInternetKillEnabled != current.isInstantInternetKillEnabled ||
-                                        cloudPolicy.isIncognitoBlocked != current.isIncognitoBlocked ||
-                                        cloudPolicy.lockNewInstallsUntilApproved != current.lockNewInstallsUntilApproved ||
-                                        cloudPolicy.isDateTimeLocked != current.isDateTimeLocked ||
-                                        cloudPolicy.dnsHost != current.dnsHost ||
-                                        cloudPolicy.browserFilterMode != current.browserFilterMode ||
-                                        cloudPolicy.customBlockedUrls != current.customBlockedUrls ||
-                                        cloudPolicy.customAllowedUrls != current.customAllowedUrls ||
-                                        cloudPolicy.guardianUid != current.guardianUid ||
-                                        cloudPolicy.waqfaConfig != current.waqfaConfig ||
-                                        cloudPolicy.pageShieldConfig != current.pageShieldConfig ||
-                                        cloudPolicy.selfControlPageShieldAllowed != current.selfControlPageShieldAllowed ||
-                                        cloudPolicy.isScreenAiEnabledGlobally != current.isScreenAiEnabledGlobally
-                                    )
-                                    val statusChanged = cloudPolicy.breakoutStatus != current.breakoutStatus || cloudPolicy.deactivationStatus != current.deactivationStatus
-                                    val isTimeNewer = cloudPolicy.updatedAt > current.updatedAt
-                                    val isVersionNewer = cloudPolicy.version > current.version
+                                snapshotProcessingMutex.withLock {
+                                    try {
+                                        val cloudPolicy = DevicePolicyBundle.fromMap(data)
+                                        val current = _currentPolicyFlow.value
+                                        val isFromGuardian = cloudPolicy.isSupervised && !cloudPolicy.guardianUid.isNullOrBlank()
+                                        val supervisoryChanged = isFromGuardian && (
+                                            cloudPolicy.isSelfControlAllowed != current.isSelfControlAllowed ||
+                                            cloudPolicy.selfControlCurfewAllowed != current.selfControlCurfewAllowed ||
+                                            cloudPolicy.selfControlWebAllowed != current.selfControlWebAllowed ||
+                                            cloudPolicy.selfControlAppsAllowed != current.selfControlAppsAllowed ||
+                                            cloudPolicy.selfControlWaqfaAllowed != current.selfControlWaqfaAllowed ||
+                                            cloudPolicy.selfControlNewAppsAllowed != current.selfControlNewAppsAllowed ||
+                                            cloudPolicy.isCurfewEnabled != current.isCurfewEnabled ||
+                                            cloudPolicy.curfewStartHour != current.curfewStartHour ||
+                                            cloudPolicy.curfewStartMinute != current.curfewStartMinute ||
+                                            cloudPolicy.curfewEndHour != current.curfewEndHour ||
+                                            cloudPolicy.curfewEndMinute != current.curfewEndMinute ||
+                                            cloudPolicy.isWeekendCurfewEnabled != current.isWeekendCurfewEnabled ||
+                                            cloudPolicy.weekendCurfewStartHour != current.weekendCurfewStartHour ||
+                                            cloudPolicy.weekendCurfewStartMinute != current.weekendCurfewStartMinute ||
+                                            cloudPolicy.weekendCurfewEndHour != current.weekendCurfewEndHour ||
+                                            cloudPolicy.weekendCurfewEndMinute != current.weekendCurfewEndMinute ||
+                                            cloudPolicy.isVpnBlackholeEnabled != current.isVpnBlackholeEnabled ||
+                                            cloudPolicy.isInstantInternetKillEnabled != current.isInstantInternetKillEnabled ||
+                                            cloudPolicy.isIncognitoBlocked != current.isIncognitoBlocked ||
+                                            cloudPolicy.lockNewInstallsUntilApproved != current.lockNewInstallsUntilApproved ||
+                                            cloudPolicy.isScreenAiEnabledGlobally != current.isScreenAiEnabledGlobally ||
+                                            cloudPolicy.customBlacklistPackages != current.customBlacklistPackages ||
+                                            cloudPolicy.customCurfewWhitelistPackages != current.customCurfewWhitelistPackages ||
+                                            cloudPolicy.customAiScanPackages != current.customAiScanPackages ||
+                                            cloudPolicy.excludedAiScanPackages != current.excludedAiScanPackages ||
+                                            cloudPolicy.curfewVpnBypassPackages != current.curfewVpnBypassPackages ||
+                                            cloudPolicy.protectedAppPackages != current.protectedAppPackages ||
+                                            cloudPolicy.isDateTimeLocked != current.isDateTimeLocked ||
+                                            cloudPolicy.timeZoneId != current.timeZoneId ||
+                                            cloudPolicy.dnsHost != current.dnsHost ||
+                                            cloudPolicy.browserFilterMode != current.browserFilterMode ||
+                                            cloudPolicy.isFullSystemFilteringEnabled != current.isFullSystemFilteringEnabled ||
+                                            cloudPolicy.isYouTubeRestrictedModeEnabled != current.isYouTubeRestrictedModeEnabled ||
+                                            cloudPolicy.isAdBlockingEnabled != current.isAdBlockingEnabled ||
+                                            cloudPolicy.isTelegramWebBlocked != current.isTelegramWebBlocked ||
+                                            cloudPolicy.customBlockedUrls != current.customBlockedUrls ||
+                                            cloudPolicy.customAllowedUrls != current.customAllowedUrls ||
+                                            cloudPolicy.guardianUid != current.guardianUid ||
+                                            cloudPolicy.waqfaConfig != current.waqfaConfig ||
+                                            cloudPolicy.pageShieldConfig != current.pageShieldConfig ||
+                                            cloudPolicy.selfControlPageShieldAllowed != current.selfControlPageShieldAllowed ||
+                                            cloudPolicy.remoteSelfControlResetRequestedAt != current.remoteSelfControlResetRequestedAt
+                                        )
+                                        val statusChanged = cloudPolicy.breakoutStatus != current.breakoutStatus || cloudPolicy.deactivationStatus != current.deactivationStatus
+                                        val supervisionChanged = current.isSupervised != cloudPolicy.isSupervised
+                                        val isTimeNewer = cloudPolicy.updatedAt > current.updatedAt
+                                        val isVersionNewer = cloudPolicy.version > current.version
 
-                                    val maskedUid = AiTelemetryReporter.maskIdentifier(uid)
-                                    val maskedGuardianUid = AiTelemetryReporter.maskIdentifier(cloudPolicy.guardianUid)
-                                    Log.i(TAG, "[SelfControlDiag] Cloud policy received on ward /policies/$maskedUid: cloudPolicy(v${cloudPolicy.version}, supervised=${cloudPolicy.isSupervised}, allowed=${cloudPolicy.isSelfControlAllowed}, guardian='$maskedGuardianUid') vs local(v${current.version}, supervised=${current.isSupervised}, allowed=${current.isSelfControlAllowed}), isVersionNewer=$isVersionNewer, isTimeNewer=$isTimeNewer, supervisoryChanged=$supervisoryChanged, statusChanged=$statusChanged")
+                                        val maskedUid = AiTelemetryReporter.maskIdentifier(uid)
+                                        val maskedGuardianUid = AiTelemetryReporter.maskIdentifier(cloudPolicy.guardianUid)
+                                        Log.i(TAG, "[SelfControlDiag] Cloud policy received on ward /policies/$maskedUid: cloudPolicy(v${cloudPolicy.version}, supervised=${cloudPolicy.isSupervised}, allowed=${cloudPolicy.isSelfControlAllowed}, guardian='$maskedGuardianUid') vs local(v${current.version}, supervised=${current.isSupervised}, allowed=${current.isSelfControlAllowed}), isVersionNewer=$isVersionNewer, isTimeNewer=$isTimeNewer, supervisoryChanged=$supervisoryChanged, statusChanged=$statusChanged")
 
-                                    com.drmohammed.antiporn.telemetry.BlackBoxRecorder.recordCloudSync(
-                                        appContext,
-                                        "POLICY_RECEIVED",
-                                        isSuccess = true,
-                                        details = "uid=$maskedUid, v${cloudPolicy.version}, isSupervised=${cloudPolicy.isSupervised}, curfew=${cloudPolicy.isCurfewEnabled}(${cloudPolicy.curfewStartHour}:${cloudPolicy.curfewStartMinute}), isVersionNewer=$isVersionNewer, isTimeNewer=$isTimeNewer"
-                                    )
+                                        com.drmohammed.antiporn.telemetry.BlackBoxRecorder.recordCloudSync(
+                                            appContext,
+                                            "POLICY_RECEIVED",
+                                            isSuccess = true,
+                                            details = "uid=$maskedUid, v${cloudPolicy.version}, isSupervised=${cloudPolicy.isSupervised}, curfew=${cloudPolicy.isCurfewEnabled}(${cloudPolicy.curfewStartHour}:${cloudPolicy.curfewStartMinute}), isVersionNewer=$isVersionNewer, isTimeNewer=$isTimeNewer"
+                                        )
 
-                                    if (isVersionNewer || isTimeNewer || supervisoryChanged || statusChanged || (current.isSupervised != cloudPolicy.isSupervised)) {
-                                        val enforcedPolicy = cloudPolicy
+                                        if (isVersionNewer || isTimeNewer || supervisoryChanged || statusChanged || supervisionChanged) {
+                                            val forceOverride = isFromGuardian && (supervisoryChanged || statusChanged || supervisionChanged)
+                                            val enforcedPolicy = if (forceOverride) {
+                                                cloudPolicy.copy(version = maxOf(cloudPolicy.version, current.version + 1))
+                                            } else {
+                                                cloudPolicy
+                                            }
 
-                                        Log.i(TAG, "[SelfControlDiag] Sovereign cloud policy ACCEPTED! Enforcing update on device... (v${enforcedPolicy.version}, isSelfControlAllowed=${enforcedPolicy.isSelfControlAllowed})")
-                                        updateLocalPolicyAndEnforce(enforcedPolicy)
+                                            Log.i(TAG, "[SelfControlDiag] Sovereign cloud policy ACCEPTED! Enforcing update on device... (v${enforcedPolicy.version}, isSelfControlAllowed=${enforcedPolicy.isSelfControlAllowed}, forceOverride=$forceOverride)")
+                                            val adopted = updateLocalPolicyAndEnforce(enforcedPolicy, forceSovereignOverride = forceOverride)
 
-                                        val adoptedPolicy = _currentPolicyFlow.value
-                                        if (adoptedPolicy.version == enforcedPolicy.version &&
-                                            adoptedPolicy.isSupervised &&
-                                            !adoptedPolicy.guardianUid.isNullOrBlank()
-                                        ) {
-                                            Log.i(TAG, "Guardian detected from cloud snapshot: ${AiTelemetryReporter.maskIdentifier(adoptedPolicy.guardianName)} ($maskedGuardianUid)")
-                                            val partner = com.drmohammed.antiporn.data.local.db.entity.PartnerEntity(
-                                                id = adoptedPolicy.guardianUid,
-                                                pairingCode = AccountabilityRepository.CODE_LOCKED,
-                                                displayName = adoptedPolicy.guardianName ?: appContext.getString(R.string.guardian_default_name),
-                                                role = com.drmohammed.antiporn.data.local.db.entity.PartnerEntity.ROLE_GUARDIAN,
-                                                status = com.drmohammed.antiporn.data.local.db.entity.PartnerEntity.STATUS_ACTIVE,
-                                                createdAt = com.drmohammed.antiporn.core.time.TrustedTimeProvider.currentTimeMillis(appContext),
-                                                lastSyncAt = com.drmohammed.antiporn.core.time.TrustedTimeProvider.currentTimeMillis(appContext)
-                                            )
-                                            partnerDao.savePartnerBlocking(partner)
-                                        }
+                                            val adoptedPolicy = _currentPolicyFlow.value
+                                            if (adopted &&
+                                                adoptedPolicy.version == enforcedPolicy.version &&
+                                                adoptedPolicy.isSupervised &&
+                                                !adoptedPolicy.guardianUid.isNullOrBlank()
+                                            ) {
+                                                Log.i(TAG, "Guardian detected from cloud snapshot: ${AiTelemetryReporter.maskIdentifier(adoptedPolicy.guardianName)} ($maskedGuardianUid)")
+                                                val partner = com.drmohammed.antiporn.data.local.db.entity.PartnerEntity(
+                                                    id = adoptedPolicy.guardianUid,
+                                                    pairingCode = AccountabilityRepository.CODE_LOCKED,
+                                                    displayName = adoptedPolicy.guardianName ?: appContext.getString(R.string.guardian_default_name),
+                                                    role = com.drmohammed.antiporn.data.local.db.entity.PartnerEntity.ROLE_GUARDIAN,
+                                                    status = com.drmohammed.antiporn.data.local.db.entity.PartnerEntity.STATUS_ACTIVE,
+                                                    createdAt = com.drmohammed.antiporn.core.time.TrustedTimeProvider.currentTimeMillis(appContext),
+                                                    lastSyncAt = com.drmohammed.antiporn.core.time.TrustedTimeProvider.currentTimeMillis(appContext)
+                                                )
+                                                partnerDao.savePartnerBlocking(partner)
+                                            }
 
-                                        if (isFromGuardian) {
-                                            repositoryScope.launch {
-                                                try {
-                                                    FirebaseFirestore.getInstance().collection("policies").document(uid).update(
-                                                        mapOf(
-                                                            "acknowledgedVersion" to cloudPolicy.version,
-                                                            "lastAcknowledgedAt" to com.drmohammed.antiporn.core.time.TrustedTimeProvider.currentTimeMillis(appContext)
+                                            if (adopted && isFromGuardian) {
+                                                repositoryScope.launch {
+                                                    try {
+                                                        FirebaseFirestore.getInstance().collection("policies").document(uid).update(
+                                                            mapOf(
+                                                                "acknowledgedVersion" to cloudPolicy.version,
+                                                                "lastAcknowledgedAt" to com.drmohammed.antiporn.core.time.TrustedTimeProvider.currentTimeMillis(appContext)
+                                                            )
+                                                        ).await()
+                                                        Log.i(TAG, "[SelfControlDiag] Acknowledged policy v${cloudPolicy.version} back to Firestore /policies/$maskedUid")
+                                                        com.drmohammed.antiporn.telemetry.BlackBoxRecorder.recordCloudSync(
+                                                            appContext,
+                                                            "POLICY_ACKNOWLEDGED",
+                                                            isSuccess = true,
+                                                            details = "acknowledgedVersion=${cloudPolicy.version} on /policies/$maskedUid"
                                                         )
-                                                    ).await()
-                                                    Log.i(TAG, "[SelfControlDiag] Acknowledged policy v${cloudPolicy.version} back to Firestore /policies/$maskedUid")
-                                                    com.drmohammed.antiporn.telemetry.BlackBoxRecorder.recordCloudSync(
-                                                        appContext,
-                                                        "POLICY_ACKNOWLEDGED",
-                                                        isSuccess = true,
-                                                        details = "acknowledgedVersion=${cloudPolicy.version} on /policies/$maskedUid"
-                                                    )
-                                                } catch (e: Exception) {
-                                                    Log.w(TAG, "Failed writing policy acknowledgment: ${e.message}")
+                                                    } catch (e: Exception) {
+                                                        Log.w(TAG, "Failed writing policy acknowledgment: ${e.message}")
+                                                    }
                                                 }
                                             }
                                         }
+                                    } catch (e: Exception) {
+                                        if (e is CancellationException) throw e
+                                        Log.e(TAG, "Error handling policy update from cloud", e)
                                     }
-                                } catch (e: Exception) {
-                                    Log.e(TAG, "Error handling policy update from cloud", e)
                                 }
                             }
                         }
@@ -434,13 +464,16 @@ class PolicyRepository(
 
     /**
      * Updates policy locally, saves to SQLite, and enforces on the device.
+     * Returns true if the policy was adopted, false if rejected as stale.
      */
-    fun updateLocalPolicyAndEnforce(bundle: DevicePolicyBundle) {
+    fun updateLocalPolicyAndEnforce(bundle: DevicePolicyBundle, forceSovereignOverride: Boolean = false): Boolean {
         val currentBeforeUpdate = synchronized(policyStateLock) {
             val current = _currentPolicyFlow.value
-            Log.i(TAG, "[SelfControlDiag] updateLocalPolicyAndEnforce: v${bundle.version}, isSupervised=${bundle.isSupervised}, isSelfControlAllowed=${bundle.isSelfControlAllowed}")
+            Log.i(TAG, "[SelfControlDiag] updateLocalPolicyAndEnforce: v${bundle.version}, isSupervised=${bundle.isSupervised}, isSelfControlAllowed=${bundle.isSelfControlAllowed}, forceOverride=$forceSovereignOverride")
             val isBreakoutStatusChange = bundle.breakoutStatus != current.breakoutStatus || bundle.deactivationStatus != current.deactivationStatus
-            if (bundle.version < current.version || (!isBreakoutStatusChange && bundle.version == current.version && bundle.updatedAt < current.updatedAt)) {
+            if (!forceSovereignOverride &&
+                (bundle.version < current.version || (!isBreakoutStatusChange && bundle.version == current.version && bundle.updatedAt < current.updatedAt))
+            ) {
                 Log.w(TAG, "Monotonic guard: rejected stale/out-of-order policy v${bundle.version}@${bundle.updatedAt} (current is v${current.version}@${current.updatedAt})")
                 return@synchronized null to current
             }
@@ -460,10 +493,11 @@ class PolicyRepository(
                 isSuccess = false,
                 error = "Monotonic guard reject: incoming v${bundle.version}@${bundle.updatedAt} < current v${current.version}@${current.updatedAt}"
             )
-            return
+            return false
         }
         recordAndHandleSupervisionChange(bundle, previous)
         checkAndApplyRemoteSelfControlReset(bundle)
+        return true
     }
 
     private fun checkAndApplyRemoteSelfControlReset(policy: DevicePolicyBundle) {
@@ -595,6 +629,60 @@ class PolicyRepository(
         }
     }
 
+    /**
+     * Fetches the latest remote policy for [wardUid], applies only the caller's patch via [transform],
+     * enforces supervision/guardian metadata invariants, and pushes the merged bundle to Firestore.
+     * Returns the pushed [DevicePolicyBundle] on success, or null if aborted or failed.
+     */
+    suspend fun mergeAndPushRemotePolicyPatch(
+        wardUid: String,
+        fallbackPolicy: DevicePolicyBundle,
+        guardianUidFallback: String?,
+        guardianNameFallback: String?,
+        transform: (DevicePolicyBundle) -> DevicePolicyBundle
+    ): DevicePolicyBundle? {
+        if (wardUid.isBlank()) {
+            Timber.tag(TAG).e("Refusing remote policy patch push: wardUid is blank")
+            return null
+        }
+        val latestCloudPolicy = try {
+            val snap = FirebaseFirestore.getInstance()
+                .collection("policies")
+                .document(wardUid)
+                .get()
+                .await()
+            val data = snap?.data
+            if (snap != null && snap.exists() && data != null) {
+                DevicePolicyBundle.fromMap(data)
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Timber.tag(TAG).w(e, "Failed fetching latest cloud policy before remote patch push")
+            null
+        }
+        if (latestCloudPolicy == null && !fallbackPolicy.isSupervised) {
+            Timber.tag(TAG).e("Aborting remote patch push: latest cloud doc unavailable and fallbackPolicy is unsupervised")
+            return null
+        }
+        val basePolicy = latestCloudPolicy ?: fallbackPolicy
+        val resolvedGuardianUid = basePolicy.guardianUid?.takeIf { it.isNotBlank() }
+            ?: fallbackPolicy.guardianUid?.takeIf { it.isNotBlank() }
+            ?: guardianUidFallback?.takeIf { it.isNotBlank() }
+        val resolvedGuardianName = basePolicy.guardianName?.takeIf { it.isNotBlank() }
+            ?: fallbackPolicy.guardianName?.takeIf { it.isNotBlank() }
+            ?: guardianNameFallback?.takeIf { it.isNotBlank() }
+        val updatedPolicy = transform(basePolicy).copy(
+            isSupervised = true,
+            guardianUid = resolvedGuardianUid,
+            guardianName = resolvedGuardianName,
+            guardianPolicySnapshot = null,
+            lastSelfModifiedAt = null
+        )
+        return if (pushPolicyToWard(wardUid, updatedPolicy)) updatedPolicy else null
+    }
+
     private fun syncPolicyToCloudAsync(uid: String, bundle: DevicePolicyBundle) {
         if (uid.isBlank()) return
         val maskedUid = AiTelemetryReporter.maskIdentifier(uid)
@@ -679,7 +767,8 @@ class PolicyRepository(
                                 weekendCurfewStartHour = current.weekendCurfewStartHour,
                                 weekendCurfewStartMinute = current.weekendCurfewStartMinute,
                                 weekendCurfewEndHour = current.weekendCurfewEndHour,
-                                weekendCurfewEndMinute = current.weekendCurfewEndMinute
+                                weekendCurfewEndMinute = current.weekendCurfewEndMinute,
+                                isVpnBlackholeEnabled = current.isVpnBlackholeEnabled
                             )
                         }
                         if (!current.selfControlWebAllowed) {
@@ -690,11 +779,14 @@ class PolicyRepository(
                                 customAllowedUrls = current.customAllowedUrls,
                                 dnsHost = current.dnsHost,
                                 isYouTubeRestrictedModeEnabled = current.isYouTubeRestrictedModeEnabled,
-                                isTelegramWebBlocked = current.isTelegramWebBlocked
+                                isAdBlockingEnabled = current.isAdBlockingEnabled,
+                                isTelegramWebBlocked = current.isTelegramWebBlocked,
+                                isIncognitoBlocked = current.isIncognitoBlocked
                             )
                         }
                         if (!current.selfControlAppsAllowed) {
                             sanitized = sanitized.copy(
+                                isScreenAiEnabledGlobally = current.isScreenAiEnabledGlobally,
                                 customBlacklistPackages = current.customBlacklistPackages,
                                 customCurfewWhitelistPackages = current.customCurfewWhitelistPackages,
                                 customAiScanPackages = current.customAiScanPackages,
@@ -841,11 +933,11 @@ class PolicyRepository(
 
         fun getInstance(context: Context): PolicyRepository {
             return instance ?: synchronized(this) {
-                instance ?: try {
+                instance ?: (try {
                     org.koin.core.context.GlobalContext.getOrNull()?.get<PolicyRepository>()
                 } catch (t: Throwable) {
                     null
-                } ?: PolicyRepository(context.applicationContext).also {
+                } ?: PolicyRepository(context.applicationContext)).also {
                     instance = it
                 }
             }

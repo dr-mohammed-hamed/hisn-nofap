@@ -1,10 +1,10 @@
 package com.drmohammed.antiporn.core.network.dns
 
 import android.content.Context
-import android.util.Log
+import androidx.annotation.VisibleForTesting
+import timber.log.Timber
 import java.io.File
 import java.io.FileInputStream
-import java.io.IOException
 import java.nio.ByteOrder
 import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
@@ -40,17 +40,14 @@ object BinaryDomainFilter {
         BLOCKED_ADS
     }
 
-    @Volatile
-    private var mappedBuffer: MappedByteBuffer? = null
+    private class FilterSnapshot(
+        val buffer: MappedByteBuffer,
+        val bucketOffsets: IntArray,
+        val totalEntries: Int
+    )
 
     @Volatile
-    private var bucketOffsets: IntArray? = null
-
-    @Volatile
-    private var totalEntries: Int = 0
-
-    @Volatile
-    private var isInitialized: Boolean = false
+    private var snapshot: FilterSnapshot? = null
 
     /**
      * Initializes the memory-mapped buffer from local storage (if updated) or APK assets.
@@ -58,7 +55,7 @@ object BinaryDomainFilter {
      */
     @Synchronized
     fun init(context: Context): Boolean {
-        if (isInitialized && mappedBuffer != null) return true
+        if (snapshot != null) return true
 
         val appContext = context.applicationContext
         try {
@@ -67,13 +64,13 @@ object BinaryDomainFilter {
             if (updatedFile.exists() && updatedFile.length() >= HEADER_SIZE) {
                 try {
                     val loaded = loadFromFile(updatedFile)
-                    if (loaded) {
-                        Log.i(TAG, "Loaded updated binary filter from internal storage: $totalEntries entries")
-                        isInitialized = true
+                    if (loaded != null) {
+                        snapshot = loaded
+                        Timber.tag(TAG).i("Loaded updated binary filter from internal storage: ${loaded.totalEntries} entries")
                         return true
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "Failed loading filter from internal storage, falling back to assets", e)
+                    Timber.tag(TAG).w(e, "Failed loading filter from internal storage, falling back to assets")
                 }
             }
 
@@ -85,65 +82,84 @@ object BinaryDomainFilter {
                     val buffer = channel.map(FileChannel.MapMode.READ_ONLY, descriptor.startOffset, descriptor.length)
                     buffer.order(ByteOrder.BIG_ENDIAN)
 
-                    if (validateAndSetup(buffer, descriptor.length)) {
-                        mappedBuffer = buffer
-                        isInitialized = true
-                        Log.i(TAG, "Successfully memory-mapped bundled binary filter: $totalEntries entries")
+                    val validated = validateAndBuildSnapshot(buffer, descriptor.length)
+                    if (validated != null) {
+                        snapshot = validated
+                        Timber.tag(TAG).i("Successfully memory-mapped bundled binary filter: ${validated.totalEntries} entries")
                         return true
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize BinaryDomainFilter", e)
+            Timber.tag(TAG).e(e, "Failed to initialize BinaryDomainFilter")
         }
         return false
     }
 
-    private fun loadFromFile(file: File): Boolean {
+    @VisibleForTesting
+    @Synchronized
+    internal fun initForTesting(file: File): Boolean {
+        val loaded = loadFromFile(file) ?: return false
+        snapshot = loaded
+        return true
+    }
+
+    @VisibleForTesting
+    @Synchronized
+    internal fun resetForTesting() {
+        snapshot = null
+    }
+
+    private fun loadFromFile(file: File): FilterSnapshot? {
         FileInputStream(file).use { fis ->
             val channel = fis.channel
             val buffer = channel.map(FileChannel.MapMode.READ_ONLY, 0, file.length())
             buffer.order(ByteOrder.BIG_ENDIAN)
-            if (validateAndSetup(buffer, file.length())) {
-                mappedBuffer = buffer
-                return true
-            }
+            return validateAndBuildSnapshot(buffer, file.length())
         }
-        return false
     }
 
-    private fun validateAndSetup(buffer: MappedByteBuffer, length: Long): Boolean {
-        if (length < HEADER_SIZE) return false
+    private fun validateAndBuildSnapshot(buffer: MappedByteBuffer, length: Long): FilterSnapshot? {
+        if (length < HEADER_SIZE) return null
 
         // Validate Magic
         if (buffer.get(0) != MAGIC_0 || buffer.get(1) != MAGIC_1 ||
             buffer.get(2) != MAGIC_2 || buffer.get(3) != MAGIC_3
         ) {
-            Log.e(TAG, "Invalid magic bytes in binary filter")
-            return false
+            Timber.tag(TAG).e("Invalid magic bytes in binary filter")
+            return null
         }
 
         // Validate Version
         val version = buffer.getInt(4)
         if (version != 1) {
-            Log.e(TAG, "Unsupported binary filter version: $version")
-            return false
+            Timber.tag(TAG).e("Unsupported binary filter version: $version")
+            return null
         }
 
         val count = buffer.getInt(8)
         if (count < 0 || length < HEADER_SIZE + count * 8L) {
-            Log.e(TAG, "Truncated binary filter: count=$count, fileLength=$length")
-            return false
+            Timber.tag(TAG).e("Truncated binary filter: count=$count, fileLength=$length")
+            return null
         }
 
         val buckets = IntArray(257)
+        var prev = 0
         for (i in 0..256) {
-            buckets[i] = buffer.getInt(12 + i * 4)
+            val offset = buffer.getInt(12 + i * 4)
+            if (offset < prev || offset > count) {
+                Timber.tag(TAG).e("Corrupted binary filter bucket table at index $i: offset=$offset, prev=$prev, count=$count")
+                return null
+            }
+            buckets[i] = offset
+            prev = offset
+        }
+        if (buckets[0] != 0 || buckets[256] != count) {
+            Timber.tag(TAG).e("Invalid binary filter bucket boundaries: first=${buckets[0]}, last=${buckets[256]}, count=$count")
+            return null
         }
 
-        bucketOffsets = buckets
-        totalEntries = count
-        return true
+        return FilterSnapshot(buffer = buffer, bucketOffsets = buckets, totalEntries = count)
     }
 
     /**
@@ -164,9 +180,10 @@ object BinaryDomainFilter {
      * Checks an exact domain string against the memory-mapped hash table.
      */
     fun checkExactDomain(domain: String): FilterResult {
-        val buffer = mappedBuffer ?: return FilterResult.NONE
-        val buckets = bucketOffsets ?: return FilterResult.NONE
-        if (totalEntries <= 0) return FilterResult.NONE
+        val current = snapshot ?: return FilterResult.NONE
+        if (current.totalEntries <= 0) return FilterResult.NONE
+        val buffer = current.buffer
+        val buckets = current.bucketOffsets
 
         val rawHash = fnv1a64(domain)
         val searchKey = rawHash and -2L // Mask bit 0 for 63-bit key comparison
@@ -204,7 +221,7 @@ object BinaryDomainFilter {
      * or [FilterResult.NONE] if no match.
      */
     fun checkDomainWithSubdomains(rawDomain: String): FilterResult {
-        if (!isInitialized || mappedBuffer == null) return FilterResult.NONE
+        if (snapshot == null) return FilterResult.NONE
 
         var domain = rawDomain.trim().lowercase().trimEnd('.')
         if (domain.startsWith("www.")) {

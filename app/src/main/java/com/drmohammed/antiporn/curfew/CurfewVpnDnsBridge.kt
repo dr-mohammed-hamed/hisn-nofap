@@ -18,6 +18,7 @@ import com.drmohammed.antiporn.shields.DnsShield
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import com.drmohammed.antiporn.telemetry.DpmExecutionResult
 import com.drmohammed.antiporn.telemetry.SafeDpmGateway
+import timber.log.Timber
 
 enum class DnsFastHealOutcome {
     SKIPPED_UNSUPPORTED_SDK,
@@ -123,7 +124,7 @@ internal object CurfewVpnDnsBridge {
                 dpmOk = false
                 Log.w(TAG, "Skipping Blackhole VPN start because Always-On setup failed and VPN consent is not granted")
             }
-            if (waitForAndVerifyVpnReady(context)) {
+            if (waitForAndVerifyVpnReady(context, CurfewBlackholeVpnService.VpnMode.CURFEW_BLACKHOLE)) {
                 if (!ensureOpportunisticDnsForLocalVpn(context)) {
                     dpmOk = false
                     Log.w(TAG, "Failed ensuring opportunistic DNS while activating Blackhole VPN")
@@ -142,10 +143,9 @@ internal object CurfewVpnDnsBridge {
     internal fun isLocalVpnDnsStateConsistent(
         dpmMode: Int?,
         globalMode: String?,
-        globalHost: String?
+        @Suppress("UNUSED_PARAMETER") globalHost: String?
     ): Boolean {
-        val isGlobalHealthy = (globalMode == "opportunistic" || globalMode == "off" || globalMode == null) &&
-            globalHost.isNullOrEmpty()
+        val isGlobalHealthy = globalMode == "opportunistic" || globalMode == "off" || globalMode == null
         val isDpmHealthy = dpmMode == privateDnsModeOpportunistic() ||
             dpmMode == privateDnsModeOff()
         return isGlobalHealthy && isDpmHealthy
@@ -366,14 +366,13 @@ internal object CurfewVpnDnsBridge {
             }
         }
         val globalMode = readGlobalSetting(context, "private_dns_mode")
-        val globalHost = readGlobalSetting(context, "private_dns_specifier")
-        var globalWriteOk = true
-        if (globalMode != "opportunistic" || !globalHost.isNullOrEmpty()) {
+        if (!dpmOk || globalMode == "hostname") {
             try {
                 Settings.Global.putString(context.contentResolver, "private_dns_mode", "opportunistic")
                 Settings.Global.putString(context.contentResolver, "private_dns_specifier", "")
+            } catch (e: SecurityException) {
+                Timber.tag(TAG).w(e, "Best-effort Settings.Global opportunistic fallback blocked by SecurityException")
             } catch (e: Exception) {
-                globalWriteOk = false
                 Log.w(TAG, "Could not write Settings.Global opportunistic mode for Local VPN", e)
             }
         }
@@ -381,7 +380,7 @@ internal object CurfewVpnDnsBridge {
         val verifiedMode = readDpmPrivateDnsMode(context)
         val verifiedGlobalMode = readGlobalSetting(context, "private_dns_mode")
         val verifiedGlobalHost = readGlobalSetting(context, "private_dns_specifier")
-        return dpmOk && globalWriteOk && isLocalVpnDnsStateConsistent(
+        return isLocalVpnDnsStateConsistent(
             dpmMode = verifiedMode,
             globalMode = verifiedGlobalMode,
             globalHost = verifiedGlobalHost
@@ -395,25 +394,37 @@ internal object CurfewVpnDnsBridge {
         shieldId: String,
         targetHost: String
     ): ShieldResult {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+        val requiredMode = CurfewBlackholeVpnService.evaluateRequiredMode(context)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q && requiredMode == CurfewBlackholeVpnService.VpnMode.IDLE) {
             return ShieldResult(
                 shieldId = shieldId,
                 success = false,
                 message = context.getString(R.string.shield_dns_unsupported)
             )
         }
-        val requiredMode = CurfewBlackholeVpnService.evaluateRequiredMode(context)
         if (requiredMode != CurfewBlackholeVpnService.VpnMode.IDLE) {
+            if (!isVpnConsentGranted(context) && SafeDpmGateway.isDeviceOwner(context)) {
+                val lockdown = requiredMode == CurfewBlackholeVpnService.VpnMode.CURFEW_BLACKHOLE
+                val bypassed = if (lockdown) CurfewConfig.getVpnBypassedPackages(context) else null
+                SafeDpmGateway.setAlwaysOnVpnPackageBlocking(
+                    context = context,
+                    vpnPackage = context.packageName,
+                    lockdown = lockdown,
+                    bypassedPackages = bypassed
+                )
+            }
             val hasVpnConsent = isVpnConsentGranted(context)
             if (!hasVpnConsent) {
                 Log.w(TAG, "VpnService.prepare returned non-null; refusing opportunistic DoT downgrade and preserving standalone DoT")
-                applyStandaloneDot(context, targetHost)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    applyStandaloneDot(context, targetHost)
+                }
                 lockDnsAndNetworkRestrictions(context)
                 return ShieldResult(
                     shieldId = shieldId,
                     success = false,
                     message = context.getString(R.string.card_dns_inactive),
-                    statusCode = DevicePolicyManager.PRIVATE_DNS_SET_ERROR_FAILURE_SETTING
+                    statusCode = COMPAT_PRIVATE_DNS_SET_ERROR_FAILURE_SETTING
                 )
             }
 
@@ -423,33 +434,40 @@ internal object CurfewVpnDnsBridge {
                 Log.w(TAG, "Failed to sync Unified VPN policy from DnsShield", e)
             }
 
-            val vpnReady = waitForAndVerifyVpnReady(context)
+            val vpnReady = waitForAndVerifyVpnReady(context, requiredMode)
             if (!vpnReady) {
                 Log.w(TAG, "VPN TUN verification failed; preserving standalone DoT instead of opportunistic downgrade")
-                applyStandaloneDot(context, targetHost)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    applyStandaloneDot(context, targetHost)
+                }
                 lockDnsAndNetworkRestrictions(context)
                 return ShieldResult(
                     shieldId = shieldId,
                     success = false,
                     message = context.getString(R.string.card_dns_inactive),
-                    statusCode = DevicePolicyManager.PRIVATE_DNS_SET_ERROR_FAILURE_SETTING
+                    statusCode = COMPAT_PRIVATE_DNS_SET_ERROR_FAILURE_SETTING
                 )
             }
 
-            val opportunisticOk = ensureOpportunisticDnsForLocalVpnInternal(context)
+            val opportunisticOk = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ensureOpportunisticDnsForLocalVpnInternal(context)
+            } else {
+                lockDnsAndNetworkRestrictions(context)
+                true
+            }
             return if (opportunisticOk) {
                 ShieldResult(
                     shieldId = shieldId,
                     success = true,
                     message = context.getString(R.string.shield_dns_local_filter_active),
-                    statusCode = DevicePolicyManager.PRIVATE_DNS_SET_NO_ERROR
+                    statusCode = COMPAT_PRIVATE_DNS_SET_NO_ERROR
                 )
             } else {
                 ShieldResult(
                     shieldId = shieldId,
                     success = false,
                     message = context.getString(R.string.card_dns_inactive),
-                    statusCode = DevicePolicyManager.PRIVATE_DNS_SET_ERROR_FAILURE_SETTING
+                    statusCode = COMPAT_PRIVATE_DNS_SET_ERROR_FAILURE_SETTING
                 )
             }
         }
@@ -485,17 +503,24 @@ internal object CurfewVpnDnsBridge {
         val isDnsLocked = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             currentRestrictions?.getBoolean(UserManager.DISALLOW_CONFIG_PRIVATE_DNS, false) == true
         } else {
-            false
+            true // Private DNS setting does not exist on Android < Q; Local VPN DNS handles enforcement
         }
         val globalMode = readGlobalSetting(context, "private_dns_mode")
         val globalSpecifier = readGlobalSetting(context, "private_dns_specifier")
         val modeFromDpm = readDpmPrivateDnsMode(context)
 
-        val isVpnExpected = isLocalVpnExpectedActive(context)
-
-        if (isVpnExpected) {
-            val isHealthy = isLocalVpnDnsStateConsistent(modeFromDpm, globalMode, globalSpecifier)
-            val isVpnServiceUp = CurfewBlackholeVpnService.isRunning
+        val requiredVpnMode = CurfewBlackholeVpnService.evaluateRequiredMode(context)
+        if (requiredVpnMode != CurfewBlackholeVpnService.VpnMode.IDLE) {
+            if (!isVpnConsentGranted(context)) {
+                return ShieldStatus.NeedsEnforcement(context.getString(R.string.shield_dns_local_filter_needs_sync))
+            }
+            val isHealthy = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                isLocalVpnDnsStateConsistent(modeFromDpm, globalMode, globalSpecifier)
+            } else {
+                globalMode != "hostname"
+            }
+            val isVpnServiceUp = CurfewBlackholeVpnService.isRunning &&
+                CurfewBlackholeVpnService.currentMode == requiredVpnMode
             return if (isHealthy && isDnsLocked && isVpnServiceUp) {
                 ShieldStatus.Active(context.getString(R.string.shield_dns_local_filter_active))
             } else {
@@ -690,14 +715,20 @@ internal object CurfewVpnDnsBridge {
         }
     }
 
-    private fun waitForAndVerifyVpnReady(context: Context): Boolean {
+    private fun waitForAndVerifyVpnReady(
+        context: Context,
+        expectedMode: CurfewBlackholeVpnService.VpnMode = CurfewBlackholeVpnService.evaluateRequiredMode(context)
+    ): Boolean {
         if (!isVpnConsentGranted(context)) return false
-        val ready = if (CurfewBlackholeVpnService.isRunning) {
+        val ready = if (CurfewBlackholeVpnService.isRunning && CurfewBlackholeVpnService.currentMode == expectedMode) {
             true
         } else {
-            CurfewBlackholeVpnService.awaitTunnelReadyBlocking()
+            CurfewBlackholeVpnService.awaitTunnelReadyBlocking(expectedMode = expectedMode)
         }
-        return ready && isVpnConsentGranted(context) && CurfewBlackholeVpnService.isRunning
+        return ready &&
+            isVpnConsentGranted(context) &&
+            CurfewBlackholeVpnService.isRunning &&
+            CurfewBlackholeVpnService.currentMode == expectedMode
     }
 
     private fun readDpmPrivateDnsMode(context: Context): Int {
@@ -733,7 +764,9 @@ internal object CurfewVpnDnsBridge {
                 ) {
                     CurfewBlackholeVpnService.syncPolicy(context)
                 }
-                if (waitForAndVerifyVpnReady(context) && !isLocalVpnDnsModeHealthy(context)) {
+                if (!waitForAndVerifyVpnReady(context, requiredMode)) {
+                    allOk = false
+                } else if (!isLocalVpnDnsModeHealthy(context)) {
                     if (!ensureOpportunisticDnsForLocalVpn(context)) {
                         allOk = false
                     }

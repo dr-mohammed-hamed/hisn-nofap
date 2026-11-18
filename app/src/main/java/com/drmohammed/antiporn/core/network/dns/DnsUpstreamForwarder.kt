@@ -2,12 +2,15 @@ package com.drmohammed.antiporn.core.network.dns
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.VpnService
-import android.util.Log
+import android.os.SystemClock
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
-import java.io.IOException
+import timber.log.Timber
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -15,16 +18,19 @@ import java.net.InetAddress
 /**
  * Enterprise-grade DNS Upstream Forwarder implementing 3-tier failover,
  * micro LRU caching, bounded concurrency, zero-lookup socket creation,
- * and YouTube comments preservation.
+ * strict leak prevention, and YouTube comments preservation.
  */
 class DnsUpstreamForwarder(
     private val vpnService: VpnService,
-    private val policyProvider: () -> DevicePolicyBundle = { DevicePolicyBundle.defaultPolicy() },
-    private val lruCache: DnsLruCache = DnsLruCache(512)
+    @Suppress("UNUSED_PARAMETER") private val policyProvider: () -> DevicePolicyBundle = { DevicePolicyBundle.defaultPolicy() },
+    private val lruCache: DnsLruCache = DnsLruCache(512),
+    private val udpQueryExecutor: ((ipAddress: String, rawPayload: ByteArray, timeoutMs: Int) -> ByteArray?)? = null,
+    private val dotQueryExecutor: ((host: String, rawPayload: ByteArray, timeoutMs: Int) -> ByteArray?)? = null
 ) {
 
     companion object {
         private const val TAG = "AntiPorn_DnsForwarder"
+        private const val DOT_TIMEOUT_MS = 1_500
 
         // Tier 1: Cloudflare Family (Strict adult filtering with YouTube comments preserved)
         const val PRIMARY_SAFE_DNS_IPV4 = "1.1.1.3"
@@ -35,43 +41,38 @@ class DnsUpstreamForwarder(
         const val OPENDNS_FAMILY_SECONDARY = "208.67.220.123" // OpenDNS FamilyShield Secondary
         const val ADGUARD_FAMILY_PRIMARY = "94.140.14.15" // AdGuard Family
         const val CLEANBROWSING_FAMILY_PRIMARY = "185.228.168.168" // CleanBrowsing Family
+        private const val CLEANBROWSING_FAMILY_HOST = "family-filter-dns.cleanbrowsing.org"
 
-        private val EXCLUDED_DNS_IPS = setOf(
-            "10.255.255.1",
-            "fd00::1",
-            "127.0.0.1",
-            "0.0.0.0"
-        )
-
-        /**
-         * Parses a numeric IPv4 address into an InetAddress with 0ms overhead
-         * and ZERO network/DNS resolution, completely eliminating recursive getByName loops.
-         */
-        fun parseIpv4ToInetAddress(rawText: String): InetAddress? {
-            val clean = rawText.trim().substringBefore(':').trim()
-            val parts = clean.split('.')
-            if (parts.size != 4) return null
-            val bytes = ByteArray(4)
-            for (i in 0..3) {
-                val intVal = parts[i].toIntOrNull() ?: return null
-                if (intVal !in 0..255) return null
-                bytes[i] = intVal.toByte()
-            }
-            return try {
-                InetAddress.getByAddress(bytes)
-            } catch (_: Exception) {
-                null
-            }
-        }
+        fun parseIpv4ToInetAddress(rawText: String): InetAddress? =
+            DnsWireValidator.parseIpv4ToInetAddress(rawText)
     }
 
     private val queryPermits = Semaphore(32)
+    private val monotonicClockMs: () -> Long = {
+        try {
+            SystemClock.elapsedRealtime()
+        } catch (_: Throwable) {
+            System.nanoTime() / 1_000_000L
+        }
+    }
+    private val dotClient = DotUpstreamClient(vpnService, monotonicClockMs) { serverIp, query, timeoutMs ->
+        sendUdpQuery(serverIp, query, timeoutMs)
+    }
 
     @Volatile
     private var customDnsHost: String? = null
 
     fun setCustomDnsHost(host: String?) {
-        customDnsHost = host?.trim()?.takeIf { it.isNotBlank() }
+        val normalized = host?.trim()?.takeIf { it.isNotBlank() }
+        if (customDnsHost != normalized) {
+            customDnsHost = normalized
+            dotClient.resetState()
+        }
+    }
+
+    fun clearCache() {
+        lruCache.clear()
+        dotClient.clearAll()
     }
 
     /**
@@ -82,12 +83,13 @@ class DnsUpstreamForwarder(
         qName: String,
         qType: Int,
         transactionId: Short,
-        rawDnsPayload: ByteArray
+        rawDnsPayload: ByteArray,
+        enqueuedAtMs: Long = 0L,
+        maxQueryAgeMs: Long = 3_500L
     ): ByteArray? {
         // 1. Check LRU Cache (0ms hit)
         val cached = lruCache.get(qName, qType)
-        if (cached != null) {
-            // Rewrite transaction ID to match current client query
+        if (cached != null && cached.size >= DnsPacketParser.DNS_HEADER_LEN) {
             cached[0] = (transactionId.toInt() ushr 8).toByte()
             cached[1] = (transactionId.toInt() and 0xFF).toByte()
             return cached
@@ -95,89 +97,165 @@ class DnsUpstreamForwarder(
 
         // 2. Query upstream via Bounded Protected Sockets
         return queryPermits.withPermit {
-            var reply = queryTier1(rawDnsPayload)
-            if (reply == null) {
-                Log.d(TAG, "Tier 1 DNS timeout/fail for $qName, attempting Tier 2 (OpenDNS/AdGuard Family)...")
-                reply = queryTier2(rawDnsPayload)
+            currentCoroutineContext().ensureActive()
+            if (enqueuedAtMs > 0L && (monotonicClockMs() - enqueuedAtMs) > maxQueryAgeMs) {
+                Timber.tag(TAG).d("Discarding stale queued DNS query for $qName")
+                return@withPermit null
+            }
+            var softFallback: ByteArray? = null
+            var reply = queryTier1(qName, rawDnsPayload)
+            if (reply != null && DnsWireValidator.isSoftFailureResponse(reply)) {
+                softFallback = reply
+                reply = null
             }
             if (reply == null) {
-                Log.w(TAG, "Tier 2 DNS failed for $qName, attempting Tier 3 (Physical Network DNS)...")
+                Timber.tag(TAG).d("Tier 1 DNS timeout/fail, attempting Tier 2 (OpenDNS/AdGuard Family)")
+                val tier2Reply = queryTier2(rawDnsPayload)
+                if (tier2Reply != null && DnsWireValidator.isSoftFailureResponse(tier2Reply)) {
+                    softFallback = softFallback ?: tier2Reply
+                } else {
+                    reply = tier2Reply
+                }
+            }
+            // Leak Prevention: Only fall back to Physical Network DNS (Tier 3) for local intranet domains
+            // or when a physical (non-VPN) network explicitly reports NET_CAPABILITY_CAPTIVE_PORTAL.
+            // Never cache Tier 3 responses or leak general internet queries to unfiltered ISP DNS.
+            var usedTier3 = false
+            if (reply == null && isCaptiveOrLocalDomain(qName)) {
+                Timber.tag(TAG).w("Tier 2 DNS failed for captive/local domain, querying Tier 3 (Physical Network DNS)")
                 reply = queryTier3(rawDnsPayload)
+                usedTier3 = reply != null
             }
 
-            if (reply != null) {
-                // Cache response with safe TTL
-                val ttl = extractTtl(reply)
-                lruCache.put(qName, qType, reply, ttl)
+            if (reply == null) {
+                reply = softFallback
+            }
+
+            if (reply != null && !usedTier3 && DnsWireValidator.isCacheableDnsResponse(reply)) {
+                val ttl = DnsWireValidator.extractTtl(reply)
+                if (ttl > 0L) {
+                    lruCache.put(qName, qType, reply, ttl)
+                }
             }
             reply
         }
     }
 
-    private fun queryTier1(rawPayload: ByteArray): ByteArray? {
-        val policy = policyProvider()
-        val host = customDnsHost
+    private fun isCaptiveOrLocalDomain(qName: String): Boolean {
+        if (DnsWireValidator.isLocalIntranetDomain(qName)) return true
 
-        // 1. If explicit CleanBrowsing preset is chosen
-        if (host != null && (host == CLEANBROWSING_FAMILY_PRIMARY || host.contains("cleanbrowsing", ignoreCase = true))) {
-            val reply = sendUdpQuery(CLEANBROWSING_FAMILY_PRIMARY, rawPayload, timeoutMs = 900)
-            if (reply != null) return reply
+        // Check physical (non-VPN) networks ONLY for an explicit Captive Portal flag
+        try {
+            val cm = vpnService.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
+            for (net in cm.allNetworks) {
+                val caps = cm.getNetworkCapabilities(net) ?: continue
+                if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue
+                if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)) {
+                    return true
+                }
+            }
+        } catch (e: Exception) {
+            Timber.tag(TAG).d(e, "Failed checking physical network captive portal capabilities")
+        }
+        return false
+    }
+
+    private suspend fun executeUdp(ipAddress: String, rawPayload: ByteArray, timeoutMs: Int): ByteArray? {
+        currentCoroutineContext().ensureActive()
+        return udpQueryExecutor?.invoke(ipAddress, rawPayload, timeoutMs)
+            ?: sendUdpQuery(ipAddress, rawPayload, timeoutMs)
+    }
+
+    private suspend fun executeDot(host: String, rawPayload: ByteArray, timeoutMs: Int): ByteArray? {
+        currentCoroutineContext().ensureActive()
+        return dotQueryExecutor?.invoke(host, rawPayload, timeoutMs)
+            ?: dotClient.query(host, rawPayload, timeoutMs)
+    }
+
+    private suspend fun queryTier1(qName: String, rawPayload: ByteArray): ByteArray? {
+        val cleanHost = DnsWireValidator.normalizeCustomHost(customDnsHost)
+        val normalizedQName = qName.trim().lowercase().trimEnd('.')
+        val cloudflareHost = DevicePolicyBundle.CLOUDFLARE_FAMILY_DNS_HOST.lowercase()
+        val isDefaultCloudflarePreset = cleanHost == null || cleanHost == cloudflareHost
+        val isSelfBootstrapQuery = cleanHost != null && normalizedQName == cleanHost
+        var softFallback: ByteArray? = null
+
+        fun acceptOrSaveSoft(candidate: ByteArray?): ByteArray? {
+            if (candidate == null) return null
+            if (DnsWireValidator.isSoftFailureResponse(candidate)) {
+                softFallback = softFallback ?: candidate
+                return null
+            }
+            return candidate
         }
 
-        // 2. If an explicit non-local numeric IPv4 address was provided
-        if (host != null) {
-            val parsedIp = parseIpv4ToInetAddress(host)
-            if (parsedIp != null && !EXCLUDED_DNS_IPS.contains(host)) {
-                val reply = sendUdpQuery(host, rawPayload, timeoutMs = 900)
-                if (reply != null) return reply
+        // 1. Custom numeric IPv4 or DoT hostname (ControlD, NextDNS, custom DoT)
+        if (cleanHost != null && !isDefaultCloudflarePreset && !isSelfBootstrapQuery) {
+            val parsedIp = DnsWireValidator.parseIpv4ToInetAddress(cleanHost)
+            if (parsedIp != null) {
+                val canonicalIp = parsedIp.hostAddress ?: ""
+                if (canonicalIp.isNotEmpty() && !DnsWireValidator.isExcludedDnsIp(canonicalIp) && !DnsWireValidator.isExcludedDnsIp(cleanHost)) {
+                    acceptOrSaveSoft(executeUdp(canonicalIp, rawPayload, timeoutMs = 900))?.let { return it }
+                }
+            } else if (!DnsWireValidator.isExcludedDnsIp(cleanHost)) {
+                acceptOrSaveSoft(executeDot(cleanHost, rawPayload, timeoutMs = DOT_TIMEOUT_MS))?.let { return it }
+                Timber.tag(TAG).w("DoT query failed or circuit open; falling back to Safe Family UDP")
             }
         }
 
-        // 3. User configured AdGuard Family
-        if (host != null && host.contains("adguard", ignoreCase = true)) {
-            val reply = sendUdpQuery(ADGUARD_FAMILY_PRIMARY, rawPayload, timeoutMs = 900)
-            if (reply != null) return reply
+        // 2. Exact CleanBrowsing Family preset fallback
+        if (cleanHost == CLEANBROWSING_FAMILY_PRIMARY || cleanHost == CLEANBROWSING_FAMILY_HOST) {
+            acceptOrSaveSoft(executeUdp(CLEANBROWSING_FAMILY_PRIMARY, rawPayload, timeoutMs = 900))?.let { return it }
         }
 
-        // 4. Default: Use Cloudflare Family (1.1.1.3 & 1.0.0.3)
-        // Strictly blocks adult domains while keeping YouTube comments fully functional
-        val primaryReply = sendUdpQuery(PRIMARY_SAFE_DNS_IPV4, rawPayload, timeoutMs = 900)
-        if (primaryReply != null) return primaryReply
+        // 3. Exact AdGuard Family preset fallback
+        if (cleanHost == ADGUARD_FAMILY_PRIMARY || cleanHost == DevicePolicyBundle.ADGUARD_FAMILY_DNS_HOST.lowercase()) {
+            acceptOrSaveSoft(executeUdp(ADGUARD_FAMILY_PRIMARY, rawPayload, timeoutMs = 900))?.let { return it }
+        }
 
-        return sendUdpQuery(SECONDARY_SAFE_DNS_IPV4, rawPayload, timeoutMs = 900)
+        // 4. Default: Cloudflare Family (encrypted DoT first when default preset, then UDP 1.1.1.3 & 1.0.0.3)
+        if (isDefaultCloudflarePreset && normalizedQName != cloudflareHost) {
+            acceptOrSaveSoft(executeDot(DevicePolicyBundle.CLOUDFLARE_FAMILY_DNS_HOST, rawPayload, timeoutMs = DOT_TIMEOUT_MS))
+                ?.let { return it }
+        }
+
+        acceptOrSaveSoft(executeUdp(PRIMARY_SAFE_DNS_IPV4, rawPayload, timeoutMs = 900))?.let { return it }
+        acceptOrSaveSoft(executeUdp(SECONDARY_SAFE_DNS_IPV4, rawPayload, timeoutMs = 900))?.let { return it }
+        return softFallback
     }
 
-    private fun queryTier2(rawPayload: ByteArray): ByteArray? {
-        // Safe adult-filtering failover: OpenDNS FamilyShield -> AdGuard Family
-        var reply = sendUdpQuery(OPENDNS_FAMILY_PRIMARY, rawPayload, timeoutMs = 1200)
-        if (reply != null) return reply
-
-        reply = sendUdpQuery(OPENDNS_FAMILY_SECONDARY, rawPayload, timeoutMs = 1200)
-        if (reply != null) return reply
-
-        return sendUdpQuery(ADGUARD_FAMILY_PRIMARY, rawPayload, timeoutMs = 1200)
+    private suspend fun queryTier2(rawPayload: ByteArray): ByteArray? {
+        var softFallback: ByteArray? = null
+        val servers = arrayOf(OPENDNS_FAMILY_PRIMARY, OPENDNS_FAMILY_SECONDARY, ADGUARD_FAMILY_PRIMARY)
+        for (server in servers) {
+            val reply = executeUdp(server, rawPayload, timeoutMs = 1200) ?: continue
+            if (!DnsWireValidator.isSoftFailureResponse(reply)) return reply
+            softFallback = softFallback ?: reply
+        }
+        return softFallback
     }
 
-    private fun queryTier3(rawPayload: ByteArray): ByteArray? {
+    private suspend fun queryTier3(rawPayload: ByteArray): ByteArray? {
         val physicalDnsServers = resolvePhysicalNetworkDns()
         for (dnsServer in physicalDnsServers) {
-            val reply = sendUdpQuery(dnsServer, rawPayload, timeoutMs = 1500)
+            val reply = executeUdp(dnsServer, rawPayload, timeoutMs = 1500)
             if (reply != null) return reply
         }
         return null
     }
 
     private fun sendUdpQuery(ipAddress: String, rawPayload: ByteArray, timeoutMs: Int): ByteArray? {
-        val target = parseIpv4ToInetAddress(ipAddress) ?: return null
+        val target = DnsWireValidator.parseIpv4ToInetAddress(ipAddress) ?: return null
         var socket: DatagramSocket? = null
         return try {
             socket = DatagramSocket().apply {
                 soTimeout = timeoutMs
             }
             if (!vpnService.protect(socket)) {
-                Log.w(TAG, "VpnService.protect() failed for socket to $ipAddress")
+                Timber.tag(TAG).w("VpnService.protect() failed for UDP socket to $ipAddress")
                 return null
             }
+            socket.connect(target, DnsPacketParser.DNS_PORT)
 
             val sendPacket = DatagramPacket(rawPayload, rawPayload.size, target, DnsPacketParser.DNS_PORT)
             socket.send(sendPacket)
@@ -186,10 +264,22 @@ class DnsUpstreamForwarder(
             val recvPacket = DatagramPacket(receiveBuffer, receiveBuffer.size)
             socket.receive(recvPacket)
 
-            val dnsReply = ByteArray(recvPacket.length)
-            System.arraycopy(receiveBuffer, 0, dnsReply, 0, recvPacket.length)
+            if (recvPacket.address != target || recvPacket.port != DnsPacketParser.DNS_PORT) {
+                Timber.tag(TAG).w("Discarded stray UDP DNS packet from unexpected source")
+                return null
+            }
+
+            val len = recvPacket.length
+            if (!DnsWireValidator.isValidDnsResponse(receiveBuffer, len, rawPayload)) {
+                Timber.tag(TAG).w("Discarded malformed or mismatched UDP DNS reply (len=$len)")
+                return null
+            }
+
+            val dnsReply = ByteArray(len)
+            System.arraycopy(receiveBuffer, 0, dnsReply, 0, len)
             dnsReply
         } catch (e: Exception) {
+            Timber.tag(TAG).d(e, "UDP DNS query to $ipAddress failed")
             null
         } finally {
             try {
@@ -206,17 +296,16 @@ class DnsUpstreamForwarder(
             val networks = cm.allNetworks
             for (net in networks) {
                 val caps = cm.getNetworkCapabilities(net) ?: continue
-                if (!caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) &&
-                    caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+                    caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
                 ) {
                     val linkProps = cm.getLinkProperties(net) ?: continue
                     for (inetAddress in linkProps.dnsServers) {
                         val hostAddress = inetAddress.hostAddress
-                        // Exclude empty, excluded/local IPs, and IPv6 addresses (containing ':') since socket is IPv4 UDP
                         if (!hostAddress.isNullOrBlank() &&
-                            !EXCLUDED_DNS_IPS.contains(hostAddress) &&
+                            !DnsWireValidator.EXCLUDED_DNS_IPS.contains(hostAddress) &&
                             !hostAddress.contains(':') &&
-                            parseIpv4ToInetAddress(hostAddress) != null &&
+                            DnsWireValidator.parseIpv4ToInetAddress(hostAddress) != null &&
                             !result.contains(hostAddress)
                         ) {
                             result.add(hostAddress)
@@ -225,15 +314,8 @@ class DnsUpstreamForwarder(
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Could not resolve physical network DNS", e)
+            Timber.tag(TAG).w(e, "Could not resolve physical network DNS")
         }
         return result
-    }
-
-    private fun extractTtl(dnsPayload: ByteArray): Long {
-        if (dnsPayload.size < 12) return 60L
-        val anCount = ((dnsPayload[6].toInt() and 0xFF) shl 8) or (dnsPayload[7].toInt() and 0xFF)
-        if (anCount <= 0) return 30L
-        return 60L // Clamped default TTL for clean balance
     }
 }

@@ -1,6 +1,7 @@
 package com.drmohammed.antiporn.ui.accountability
 
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
+import com.drmohammed.antiporn.curfew.CurfewConfig
 
 /**
  * Immutable UI State representing the state of the Guardian Control panel.
@@ -13,27 +14,27 @@ data class GuardianControlUiState(
     val isOffline: Boolean = false,
     val currentPolicy: DevicePolicyBundle = DevicePolicyBundle.defaultPolicy(),
     val initialPolicySnapshot: DevicePolicyBundle? = null,
-    val selectedStartHour: Int = 20,
-    val selectedStartMinute: Int = 30,
-    val selectedEndHour: Int = 7,
-    val selectedEndMinute: Int = 0,
-    val selectedWeekendStartHour: Int = 20,
-    val selectedWeekendStartMinute: Int = 30,
-    val selectedWeekendEndHour: Int = 7,
-    val selectedWeekendEndMinute: Int = 0,
-    val selectedTimeZoneId: String = "Asia/Riyadh",
+    val selectedStartHour: Int = CurfewConfig.START_HOUR,
+    val selectedStartMinute: Int = CurfewConfig.START_MINUTE,
+    val selectedEndHour: Int = CurfewConfig.END_HOUR,
+    val selectedEndMinute: Int = CurfewConfig.END_MINUTE,
+    val selectedWeekendStartHour: Int = CurfewConfig.START_HOUR,
+    val selectedWeekendStartMinute: Int = CurfewConfig.START_MINUTE,
+    val selectedWeekendEndHour: Int = CurfewConfig.END_HOUR,
+    val selectedWeekendEndMinute: Int = CurfewConfig.END_MINUTE,
+    val selectedTimeZoneId: String = CurfewConfig.getDefaultFallbackTimeZone(),
     val isCurfewEnabled: Boolean = false,
     val isWeekendCurfewEnabled: Boolean = false,
-    val isSelfControlAllowed: Boolean = false,
-    val isVpnBlackholeEnabled: Boolean = true,
-    val isInstantInternetKillEnabled: Boolean = true,
+    val isSelfControlAllowed: Boolean = true,
+    val isVpnBlackholeEnabled: Boolean = CurfewConfig.DEFAULT_VPN_BLACKHOLE_ENABLED,
+    val isInstantInternetKillEnabled: Boolean = false,
     val isIncognitoBlocked: Boolean = true,
     val lockNewInstallsUntilApproved: Boolean = false,
-    val isDateTimeLocked: Boolean = true,
+    val isDateTimeLocked: Boolean = false,
     val isYouTubeRestrictedModeEnabled: Boolean = false,
     val isTelegramWebBlocked: Boolean = true,
     val isScreenAiEnabledGlobally: Boolean = false,
-    val dnsHost: String = "",
+    val dnsHost: String = DevicePolicyBundle.CLOUDFLARE_FAMILY_DNS_HOST,
     val version: Long = 0L,
     val acknowledgedVersion: Long = 0L,
     val lastAcknowledgedAt: Long = 0L,
@@ -74,6 +75,7 @@ data class GuardianControlUiState(
                     currentPolicy.customAllowedUrls != initial.customAllowedUrls ||
                     currentPolicy.browserFilterMode != initial.browserFilterMode ||
                     currentPolicy.isFullSystemFilteringEnabled != initial.isFullSystemFilteringEnabled ||
+                    currentPolicy.isAdBlockingEnabled != initial.isAdBlockingEnabled ||
                     currentPolicy.waqfaConfig != initial.waqfaConfig ||
                     currentPolicy.customAiScanPackages != initial.customAiScanPackages
         }

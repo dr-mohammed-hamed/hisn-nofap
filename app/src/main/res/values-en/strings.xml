@@ -508,7 +508,7 @@
     <string name="shield_browser_success">Browser restrictions enforced successfully.</string>
     <string name="shield_system_tamper_success">System tamper restrictions enforced successfully.</string>
     <string name="shield_dns_unsupported">Private DNS not supported on this Android version.</string>
-    <string name="shield_dns_local_filter_active">Local DNS filtering active (DoT disabled and locked)</string>
+    <string name="shield_dns_local_filter_active">Local DNS filtering active (opportunistic Private DNS with encrypted DoT upstream)</string>
     <string name="default_dns_text">Default Family DNS</string>
     <string name="card_app_suspension_title">App Suspension Shield</string>
     <string name="card_app_suspension_active">Blacklisted applications are suspended.</string>
@@ -612,6 +612,8 @@
     <string name="dns_col_ads">Ads</string>
     <string name="dns_col_youtube">YouTube</string>
     <string name="dns_col_speed">Speed (EG)</string>
+    <string name="cd_dns_feature_supported">Supported</string>
+    <string name="cd_dns_feature_not_supported">Not supported</string>
     <string name="dns_speed_fast">Ultra (15ms)</string>
     <string name="dns_speed_warn">Slow (EU)</string>
     <string name="dns_speed_medium">Medium</string>
@@ -626,12 +628,12 @@
     <string name="btn_dns_preset_custom_family">Custom Family DNS</string>
     <string name="toast_partner_deleted">Partner removed successfully.</string>
     <string name="btn_retry">Retry</string>
-    <string name="guardian_offline_banner_desc">Device is offline. Changes will sync when reconnected.</string>
+    <string name="guardian_offline_banner_desc">Unable to connect to the server. Showing local/cached policy.</string>
 
     <string name="guardian_sync_applied">Applied &amp; synced on ward device</string>
     <string name="guardian_sync_pending">Waiting for ward sync...</string>
     <string name="guardian_sync_offline_minutes">Offline since %1$d min</string>
-    <string name="toast_offline_policy_edit_note">Offline changes saved locally and queued for sync.</string>
+    <string name="toast_offline_policy_edit_note">Unable to reach the server; please check your internet connection and try again.</string>
     <string name="pairing_code_locked_badge">Pairing Code Locked</string>
     <string name="status_supervised_banner_title">Device Supervised</string>
     <string name="status_supervised_banner_desc">This device is managed by an accountability partner.</string>
@@ -944,6 +946,10 @@
     <string name="switch_block_telegram_web">Block Telegram Web</string>
     <string name="switch_youtube_restricted">YouTube Restricted Mode</string>
     <string name="switch_full_system_filter">Filter Entire System (VPN)</string>
+    <string name="switch_block_ads">Block Ads &amp; Trackers</string>
+    <string name="dialog_whitelist_full_system_warning_title">Warning: Whitelist Mode with System Filter</string>
+    <string name="dialog_whitelist_full_system_warning_msg">Restricting traffic to allowed sites while system filtering is active may affect background apps. Core Android system services are exempt automatically.</string>
+    <string name="vpn_permission_denied_msg">Enabling local DNS filtering and ad blocking requires granting VPN permission.</string>
     <string name="tab_blocked_websites">Blocked (%1$d)</string>
     <string name="tab_allowed_websites">Allowed (%1$d)</string>
     <string name="switch_whitelist_only">Only Allow Whitelisted Sites</string>

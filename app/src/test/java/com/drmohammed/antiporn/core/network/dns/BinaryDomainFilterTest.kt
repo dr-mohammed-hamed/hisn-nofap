@@ -42,13 +42,12 @@ class BinaryDomainFilterTest {
 
     @Test
     fun testAssetBinaryFilterStructure() {
-        val assetFile = File("src/main/assets/hisn_dns_filter.bin")
-        if (!assetFile.exists()) {
-            // Check relative to current working directory if running in module root
-            val altFile = File("app/src/main/assets/hisn_dns_filter.bin")
-            if (!altFile.exists()) return // Skip if file is not in local runner path
-        }
-        val targetFile = if (assetFile.exists()) assetFile else File("app/src/main/assets/hisn_dns_filter.bin")
+        val targetFile = requireNotNull(
+            listOf(
+                File("src/main/assets/hisn_dns_filter.bin"),
+                File("app/src/main/assets/hisn_dns_filter.bin")
+            ).firstOrNull { it.exists() }
+        ) { "Bundled hisn_dns_filter.bin asset must exist for unit tests" }
         assertTrue("hisn_dns_filter.bin must exist on disk", targetFile.exists())
         assertTrue("File size must be at least header size (1040 bytes)", targetFile.length() >= 1040)
 

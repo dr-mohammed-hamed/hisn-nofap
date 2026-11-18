@@ -578,11 +578,11 @@ class DnsWatchdogService : Service() {
                 val isVpnActive = isVpnConsentGranted && requiredMode != com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService.VpnMode.IDLE
 
                 if (isVpnActive) {
-                    // When VPN mode is required, Private DNS is set to opportunistic (or off) with empty specifier
+                    // When VPN mode is required, Private DNS must be opportunistic (or off/unset);
+                    // Android ignores any cached private_dns_specifier when mode != "hostname".
                     val isAppropriate = mode == "opportunistic" || mode == "off" || mode == null
-                    val isSpecifierClean = specifier.isNullOrEmpty()
-                    if (!isAppropriate || !isSpecifierClean) {
-                        val reason = "Settings.Global DNS mismatch: VPN required, expected mode='opportunistic' and empty specifier but found mode='$mode', specifier='$specifier'"
+                    if (!isAppropriate) {
+                        val reason = "Settings.Global DNS mismatch: VPN required, expected mode='opportunistic' but found mode='$mode', specifier='$specifier'"
                         Log.w(TAG, reason)
                         desyncReasons.add("[DNS_GLOBAL: $reason]")
                     }

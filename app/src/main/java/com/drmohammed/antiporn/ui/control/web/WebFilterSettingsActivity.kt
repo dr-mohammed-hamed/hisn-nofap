@@ -25,6 +25,7 @@ import com.drmohammed.antiporn.core.engine.ProtectionEngine
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.core.network.DnsFilteringValidator
 import com.drmohammed.antiporn.core.util.BrowserUrlSanitizer
+import com.drmohammed.antiporn.data.repository.AccountabilityRepository
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.ui.control.gate.SelfControlAccessGateRegistry
 import com.google.android.material.appbar.MaterialToolbar
@@ -36,8 +37,10 @@ import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.koin.android.ext.android.inject
 
 /**
  * Dedicated Sub-Screen for Web Filter, DNS, and Browsing Restrictions.
@@ -45,6 +48,9 @@ import kotlinx.coroutines.withContext
  * zero visual clutter, strict Whitelist Only mode, and full-system VPN filtering scope.
  */
 class WebFilterSettingsActivity : AppCompatActivity() {
+
+    private val policyRepository: PolicyRepository by inject()
+    private val accountabilityRepository: AccountabilityRepository by inject()
 
     private enum class UrlTab { BLOCKED, ALLOWED }
 
@@ -57,6 +63,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
     private var isTelegramWebBlocked = true
     private var isYouTubeRestricted = false
     private var isFullSystemFiltering = false
+    private var isAdBlocking = false
     private var isWhitelistOnlyMode = false
     private val blockedUrls = mutableSetOf<String>()
     private val allowedUrls = mutableSetOf<String>()
@@ -77,6 +84,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
     private lateinit var switchBlockTelegramWeb: MaterialSwitch
     private lateinit var switchYouTubeRestricted: MaterialSwitch
     private lateinit var switchFullSystemFilter: MaterialSwitch
+    private lateinit var switchBlockAds: MaterialSwitch
 
     private lateinit var toggleGroupUrlType: MaterialButtonToggleGroup
     private lateinit var btnTabBlocked: MaterialButton
@@ -89,11 +97,53 @@ class WebFilterSettingsActivity : AppCompatActivity() {
     private lateinit var layoutBlockedUrlsList: LinearLayout
     private lateinit var btnSaveWebFilterChanges: MaterialButton
 
+    private enum class VpnConsentSource { FULL_SYSTEM, AD_BLOCKING }
+
     private var isSaving = false
+    private var isProgrammaticSwitchChange = false
+    private var pendingVpnConsentSource: VpnConsentSource? = null
     private var activeDialog: androidx.appcompat.app.AlertDialog? = null
+
+    private val vpnConsentLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) {
+        val source = pendingVpnConsentSource ?: VpnConsentSource.FULL_SYSTEM
+        pendingVpnConsentSource = null
+        if (isFinishing || isDestroyed) return@registerForActivityResult
+        val consentGranted = runCatching { android.net.VpnService.prepare(this) == null }.getOrDefault(false)
+        isProgrammaticSwitchChange = true
+        when (source) {
+            VpnConsentSource.FULL_SYSTEM -> {
+                if (consentGranted) {
+                    isFullSystemFiltering = true
+                    switchFullSystemFilter.isChecked = true
+                } else {
+                    isFullSystemFiltering = false
+                    switchFullSystemFilter.isChecked = false
+                    Toast.makeText(this, R.string.vpn_permission_denied_msg, Toast.LENGTH_SHORT).show()
+                }
+            }
+            VpnConsentSource.AD_BLOCKING -> {
+                if (consentGranted) {
+                    isAdBlocking = true
+                    switchBlockAds.isChecked = true
+                } else {
+                    isAdBlocking = false
+                    switchBlockAds.isChecked = false
+                    Toast.makeText(this, R.string.vpn_permission_denied_msg, Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        isProgrammaticSwitchChange = false
+        if (consentGranted && source == VpnConsentSource.FULL_SYSTEM && isWhitelistOnlyMode) {
+            showWhitelistFullSystemWarningDialog()
+        }
+        updateSaveButtonState()
+    }
 
     private val backPressedCallback = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() {
+            if (isSaving) return
             if (hasUnsavedChanges()) {
                 showDiscardConfirmationDialog()
             } else {
@@ -136,7 +186,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
             }
             initialPolicy = parsed
         } else {
-            initialPolicy = PolicyRepository.getInstance(applicationContext).getCurrentPolicy()
+            initialPolicy = policyRepository.getCurrentPolicy()
         }
 
         onBackPressedDispatcher.addCallback(this, backPressedCallback)
@@ -156,10 +206,12 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         outState.putBoolean(STATE_TELEGRAM_WEB_BLOCKED, isTelegramWebBlocked)
         outState.putBoolean(STATE_YOUTUBE_RESTRICTED, isYouTubeRestricted)
         outState.putBoolean(STATE_FULL_SYSTEM_FILTERING, isFullSystemFiltering)
+        outState.putBoolean(STATE_AD_BLOCKING, isAdBlocking)
         outState.putBoolean(STATE_WHITELIST_ONLY, isWhitelistOnlyMode)
         outState.putStringArrayList(STATE_BLOCKED_URLS, ArrayList(blockedUrls))
         outState.putStringArrayList(STATE_ALLOWED_URLS, ArrayList(allowedUrls))
         outState.putInt(STATE_CURRENT_TAB, currentTab.ordinal)
+        pendingVpnConsentSource?.let { outState.putInt(STATE_PENDING_VPN_CONSENT_SOURCE, it.ordinal) }
     }
 
     private fun restoreDraftState(state: Bundle) {
@@ -168,7 +220,12 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         isTelegramWebBlocked = state.getBoolean(STATE_TELEGRAM_WEB_BLOCKED, isTelegramWebBlocked)
         isYouTubeRestricted = state.getBoolean(STATE_YOUTUBE_RESTRICTED, isYouTubeRestricted)
         isFullSystemFiltering = state.getBoolean(STATE_FULL_SYSTEM_FILTERING, isFullSystemFiltering)
+        isAdBlocking = state.getBoolean(STATE_AD_BLOCKING, isAdBlocking)
         isWhitelistOnlyMode = state.getBoolean(STATE_WHITELIST_ONLY, isWhitelistOnlyMode)
+        if (state.containsKey(STATE_PENDING_VPN_CONSENT_SOURCE)) {
+            val ord = state.getInt(STATE_PENDING_VPN_CONSENT_SOURCE, -1)
+            pendingVpnConsentSource = VpnConsentSource.entries.getOrNull(ord)
+        }
         state.getStringArrayList(STATE_BLOCKED_URLS)?.let {
             blockedUrls.clear()
             blockedUrls.addAll(it)
@@ -185,11 +242,14 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         isProgrammaticDnsChange = false
         updateTableSelection(currentDnsHost)
 
+        isProgrammaticSwitchChange = true
         switchBlockIncognito.isChecked = isIncognitoBlocked
         switchBlockTelegramWeb.isChecked = isTelegramWebBlocked
         switchYouTubeRestricted.isChecked = isYouTubeRestricted
         switchFullSystemFilter.isChecked = isFullSystemFiltering
+        switchBlockAds.isChecked = isAdBlocking
         switchWhitelistOnly.isChecked = isWhitelistOnlyMode
+        isProgrammaticSwitchChange = false
         toggleGroupUrlType.check(
             if (currentTab == UrlTab.ALLOWED) R.id.btnTabAllowed else R.id.btnTabBlocked
         )
@@ -236,6 +296,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         switchBlockTelegramWeb = findViewById(R.id.switchBlockTelegramWeb)
         switchYouTubeRestricted = findViewById(R.id.switchYouTubeRestricted)
         switchFullSystemFilter = findViewById(R.id.switchFullSystemFilter)
+        switchBlockAds = findViewById(R.id.switchBlockAds)
 
         toggleGroupUrlType = findViewById(R.id.toggleGroupUrlType)
         btnTabBlocked = findViewById(R.id.btnTabBlocked)
@@ -255,6 +316,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         isTelegramWebBlocked = initialPolicy.isTelegramWebBlocked
         isYouTubeRestricted = initialPolicy.isYouTubeRestrictedModeEnabled
         isFullSystemFiltering = initialPolicy.isFullSystemFilteringEnabled
+        isAdBlocking = initialPolicy.isAdBlockingEnabled
         isWhitelistOnlyMode = initialPolicy.browserFilterMode == DevicePolicyBundle.BROWSER_FILTER_WHITELIST_ONLY
 
         blockedUrls.clear()
@@ -271,6 +333,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         switchBlockTelegramWeb.isChecked = isTelegramWebBlocked
         switchYouTubeRestricted.isChecked = isYouTubeRestricted
         switchFullSystemFilter.isChecked = isFullSystemFiltering
+        switchBlockAds.isChecked = isAdBlocking
         switchWhitelistOnly.isChecked = isWhitelistOnlyMode
 
         if (isWhitelistOnlyMode && blockedUrls.isEmpty() && allowedUrls.isNotEmpty()) {
@@ -304,6 +367,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
             etDnsHost.setText(host)
             etDnsHost.setSelection(host.length)
             isProgrammaticDnsChange = false
+            tilDnsHost.error = null
             updateTableSelection(host)
             currentDnsHost = host
             updateSaveButtonState()
@@ -323,6 +387,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 currentDnsHost = s?.toString()?.trim().orEmpty()
+                tilDnsHost.error = null
                 if (!isProgrammaticDnsChange) {
                     updateTableSelection(currentDnsHost)
                 }
@@ -347,12 +412,35 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         }
 
         switchFullSystemFilter.setOnCheckedChangeListener { _, isChecked ->
+            if (isProgrammaticSwitchChange) return@setOnCheckedChangeListener
+            if (isChecked && !isRemote) {
+                if (!ensureVpnConsentOrPrompt(VpnConsentSource.FULL_SYSTEM, switchFullSystemFilter)) {
+                    return@setOnCheckedChangeListener
+                }
+            }
             isFullSystemFiltering = isChecked
+            if (isChecked && isWhitelistOnlyMode) {
+                showWhitelistFullSystemWarningDialog()
+            }
+            updateSaveButtonState()
+        }
+
+        switchBlockAds.setOnCheckedChangeListener { _, isChecked ->
+            if (isProgrammaticSwitchChange) return@setOnCheckedChangeListener
+            if (isChecked && !isRemote) {
+                if (!ensureVpnConsentOrPrompt(VpnConsentSource.AD_BLOCKING, switchBlockAds)) {
+                    return@setOnCheckedChangeListener
+                }
+            }
+            isAdBlocking = isChecked
             updateSaveButtonState()
         }
 
         switchWhitelistOnly.setOnCheckedChangeListener { _, isChecked ->
             isWhitelistOnlyMode = isChecked
+            if (isChecked && isFullSystemFiltering) {
+                showWhitelistFullSystemWarningDialog()
+            }
             updateSaveButtonState()
         }
 
@@ -394,6 +482,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
             inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI
             setSingleLine(true)
             imeOptions = EditorInfo.IME_ACTION_DONE
+            textDirection = View.TEXT_DIRECTION_LTR
             typeface = androidx.core.content.res.ResourcesCompat.getFont(context, R.font.tajawal)
         }
         til.addView(input)
@@ -483,6 +572,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
             val tvUrl = TextView(this).apply {
                 text = url
                 textSize = 13f
+                textDirection = View.TEXT_DIRECTION_LTR
                 typeface = tajawalTypeface
                 setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurface))
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
@@ -499,7 +589,9 @@ class WebFilterSettingsActivity : AppCompatActivity() {
                 setBackgroundResource(android.R.drawable.list_selector_background)
                 setColorFilter(MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurfaceVariant))
                 contentDescription = getString(R.string.browser_filter_item_delete_cd)
+                isEnabled = !isSaving
                 setOnClickListener {
+                    if (isSaving) return@setOnClickListener
                     currentList.remove(url)
                     updateTabUi()
                     updateSaveButtonState()
@@ -519,6 +611,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
                 isTelegramWebBlocked != initialPolicy.isTelegramWebBlocked ||
                 isYouTubeRestricted != initialPolicy.isYouTubeRestrictedModeEnabled ||
                 isFullSystemFiltering != initialPolicy.isFullSystemFilteringEnabled ||
+                isAdBlocking != initialPolicy.isAdBlockingEnabled ||
                 isWhitelistOnlyMode != initialWasWhitelist ||
                 blockedUrls != initialPolicy.customBlockedUrls ||
                 allowedUrls != initialPolicy.customAllowedUrls
@@ -528,7 +621,30 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         val dirty = hasUnsavedChanges()
         btnSaveWebFilterChanges.isEnabled = dirty && !isSaving
         btnSaveWebFilterChanges.alpha = if (dirty && !isSaving) 1.0f else 0.5f
-        backPressedCallback.isEnabled = dirty
+        backPressedCallback.isEnabled = dirty || isSaving
+        setInputsEnabled(!isSaving)
+    }
+
+    private fun setInputsEnabled(enabled: Boolean) {
+        etDnsHost.isEnabled = enabled
+        rowDnsCloudflare.isEnabled = enabled
+        rowDnsControlD.isEnabled = enabled
+        rowDnsAdguard.isEnabled = enabled
+        switchBlockIncognito.isEnabled = enabled
+        switchBlockTelegramWeb.isEnabled = enabled
+        switchYouTubeRestricted.isEnabled = enabled
+        switchFullSystemFilter.isEnabled = enabled
+        switchBlockAds.isEnabled = enabled
+        switchWhitelistOnly.isEnabled = enabled
+        btnAddBlockedUrl.isEnabled = enabled
+        btnTabBlocked.isEnabled = enabled
+        btnTabAllowed.isEnabled = enabled
+        for (i in 0 until layoutBlockedUrlsList.childCount) {
+            val row = layoutBlockedUrlsList.getChildAt(i) as? LinearLayout ?: continue
+            for (j in 0 until row.childCount) {
+                row.getChildAt(j).isEnabled = enabled
+            }
+        }
     }
 
     private fun saveChanges() {
@@ -537,12 +653,14 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         // Guard against locking out connectivity when Whitelist Only is selected without allowed domains
         if (isWhitelistOnlyMode && allowedUrls.isEmpty()) {
             activeDialog?.dismiss()
-            activeDialog = MaterialAlertDialogBuilder(this)
+            val dialog = MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.dialog_empty_whitelist_title)
                 .setMessage(R.string.dialog_empty_whitelist_desc)
                 .setPositiveButton(android.R.string.ok, null)
-                .setOnDismissListener { activeDialog = null }
-                .show()
+                .create()
+            dialog.setOnDismissListener { if (activeDialog === dialog) activeDialog = null }
+            activeDialog = dialog
+            dialog.show()
             return
         }
 
@@ -553,6 +671,16 @@ class WebFilterSettingsActivity : AppCompatActivity() {
             return
         }
         tilDnsHost.error = null
+
+        // Snapshot mutable draft state on Main Thread before entering Dispatchers.IO
+        val snapIncognito = isIncognitoBlocked
+        val snapTelegramWeb = isTelegramWebBlocked
+        val snapYouTubeRestricted = isYouTubeRestricted
+        val snapFullSystem = isFullSystemFiltering
+        val snapAdBlocking = isAdBlocking
+        val snapWhitelistOnly = isWhitelistOnlyMode
+        val snapBlockedUrls = blockedUrls.toSet()
+        val snapAllowedUrls = allowedUrls.toSet()
 
         isSaving = true
         updateSaveButtonState()
@@ -569,12 +697,12 @@ class WebFilterSettingsActivity : AppCompatActivity() {
                             validationResult.resolvedIp
                         )
                     is DnsFilteringValidator.ValidationResult.Unreachable ->
-                        getString(R.string.error_invalid_dns_host) to getString(
+                        getString(R.string.dns_probe_error_unreachable) to getString(
                             R.string.dns_probe_error_unreachable_detail,
                             validationResult.reason
                         )
                     is DnsFilteringValidator.ValidationResult.ResolverBroken ->
-                        getString(R.string.error_invalid_dns_host) to getString(
+                        getString(R.string.dns_probe_error_broken) to getString(
                             R.string.dns_probe_error_broken_detail,
                             validationResult.reason
                         )
@@ -587,56 +715,69 @@ class WebFilterSettingsActivity : AppCompatActivity() {
                         tilDnsHost.error = probeFailure.first
                         etDnsHost.requestFocus()
                         activeDialog?.dismiss()
-                        activeDialog = MaterialAlertDialogBuilder(this@WebFilterSettingsActivity)
+                        val dialog = MaterialAlertDialogBuilder(this@WebFilterSettingsActivity)
                             .setTitle(R.string.dns_probe_dialog_failed_title)
                             .setMessage(probeFailure.second)
                             .setPositiveButton(android.R.string.ok, null)
-                            .setOnDismissListener { activeDialog = null }
-                            .show()
+                            .create()
+                        dialog.setOnDismissListener { if (activeDialog === dialog) activeDialog = null }
+                        activeDialog = dialog
+                        dialog.show()
                     }
                     return@launch
                 }
 
                 // If full system filtering or custom blocked/allowed lists are active, ensure filterMode enables the filtering pipeline
                 val filterMode = when {
-                    isWhitelistOnlyMode -> DevicePolicyBundle.BROWSER_FILTER_WHITELIST_ONLY
-                    isFullSystemFiltering || blockedUrls.isNotEmpty() || allowedUrls.isNotEmpty() -> DevicePolicyBundle.BROWSER_FILTER_BLOCKLIST
+                    snapWhitelistOnly -> DevicePolicyBundle.BROWSER_FILTER_WHITELIST_ONLY
+                    snapFullSystem || snapBlockedUrls.isNotEmpty() || snapAllowedUrls.isNotEmpty() -> DevicePolicyBundle.BROWSER_FILTER_BLOCKLIST
                     else -> DevicePolicyBundle.BROWSER_FILTER_OFF
                 }
 
-                val updatedPolicy = initialPolicy.copy(
-                    dnsHost = dnsToSave,
-                    isIncognitoBlocked = isIncognitoBlocked,
-                    isTelegramWebBlocked = isTelegramWebBlocked,
-                    isYouTubeRestrictedModeEnabled = isYouTubeRestricted,
-                    isFullSystemFilteringEnabled = isFullSystemFiltering,
-                    customBlockedUrls = blockedUrls,
-                    customAllowedUrls = allowedUrls,
-                    browserFilterMode = filterMode
-                )
-
-                val app = applicationContext
-                val policyRepo = PolicyRepository.getInstance(app)
-
-                val success = if (isRemote) {
-                    if (wardId.isBlank()) {
-                        android.util.Log.e("WebFilterSettings", "Refusing remote push: wardId is blank")
-                        false
+                val pushedPolicy: DevicePolicyBundle? = withContext(Dispatchers.IO + NonCancellable) {
+                    if (isRemote) {
+                        policyRepository.mergeAndPushRemotePolicyPatch(
+                            wardUid = wardId,
+                            fallbackPolicy = initialPolicy,
+                            guardianUidFallback = accountabilityRepository.getCachedUid(),
+                            guardianNameFallback = accountabilityRepository.getMyDisplayName()
+                        ) { basePolicy ->
+                            basePolicy.copy(
+                                dnsHost = dnsToSave,
+                                isIncognitoBlocked = snapIncognito,
+                                isTelegramWebBlocked = snapTelegramWeb,
+                                isYouTubeRestrictedModeEnabled = snapYouTubeRestricted,
+                                isFullSystemFilteringEnabled = snapFullSystem,
+                                isAdBlockingEnabled = snapAdBlocking,
+                                customBlockedUrls = snapBlockedUrls,
+                                customAllowedUrls = snapAllowedUrls,
+                                browserFilterMode = filterMode
+                            )
+                        }
                     } else {
-                        policyRepo.pushPolicyToWard(wardId, updatedPolicy)
+                        val localUpdated = policyRepository.getCurrentPolicy().copy(
+                            dnsHost = dnsToSave,
+                            isIncognitoBlocked = snapIncognito,
+                            isTelegramWebBlocked = snapTelegramWeb,
+                            isYouTubeRestrictedModeEnabled = snapYouTubeRestricted,
+                            isFullSystemFilteringEnabled = snapFullSystem,
+                            isAdBlockingEnabled = snapAdBlocking,
+                            customBlockedUrls = snapBlockedUrls,
+                            customAllowedUrls = snapAllowedUrls,
+                            browserFilterMode = filterMode
+                        )
+                        if (policyRepository.saveAndEnforceSelfPolicy(localUpdated)) localUpdated else null
                     }
-                } else {
-                    policyRepo.saveAndEnforceSelfPolicy(updatedPolicy)
                 }
 
                 withContext(Dispatchers.Main) {
                     if (isFinishing || isDestroyed) return@withContext
                     isSaving = false
-                    if (success) {
+                    if (pushedPolicy != null) {
                         val successRes = if (isRemote) R.string.toast_guardian_policy_saved else R.string.toast_self_policy_saved
                         Toast.makeText(applicationContext, successRes, Toast.LENGTH_SHORT).show()
                         val resultIntent = Intent().apply {
-                            putExtra(EXTRA_UPDATED_POLICY_JSON, updatedPolicy.toJson())
+                            putExtra(EXTRA_UPDATED_POLICY_JSON, pushedPolicy.toJson())
                         }
                         setResult(Activity.RESULT_OK, resultIntent)
                         backPressedCallback.isEnabled = false
@@ -661,21 +802,66 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         }
     }
 
+    private fun ensureVpnConsentOrPrompt(source: VpnConsentSource, toggle: MaterialSwitch): Boolean {
+        if (pendingVpnConsentSource != null) {
+            isProgrammaticSwitchChange = true
+            toggle.isChecked = false
+            isProgrammaticSwitchChange = false
+            return false
+        }
+        val prepareIntent = try {
+            android.net.VpnService.prepare(this)
+        } catch (_: Exception) {
+            isProgrammaticSwitchChange = true
+            toggle.isChecked = false
+            isProgrammaticSwitchChange = false
+            Toast.makeText(this, R.string.vpn_permission_denied_msg, Toast.LENGTH_SHORT).show()
+            return false
+        }
+        if (prepareIntent != null) {
+            isProgrammaticSwitchChange = true
+            toggle.isChecked = false
+            isProgrammaticSwitchChange = false
+            pendingVpnConsentSource = source
+            runCatching { vpnConsentLauncher.launch(prepareIntent) }
+                .onFailure {
+                    pendingVpnConsentSource = null
+                    Toast.makeText(this, R.string.vpn_permission_denied_msg, Toast.LENGTH_SHORT).show()
+                }
+            return false
+        }
+        return true
+    }
+
+    private fun showWhitelistFullSystemWarningDialog() {
+        activeDialog?.dismiss()
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.dialog_whitelist_full_system_warning_title)
+            .setMessage(R.string.dialog_whitelist_full_system_warning_msg)
+            .setPositiveButton(android.R.string.ok, null)
+            .create()
+        dialog.setOnDismissListener { if (activeDialog === dialog) activeDialog = null }
+        activeDialog = dialog
+        dialog.show()
+    }
+
     private fun showDiscardConfirmationDialog() {
         activeDialog?.dismiss()
-        activeDialog = MaterialAlertDialogBuilder(this)
+        val dialog = MaterialAlertDialogBuilder(this)
             .setTitle(R.string.dialog_unsaved_changes_title)
             .setMessage(R.string.dialog_unsaved_changes_msg)
-            .setNegativeButton(R.string.btn_keep_editing) { dialog, _ ->
-                dialog.dismiss()
+            .setNegativeButton(R.string.btn_keep_editing) { d, _ ->
+                d.dismiss()
             }
-            .setPositiveButton(R.string.btn_discard_changes) { dialog, _ ->
-                dialog.dismiss()
+            .setPositiveButton(R.string.btn_discard_changes) { d, _ ->
+                d.dismiss()
                 backPressedCallback.isEnabled = false
                 finish()
             }
-            .setOnDismissListener { activeDialog = null }
-            .show()
+            .create()
+        dialog.setOnDismissListener { if (activeDialog === dialog) activeDialog = null }
+        activeDialog = dialog
+        dialog.show()
     }
 
     override fun onDestroy() {
@@ -696,6 +882,8 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         private const val STATE_TELEGRAM_WEB_BLOCKED = "state_telegram_web_blocked"
         private const val STATE_YOUTUBE_RESTRICTED = "state_youtube_restricted"
         private const val STATE_FULL_SYSTEM_FILTERING = "state_full_system_filtering"
+        private const val STATE_AD_BLOCKING = "state_ad_blocking"
+        private const val STATE_PENDING_VPN_CONSENT_SOURCE = "state_pending_vpn_consent_source"
         private const val STATE_WHITELIST_ONLY = "state_whitelist_only"
         private const val STATE_BLOCKED_URLS = "state_blocked_urls"
         private const val STATE_ALLOWED_URLS = "state_allowed_urls"

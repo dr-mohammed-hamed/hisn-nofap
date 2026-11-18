@@ -24,6 +24,12 @@ class PornKeywordMatcherTest {
             "spankbang.com",
             "eporner.com",
             "beeg.com",
+            "erome.com",
+            "m.erome.com",
+            "www.cam4.com",
+            "free-erome-pics.com",
+            "123cam4.net",
+            "jable.tv",
             "hentaihaven.xxx",
             "free-xxx-videos.net"
         )
@@ -54,7 +60,15 @@ class PornKeywordMatcherTest {
             "amazon.com",
             "scunthorpe.gov.uk",
             "pass.gov.eg",
-            "classic.autotrader.co.uk"
+            "classic.autotrader.co.uk",
+            "stjerome.edu",
+            "jerome.org",
+            "beegarden.com",
+            "beegees.com",
+            "webcam4k.com",
+            "manejable.es",
+            "trabajable.es",
+            "heteromeric.org"
         )
 
         for (domain in legitimateDomains) {

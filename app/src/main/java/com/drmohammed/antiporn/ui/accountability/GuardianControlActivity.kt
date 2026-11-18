@@ -21,16 +21,11 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.accessibility.control.AccessibilityPolicyCoordinator
-import com.drmohammed.antiporn.ui.control.curfew.CurfewSettingsActivity
-import com.drmohammed.antiporn.ui.control.other.OtherSettingsActivity
-import com.drmohammed.antiporn.ui.control.web.WebFilterSettingsActivity
-import com.drmohammed.antiporn.waqfa.ui.settings.WaqfaSettingsActivity
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.color.MaterialColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.textfield.TextInputEditText
 import kotlinx.coroutines.launch
 import org.koin.androidx.viewmodel.ext.android.viewModel
@@ -69,6 +64,7 @@ class GuardianControlActivity : AppCompatActivity() {
 
     private lateinit var approvalsViewBinder: GuardianApprovalsViewBinder
     private lateinit var liveSyncViewBinder: GuardianLiveSyncViewBinder
+    private lateinit var policyTilesViewBinder: GuardianPolicyTilesViewBinder
 
     private var lastEditNameClickTime = 0L
     private var lastTileClickTime = 0L
@@ -174,10 +170,17 @@ class GuardianControlActivity : AppCompatActivity() {
             wardIdProvider = { viewModel.uiState.value.wardId },
             onReloadRequested = { approvalsViewBinder.loadPendingApprovals() }
         )
+
+        policyTilesViewBinder = GuardianPolicyTilesViewBinder(
+            activity = this,
+            stateProvider = { viewModel.uiState.value },
+            onLaunchSubScreen = { intentProvider -> launchSubScreen(intentProvider) }
+        )
     }
 
     private fun setupListeners() {
         alertsViewBinder.setupListeners()
+        policyTilesViewBinder.setupListeners()
 
         btnEditWardName.setOnClickListener {
             val now = SystemClock.elapsedRealtime()
@@ -191,94 +194,16 @@ class GuardianControlActivity : AppCompatActivity() {
             viewModel.loadWardPolicy()
             approvalsViewBinder.loadPendingApprovals()
         }
-
-        // --- 6 Distributed Navigation Tiles ---
-
-        // Tile 1: Night Curfew
-        findViewById<View>(R.id.tileCurfew)?.setOnClickListener {
-            launchSubScreen {
-                val state = viewModel.uiState.value
-                Intent(this, CurfewSettingsActivity::class.java).apply {
-                    putExtra(CurfewSettingsActivity.EXTRA_IS_REMOTE, true)
-                    putExtra(CurfewSettingsActivity.EXTRA_WARD_ID, state.wardId)
-                    putExtra(CurfewSettingsActivity.EXTRA_POLICY_JSON, state.currentPolicy.toJson())
-                }
-            }
-        }
-
-        // Tile 2: Sites & Network
-        findViewById<View>(R.id.tileWebFilter)?.setOnClickListener {
-            launchSubScreen {
-                val state = viewModel.uiState.value
-                Intent(this, WebFilterSettingsActivity::class.java).apply {
-                    putExtra(WebFilterSettingsActivity.EXTRA_IS_REMOTE, true)
-                    putExtra(WebFilterSettingsActivity.EXTRA_WARD_ID, state.wardId)
-                    putExtra(WebFilterSettingsActivity.EXTRA_POLICY_JSON, state.currentPolicy.toJson())
-                }
-            }
-        }
-
-        // Tile 3: App Management
-        findViewById<View>(R.id.tileAppManager)?.setOnClickListener {
-            launchSubScreen {
-                val state = viewModel.uiState.value
-                Intent(this, RemoteAppManagerActivity::class.java).apply {
-                    putExtra(RemoteAppManagerActivity.EXTRA_IS_LOCAL, false)
-                    putExtra(RemoteAppManagerActivity.EXTRA_WARD_ID, state.wardId)
-                    putExtra(RemoteAppManagerActivity.EXTRA_WARD_NAME, state.wardName)
-                }
-            }
-        }
-
-        // Tile 4: Waqfa System
-        findViewById<View>(R.id.tileWaqfa)?.setOnClickListener {
-            launchSubScreen {
-                val state = viewModel.uiState.value
-                Intent(this, WaqfaSettingsActivity::class.java).apply {
-                    putExtra(WaqfaSettingsActivity.EXTRA_IS_REMOTE, true)
-                    putExtra(WaqfaSettingsActivity.EXTRA_WARD_ID, state.wardId)
-                    putExtra(WaqfaSettingsActivity.EXTRA_POLICY_JSON, state.currentPolicy.toJson())
-                }
-            }
-        }
-
-        // Tile: Page Shield
-        findViewById<View>(R.id.tilePageShield)?.setOnClickListener {
-            launchSubScreen {
-                val state = viewModel.uiState.value
-                Intent(this, com.drmohammed.antiporn.pageshield.ui.PageShieldSettingsActivity::class.java).apply {
-                    putExtra(com.drmohammed.antiporn.pageshield.ui.PageShieldSettingsActivity.EXTRA_IS_REMOTE, true)
-                    putExtra(com.drmohammed.antiporn.pageshield.ui.PageShieldSettingsActivity.EXTRA_WARD_ID, state.wardId)
-                    putExtra(com.drmohammed.antiporn.pageshield.ui.PageShieldSettingsActivity.EXTRA_POLICY_JSON, state.currentPolicy.toJson())
-                }
-            }
-        }
-
-        // Tile 5: Other Settings
-        findViewById<View>(R.id.tileOtherSettings)?.setOnClickListener {
-            launchSubScreen {
-                val state = viewModel.uiState.value
-                Intent(this, OtherSettingsActivity::class.java).apply {
-                    putExtra(OtherSettingsActivity.EXTRA_IS_REMOTE, true)
-                    putExtra(OtherSettingsActivity.EXTRA_WARD_ID, state.wardId)
-                    putExtra(OtherSettingsActivity.EXTRA_POLICY_JSON, state.currentPolicy.toJson())
-                }
-            }
-        }
-
-        // Tile 6: Self-Control Permissions
-        findViewById<View>(R.id.tileSelfControlPermissions)?.setOnClickListener {
-            launchSubScreen {
-                val state = viewModel.uiState.value
-                Intent(this, GuardianSelfControlSettingsActivity::class.java).apply {
-                    putExtra(GuardianSelfControlSettingsActivity.EXTRA_WARD_ID, state.wardId)
-                    putExtra(GuardianSelfControlSettingsActivity.EXTRA_POLICY_JSON, state.currentPolicy.toJson())
-                }
-            }
-        }
     }
 
     private fun launchSubScreen(intentProvider: () -> Intent) {
+        val state = viewModel.uiState.value
+        if (state.isLoading || state.initialPolicySnapshot == null) {
+            if (!state.isLoading && state.isOffline) {
+                Toast.makeText(this, R.string.toast_offline_policy_edit_note, Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
         val now = SystemClock.elapsedRealtime()
         if (now - lastTileClickTime < 600L) return
         lastTileClickTime = now
@@ -306,6 +231,9 @@ class GuardianControlActivity : AppCompatActivity() {
         updateWardTitle(state.wardName)
         cardOfflineBanner.visibility = if (state.isOffline) View.VISIBLE else View.GONE
         btnRetryLoadPolicy.isEnabled = !state.isLoading
+
+        val policyReady = !state.isLoading && state.initialPolicySnapshot != null
+        policyTilesViewBinder.renderPolicyReadyState(policyReady)
 
         alertsViewBinder.renderPolicyAlerts(state.currentPolicy)
         renderWardCapabilityAlert(state)

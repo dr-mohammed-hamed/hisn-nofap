@@ -36,6 +36,7 @@ class DevicePolicyBundleTest {
         assertTrue(policy.protectedAppPackages.isEmpty())
         assertEquals(DevicePolicyBundle.BROWSER_FILTER_OFF, policy.browserFilterMode)
         assertFalse(policy.isFullSystemFilteringEnabled)
+        assertFalse(policy.isAdBlockingEnabled)
         assertTrue(policy.customBlockedUrls.isEmpty())
         assertTrue(policy.customAllowedUrls.isEmpty())
         assertTrue(policy.isSelfControlAllowed)
@@ -72,6 +73,7 @@ class DevicePolicyBundleTest {
             protectedAppPackages = setOf("com.vital.app1", "com.vital.app2"),
             browserFilterMode = DevicePolicyBundle.BROWSER_FILTER_BLOCKLIST,
             isFullSystemFilteringEnabled = true,
+            isAdBlockingEnabled = true,
             customBlockedUrls = setOf("badsite.com", "gambling.org"),
             customAllowedUrls = setOf("safe.org"),
             dnsHost = "custom.family-dns.com",
@@ -114,6 +116,7 @@ class DevicePolicyBundleTest {
         assertEquals(original.protectedAppPackages, restored.protectedAppPackages)
         assertEquals(original.browserFilterMode, restored.browserFilterMode)
         assertEquals(original.isFullSystemFilteringEnabled, restored.isFullSystemFilteringEnabled)
+        assertEquals(original.isAdBlockingEnabled, restored.isAdBlockingEnabled)
         assertEquals(original.customBlockedUrls, restored.customBlockedUrls)
         assertEquals(original.customAllowedUrls, restored.customAllowedUrls)
         assertEquals(original.dnsHost, restored.dnsHost)
@@ -156,6 +159,7 @@ class DevicePolicyBundleTest {
             protectedAppPackages = setOf("pkg.c"),
             browserFilterMode = DevicePolicyBundle.BROWSER_FILTER_WHITELIST_ONLY,
             isFullSystemFilteringEnabled = true,
+            isAdBlockingEnabled = true,
             customBlockedUrls = setOf("blocked1.com", "blocked2.com"),
             customAllowedUrls = setOf("allowed1.com"),
             dnsHost = "custom.family-dns.com",
@@ -198,6 +202,7 @@ class DevicePolicyBundleTest {
         assertEquals(original.protectedAppPackages, restored.protectedAppPackages)
         assertEquals(original.browserFilterMode, restored.browserFilterMode)
         assertEquals(original.isFullSystemFilteringEnabled, restored.isFullSystemFilteringEnabled)
+        assertEquals(original.isAdBlockingEnabled, restored.isAdBlockingEnabled)
         assertEquals(original.customBlockedUrls, restored.customBlockedUrls)
         assertEquals(original.customAllowedUrls, restored.customAllowedUrls)
         assertEquals(original.dnsHost, restored.dnsHost)
@@ -446,12 +451,37 @@ class DevicePolicyBundleTest {
     }
 
     @Test
-    fun testLegacyPayloadWithoutCurfewEnabled_preservesCurfewEnabledTrue() {
+    fun testMissingCurfewEnabled_defaultsToFalseConsistentWithConstructor() {
         val legacyJson = """{"version": 1}"""
-        assertTrue(DevicePolicyBundle.fromJson(legacyJson).isCurfewEnabled)
+        assertFalse(DevicePolicyBundle.fromJson(legacyJson).isCurfewEnabled)
 
         val legacyMap = mapOf<String, Any?>("version" to 1L)
-        assertTrue(DevicePolicyBundle.fromMap(legacyMap).isCurfewEnabled)
+        assertFalse(DevicePolicyBundle.fromMap(legacyMap).isCurfewEnabled)
+    }
+
+    @Test
+    fun testJsonNullNullableStrings_neverDeserializeAsLiteralNull() {
+        val jsonWithNulls = """
+            {
+                "version": 2,
+                "dnsHost": null,
+                "guardianUid": null,
+                "guardianName": null,
+                "timeZoneId": null,
+                "breakoutStatus": null,
+                "deactivationStatus": null,
+                "guardianPolicySnapshot": null
+            }
+        """.trimIndent()
+        val parsed = requireNotNull(DevicePolicyBundle.fromJsonOrNull(jsonWithNulls))
+        assertEquals(DevicePolicyBundle.CLOUDFLARE_FAMILY_DNS_HOST, parsed.dnsHost)
+        assertNull(parsed.guardianUid)
+        assertNull(parsed.guardianName)
+        assertFalse(parsed.isSupervised)
+        assertEquals(com.drmohammed.antiporn.curfew.CurfewConfig.DEFAULT_TIMEZONE_ID, parsed.timeZoneId)
+        assertNull(parsed.breakoutStatus)
+        assertNull(parsed.deactivationStatus)
+        assertNull(parsed.guardianPolicySnapshot)
     }
 
     @Test

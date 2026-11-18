@@ -50,15 +50,37 @@ class DnsPacketParserTest {
         assertTrue(DnsPacketParser.isDomainBlocked("youtube.com", rulesWithWildcardsAndPaths))
         assertTrue(DnsPacketParser.isDomainBlocked("m.youtube.com", rulesWithWildcardsAndPaths))
         assertTrue(DnsPacketParser.isDomainBlocked("m.youtube.com.", rulesWithWildcardsAndPaths))
-        assertTrue(DnsPacketParser.isDomainBlocked("facebook.com", rulesWithWildcardsAndPaths))
-        assertTrue(DnsPacketParser.isDomainBlocked("m.facebook.com", rulesWithWildcardsAndPaths))
         assertTrue(DnsPacketParser.isDomainBlocked("tiktok.com", rulesWithWildcardsAndPaths))
         assertTrue(DnsPacketParser.isDomainBlocked("v16.tiktok.com", rulesWithWildcardsAndPaths))
-        assertTrue(DnsPacketParser.isDomainBlocked("instagram.com", rulesWithWildcardsAndPaths))
         assertTrue(DnsPacketParser.isDomainBlocked("twitter.com", rulesWithWildcardsAndPaths))
         assertTrue(DnsPacketParser.isDomainBlocked("api.twitter.com", rulesWithWildcardsAndPaths))
 
+        // Path rules (like /shorts or /watch) MUST NOT block apex domain via DNS!
+        // Path rules belong to BrowserShield/PageShield.
+        assertFalse("facebook.com must NOT be blocked because rule has URL path /watch",
+            DnsPacketParser.isDomainBlocked("facebook.com", rulesWithWildcardsAndPaths))
+        assertFalse("instagram.com must NOT be blocked because rule has URL path /feed",
+            DnsPacketParser.isDomainBlocked("instagram.com", rulesWithWildcardsAndPaths))
+
+        // Explicit URL path, query, and fragment sanitization checks
+        assertEquals("", DnsPacketParser.sanitizeRule("youtube.com/shorts"))
+        assertEquals("", DnsPacketParser.sanitizeRule("https://example.com/blocked-page"))
+        assertEquals("", DnsPacketParser.sanitizeRule("http://example.com:8080/path/to/page"))
+        assertEquals("", DnsPacketParser.sanitizeRule("example.com?filter=active"))
+        assertEquals("", DnsPacketParser.sanitizeRule("example.com#section"))
+        assertEquals("tiktok.com", DnsPacketParser.sanitizeRule("tiktok.com/"))
+        assertEquals("twitter.com", DnsPacketParser.sanitizeRule("*.twitter.com/"))
+        assertEquals("example.com", DnsPacketParser.sanitizeRule("example.com:8080"))
+
         assertFalse(DnsPacketParser.isDomainBlocked("google.com", rulesWithWildcardsAndPaths))
+    }
+
+    @Test
+    fun testIsDomainBlockedCompiledPreservesTwoLabelWwwDomain() {
+        assertTrue(DnsPacketParser.isDomainBlockedCompiled("www.com", setOf("www.com")))
+        assertTrue(DnsPacketParser.isDomainBlockedCompiled("WWW.COM.", setOf("www.com")))
+        assertTrue(DnsPacketParser.isDomainBlockedCompiled("sub.www.com", setOf("www.com")))
+        assertTrue(DnsPacketParser.isDomainBlockedCompiled("www.example.com", setOf("example.com")))
     }
 
     @Test
@@ -73,9 +95,8 @@ class DnsPacketParserTest {
             domain = "youtube.com"
         )
 
-        val parsed = DnsPacketParser.parseDnsQuery(queryPacket, queryPacket.size)
-        assertNotNull(parsed)
-        assertEquals("youtube.com", parsed!!.qName)
+        val parsed = requireNotNull(DnsPacketParser.parseDnsQuery(queryPacket, queryPacket.size))
+        assertEquals("youtube.com", parsed.qName)
         assertEquals(54321, parsed.srcPort)
         assertEquals(53, parsed.dstPort)
         assertEquals(0x1234.toShort(), parsed.transactionId)
@@ -187,12 +208,11 @@ class DnsPacketParserTest {
             qType = 1 // A record
         )
 
-        val parsed = DnsPacketParser.parseDnsQuery(queryPacket, queryPacket.size)
-        assertNotNull(parsed)
-        assertEquals(1, parsed?.qType)
-        assertEquals("www.youtube.com", parsed?.qName)
+        val parsed = requireNotNull(DnsPacketParser.parseDnsQuery(queryPacket, queryPacket.size))
+        assertEquals(1, parsed.qType)
+        assertEquals("www.youtube.com", parsed.qName)
 
-        val vipResponse = DnsPacketParser.buildSafeSearchVipResponse(parsed!!)
+        val vipResponse = DnsPacketParser.buildSafeSearchVipResponse(parsed)
         assertNotNull(vipResponse)
 
         val buf = ByteBuffer.wrap(vipResponse)
@@ -225,11 +245,10 @@ class DnsPacketParserTest {
             qType = 28 // AAAA IPv6 record
         )
 
-        val parsed = DnsPacketParser.parseDnsQuery(queryPacket, queryPacket.size)
-        assertNotNull(parsed)
-        assertEquals(28, parsed?.qType)
+        val parsed = requireNotNull(DnsPacketParser.parseDnsQuery(queryPacket, queryPacket.size))
+        assertEquals(28, parsed.qType)
 
-        val nodataResponse = DnsPacketParser.buildSafeSearchVipResponse(parsed!!)
+        val nodataResponse = DnsPacketParser.buildSafeSearchVipResponse(parsed)
         assertNotNull(nodataResponse)
 
         val buf = ByteBuffer.wrap(nodataResponse)
@@ -299,5 +318,68 @@ class DnsPacketParserTest {
         buf.putShort(1.toShort()) // QCLASS: IN (Internet)
 
         return packet
+    }
+
+    @Test
+    fun testWrapUpstreamDnsResponseAndPacketHardening() {
+        val clientIp = byteArrayOf(10, (-1).toByte(), (-1).toByte(), 1)
+        val serverIp = byteArrayOf(10, (-1).toByte(), (-1).toByte(), 2)
+        val dnsPayload = byteArrayOf(0x12, 0x34, (-127).toByte(), (-128).toByte(), 0, 1, 0, 1, 0, 0, 0, 0)
+        val wrapped = DnsPacketParser.wrapUpstreamDnsResponse(
+            clientIp = clientIp,
+            serverIp = serverIp,
+            clientPort = 54321,
+            serverPort = 53,
+            dnsResponsePayload = dnsPayload
+        )
+        assertEquals(20 + 8 + dnsPayload.size, wrapped.size)
+        val buf = ByteBuffer.wrap(wrapped)
+        assertEquals(4, (buf.get(0).toInt() and 0xFF) ushr 4)
+        assertEquals(17, buf.get(9).toInt() and 0xFF)
+        assertEquals("IPv4 header checksum must verify to 0xFFFF", 0xFFFF, verifyIpv4HeaderChecksumRfc1071(wrapped))
+        val outSrc = ByteArray(4)
+        val outDst = ByteArray(4)
+        buf.position(12)
+        buf.get(outSrc)
+        buf.get(outDst)
+        assertArrayEquals(serverIp, outSrc)
+        assertArrayEquals(clientIp, outDst)
+        buf.position(20)
+        assertEquals(53, buf.short.toInt() and 0xFFFF)
+        assertEquals(54321, buf.short.toInt() and 0xFFFF)
+        assertEquals(8 + dnsPayload.size, buf.short.toInt() and 0xFFFF)
+        buf.short // udp checksum
+        val extractedPayload = ByteArray(dnsPayload.size)
+        buf.get(extractedPayload)
+        assertArrayEquals(dnsPayload, extractedPayload)
+
+        // Hardening: length > packet.size and IPv4 non-first fragments rejected
+        val validQuery = buildSyntheticDnsQueryPacket(
+            srcIp = clientIp,
+            dstIp = serverIp,
+            srcPort = 54321,
+            dstPort = 53,
+            txId = 0x1111.toShort(),
+            domain = "example.com"
+        )
+        assertNull(DnsPacketParser.parseDnsQuery(validQuery, validQuery.size + 10))
+        val fragmentedQuery = validQuery.copyOf().apply {
+            this[6] = 0x00
+            this[7] = 0x08 // non-zero fragment offset
+        }
+        assertNull("IPv4 non-first fragments must be rejected", DnsPacketParser.parseDnsQuery(fragmentedQuery, fragmentedQuery.size))
+    }
+
+    private fun verifyIpv4HeaderChecksumRfc1071(packet: ByteArray): Int {
+        var sum = 0
+        var i = 0
+        while (i < 20) {
+            sum += ((packet[i].toInt() and 0xFF) shl 8) or (packet[i + 1].toInt() and 0xFF)
+            i += 2
+        }
+        while ((sum ushr 16) != 0) {
+            sum = (sum and 0xFFFF) + (sum ushr 16)
+        }
+        return sum and 0xFFFF
     }
 }

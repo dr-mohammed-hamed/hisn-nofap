@@ -73,7 +73,7 @@ object DnsPacketParser {
      * Returns [ParsedDnsQuery] if it is a valid DNS query on port 53, or null otherwise.
      */
     fun parseDnsQuery(packet: ByteArray, length: Int): ParsedDnsQuery? {
-        if (length < IP_HEADER_MIN_LEN + UDP_HEADER_LEN + DNS_HEADER_LEN) return null
+        if (length > packet.size || length < IP_HEADER_MIN_LEN + UDP_HEADER_LEN + DNS_HEADER_LEN) return null
 
         val buffer = ByteBuffer.wrap(packet, 0, length)
 
@@ -84,6 +84,9 @@ object DnsPacketParser {
 
         val ihl = (versionAndIhl and 0x0F) * 4
         if (ihl < IP_HEADER_MIN_LEN || length < ihl + UDP_HEADER_LEN + DNS_HEADER_LEN) return null
+
+        // Reject IPv4 non-first fragments (fragment offset != 0)
+        if ((buffer.getShort(6).toInt() and 0x1FFF) != 0) return null
 
         val protocol = buffer.get(9).toInt() and 0xFF
         if (protocol != 17) return null // Must be UDP
@@ -139,13 +142,14 @@ object DnsPacketParser {
                 break // End of QNAME
             }
             if (labelLen > 63 || dnsBuffer.remaining() < labelLen) return null // Malformed label
+            if (dnsBuffer.position() + labelLen - questionStart >= 255) return null // RFC 1035 max 255-byte QNAME
 
             val labelBytes = ByteArray(labelLen)
             dnsBuffer.get(labelBytes)
             labels.add(String(labelBytes, Charsets.US_ASCII))
         }
 
-        if (!isTerminated || labels.isEmpty()) return null
+        if (!isTerminated || labels.isEmpty() || dnsBuffer.position() - questionStart > 255) return null
         val qName = labels.joinToString(".").lowercase()
 
         // Read QTYPE and QCLASS (4 bytes)
@@ -172,17 +176,40 @@ object DnsPacketParser {
     }
 
     /**
-     * Sanitizes a domain rule by stripping protocol, path, port, wildcard (*.), and leading www.
+     * Sanitizes a domain rule by stripping protocol, port, wildcard (*.), and leading www.
+     * If the raw rule contains a URL path component (e.g. "youtube.com/shorts"), returns "" so
+     * that compileEffectiveBlockedDomains ignores path rules for DNS filtering
+     * (path rules belong to BrowserShield / PageShield).
      */
     fun sanitizeRule(rule: String): String {
-        return rule.trim().lowercase()
+        val trimmed = rule.trim().lowercase()
             .removePrefix("https://")
             .removePrefix("http://")
-            .split('/', ':').first()
+
+        // If the rule contains a URL path, query, or fragment component (e.g. youtube.com/shorts, example.com?id=1),
+        // do not strip it and block the whole apex domain! Return "" instead.
+        val withoutTrailingSlash = trimmed.trimEnd('/')
+        if (withoutTrailingSlash.contains('/') || withoutTrailingSlash.contains('?') || withoutTrailingSlash.contains('#')) {
+            return ""
+        }
+
+        val cleaned = withoutTrailingSlash
+            .split(':').first()
             .removePrefix("*.")
             .trimStart('.')
-            .removePrefix("www.")
+            .trimEnd('.')
             .trim()
+        val asciiCleaned = if (cleaned.any { it.code > 127 }) {
+            runCatching { java.net.IDN.toASCII(cleaned, java.net.IDN.ALLOW_UNASSIGNED).lowercase() }
+                .getOrDefault(cleaned)
+        } else {
+            cleaned
+        }
+        return if (asciiCleaned.startsWith("www.") && asciiCleaned.removePrefix("www.").contains('.')) {
+            asciiCleaned.removePrefix("www.")
+        } else {
+            asciiCleaned
+        }
     }
 
     /**
@@ -215,7 +242,12 @@ object DnsPacketParser {
     fun isDomainBlockedCompiled(qName: String, compiledBlockedDomains: Set<String>): Boolean {
         if (compiledBlockedDomains.isEmpty()) return false
 
-        val normalizedQuery = qName.trim().lowercase().trimEnd('.').removePrefix("www.")
+        val trimmedQuery = qName.trim().lowercase().trimEnd('.')
+        val normalizedQuery = if (trimmedQuery.startsWith("www.") && trimmedQuery.removePrefix("www.").contains('.')) {
+            trimmedQuery.removePrefix("www.")
+        } else {
+            trimmedQuery
+        }
 
         // 1. Direct match O(1)
         if (compiledBlockedDomains.contains(normalizedQuery)) return true
@@ -370,7 +402,7 @@ object DnsPacketParser {
         return response
     }
 
-    private fun calculateIpChecksum(data: ByteArray, offset: Int, length: Int): Short {
+    internal fun calculateIpChecksum(data: ByteArray, offset: Int, length: Int): Short {
         var sum = 0
         var i = offset
         while (i < offset + length) {
@@ -390,7 +422,7 @@ object DnsPacketParser {
      * This signals the client resolver to immediately fallback to IPv4 DNS without any timeout.
      */
     fun buildIpv6RefusedResponse(packet: ByteArray, length: Int): ByteArray? {
-        if (length < 40 + UDP_HEADER_LEN + DNS_HEADER_LEN) return null
+        if (length > packet.size || length < 40 + UDP_HEADER_LEN + DNS_HEADER_LEN) return null
 
         val buffer = ByteBuffer.wrap(packet, 0, length)
         val firstByte = buffer.get(0).toInt() and 0xFF
@@ -438,9 +470,10 @@ object DnsPacketParser {
                 break
             }
             if (labelLen > 63 || buffer.position() + labelLen > dnsEnd) return null
+            if (buffer.position() + labelLen - questionStart >= 255) return null
             buffer.position(buffer.position() + labelLen)
         }
-        if (!isTerminated || buffer.position() + 4 > dnsEnd) return null
+        if (!isTerminated || buffer.position() - questionStart > 255 || buffer.position() + 4 > dnsEnd) return null
         buffer.position(buffer.position() + 4) // QTYPE (2 bytes) + QCLASS (2 bytes)
         val questionEnd = buffer.position()
 
@@ -529,4 +562,34 @@ object DnsPacketParser {
         if (result == 0) result = 0xFFFF
         return result.toShort()
     }
+
+    /**
+     * Builds an immediate IPv4/TCP RST packet in response to an incoming TCP probe
+     * (e.g. port 853 Opportunistic DoT or port 53 TCP DNS) per RFC 793 / RFC 9293.
+     */
+    fun buildTcpRstResponse(packet: ByteArray, length: Int): ByteArray? =
+        TcpRstPacketBuilder.buildIpv4TcpRstResponse(packet, length)
+
+    /**
+     * Builds an immediate IPv6/TCP RST packet in response to an incoming IPv6 TCP probe
+     * (e.g. port 853 Opportunistic DoT or port 53 TCP DNS) per RFC 793 / RFC 9293.
+     */
+    fun buildIpv6TcpRstResponse(packet: ByteArray, length: Int): ByteArray? =
+        TcpRstPacketBuilder.buildIpv6TcpRstResponse(packet, length)
+
+    fun calculateIpv4TcpChecksum(
+        srcIp: ByteArray,
+        dstIp: ByteArray,
+        tcpPacket: ByteArray,
+        tcpOffset: Int,
+        tcpLen: Int
+    ): Short = TcpRstPacketBuilder.calculateIpv4TcpChecksum(srcIp, dstIp, tcpPacket, tcpOffset, tcpLen)
+
+    fun calculateIpv6TcpChecksum(
+        srcIp: ByteArray,
+        dstIp: ByteArray,
+        tcpPacket: ByteArray,
+        tcpOffset: Int,
+        tcpLen: Int
+    ): Short = TcpRstPacketBuilder.calculateIpv6TcpChecksum(srcIp, dstIp, tcpPacket, tcpOffset, tcpLen)
 }

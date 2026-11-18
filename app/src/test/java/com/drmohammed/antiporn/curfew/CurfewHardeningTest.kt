@@ -84,6 +84,14 @@ class CurfewHardeningTest {
                 globalHost = null
             )
         )
+        // Cached specifier left behind by Android when switching to opportunistic/off is harmless and must pass
+        assertTrue(
+            CurfewVpnDnsBridge.isLocalVpnDnsStateConsistent(
+                dpmMode = android.app.admin.DevicePolicyManager.PRIVATE_DNS_MODE_OPPORTUNISTIC,
+                globalMode = "opportunistic",
+                globalHost = "family.cloudflare-dns.com"
+            )
+        )
         // Reject DoT hostname in Settings.Global even if DPM reports opportunistic (C3 split-brain fix)
         assertFalse(
             CurfewVpnDnsBridge.isLocalVpnDnsStateConsistent(

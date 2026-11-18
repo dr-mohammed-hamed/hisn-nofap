@@ -27,9 +27,7 @@ object PornKeywordMatcher {
         "hentai",
         "nhentai",
         "rule34",
-        "erome",
         "fapello",
-        "cam4",
         "livejasmin",
         "bongacams",
         "fansly",
@@ -60,12 +58,18 @@ object PornKeywordMatcher {
         "submissivex",
         "porndoe",
         "missav",
-        "jable",
         "netflav",
         "supjav",
         "7mmtv",
-        "avgle",
-        "beeg"
+        "avgle"
+    )
+
+    // Exact adult domains to avoid substring false positives (e.g. erome in jerome, beeg in beegarden)
+    val EXACT_ADULT_DOMAINS: Set<String> = setOf(
+        "erome.com",
+        "cam4.com",
+        "beeg.com",
+        "jable.tv"
     )
 
     // Short tokens that are dangerous if matched as plain substrings inside other words
@@ -81,7 +85,11 @@ object PornKeywordMatcher {
         "boobs",
         "tits",
         "pussy",
-        "incest"
+        "incest",
+        "erome",
+        "cam4",
+        "beeg",
+        "jable"
     )
 
     // Explicit exclusions for known benign academic, municipal, or analytics words
@@ -96,7 +104,14 @@ object PornKeywordMatcher {
         "expression",
         "possession",
         "obsession",
-        "intersex"
+        "intersex",
+        "jerome",
+        "heteromeric",
+        "beegarden",
+        "beegees",
+        "webcam4k",
+        "manejable",
+        "trabajable"
     )
 
     /**
@@ -110,13 +125,27 @@ object PornKeywordMatcher {
         }
         if (domain.isBlank()) return false
 
+        // 0. Check Exact Adult Domains (e.g. "erome.com", "cam4.com", "beeg.com", "jable.tv")
+        for (exact in EXACT_ADULT_DOMAINS) {
+            if (domain == exact || domain.endsWith(".$exact")) {
+                return true
+            }
+        }
+
         val labels = domain.split('.')
         if (labels.isEmpty()) return false
 
-        // 1. Check Unambiguous Root Tokens (match anywhere in labels)
+        // 1. Check Unambiguous Root Tokens (match anywhere in labels, masking SAFE_WORD_ALLOWLIST occurrences)
         for (label in labels) {
+            if (SAFE_WORD_ALLOWLIST.contains(label)) continue
+            var maskedLabel = label
+            for (safe in SAFE_WORD_ALLOWLIST) {
+                if (maskedLabel.contains(safe)) {
+                    maskedLabel = maskedLabel.replace(safe, " ")
+                }
+            }
             for (token in UNAMBIGUOUS_ROOT_TOKENS) {
-                if (label.contains(token)) {
+                if (maskedLabel.contains(token)) {
                     return true
                 }
             }
@@ -136,9 +165,14 @@ object PornKeywordMatcher {
                     return true
                 }
 
-                // Check if segment has digits attached to token (e.g. "sex18", "xxx24", "porn88")
-                val strippedDigits = segment.trim { it.isDigit() }
-                if (BOUNDARY_STRICT_SHORT_TOKENS.contains(strippedDigits)) {
+                // Check if segment has digits attached to token (e.g. "sex18", "xxx24", "123cam4")
+                val strippedBoth = segment.trim { it.isDigit() }
+                val strippedLeading = segment.trimStart { it.isDigit() }
+                val strippedTrailing = segment.trimEnd { it.isDigit() }
+                if (BOUNDARY_STRICT_SHORT_TOKENS.contains(strippedBoth) ||
+                    BOUNDARY_STRICT_SHORT_TOKENS.contains(strippedLeading) ||
+                    BOUNDARY_STRICT_SHORT_TOKENS.contains(strippedTrailing)
+                ) {
                     return true
                 }
             }

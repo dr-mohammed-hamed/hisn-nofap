@@ -11,6 +11,7 @@ import com.drmohammed.antiporn.core.engine.ProtectionEngine
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.core.model.ShieldResult
 import com.drmohammed.antiporn.core.model.ShieldStatus
+import com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService
 import com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 
@@ -46,7 +47,8 @@ object DnsShield : ProtectionShield {
             )
         }
 
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+        val requiredVpnMode = CurfewBlackholeVpnService.evaluateRequiredMode(context)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q && requiredVpnMode == CurfewBlackholeVpnService.VpnMode.IDLE) {
             return ShieldResult(
                 shieldId = id,
                 success = false,
@@ -77,7 +79,8 @@ object DnsShield : ProtectionShield {
             return ShieldStatus.Disabled(context.getString(R.string.card_device_owner_inactive))
         }
 
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+        val requiredVpnMode = CurfewBlackholeVpnService.evaluateRequiredMode(context)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q && requiredVpnMode == CurfewBlackholeVpnService.VpnMode.IDLE) {
             return ShieldStatus.Unsupported(Build.VERSION_CODES.Q)
         }
 
