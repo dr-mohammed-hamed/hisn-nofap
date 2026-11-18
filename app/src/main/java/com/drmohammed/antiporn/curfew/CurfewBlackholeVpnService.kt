@@ -8,7 +8,7 @@ import android.os.Build
 import android.os.IBinder
 import android.os.Looper
 import android.os.ParcelFileDescriptor
-import android.util.Log
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
@@ -21,6 +21,7 @@ import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.notification.registry.NotificationRegistry
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import com.drmohammed.antiporn.telemetry.SafeDpmGateway
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -67,6 +68,18 @@ class CurfewBlackholeVpnService : VpnService() {
     private val tunnelMutex = Mutex()
     private var dnsWorkerJob: Job? = null
 
+    private var physicalNetworkMonitor: PhysicalNetworkMonitor? = null
+    private val networkChangeCoalescer = NetworkChangeCoalescer(
+        scope = serviceScope,
+        clockMs = ::monotonicNowMs,
+        coalesceMs = NetworkChangeCoalescer.DEFAULT_COALESCE_MS,
+        isDestroyed = { isServiceDestroyed || isServiceRevoked },
+        onFlush = { reason ->
+            dnsForwarder?.onNetworkChanged()
+            Timber.tag(TAG).i("Flushed DNS cache, DoT pool & circuit breaker on network change ($reason)")
+        }
+    )
+
     @Volatile
     private var isServiceDestroyed: Boolean = false
 
@@ -99,8 +112,7 @@ class CurfewBlackholeVpnService : VpnService() {
         }
 
         val forwarder = DnsUpstreamForwarder(
-            vpnService = this,
-            policyProvider = { activePolicy }
+            vpnService = this
         )
         dnsForwarder = forwarder
         dnsTunnelWorker = DnsTunnelWorker(
@@ -109,12 +121,17 @@ class CurfewBlackholeVpnService : VpnService() {
             customBlockedProvider = { compiledBlockedDomainsCache },
             isRunningProvider = { currentMode == VpnMode.DNS_FILTERING_ONLY }
         )
+        physicalNetworkMonitor = PhysicalNetworkMonitor(
+            appContext = applicationContext ?: this,
+            isDestroyed = { isServiceDestroyed || isServiceRevoked },
+            onNetworkChanged = ::notifyNetworkChanged
+        ).also { it.register() }
 
         serviceScope.launch {
             try {
                 BinaryDomainFilter.init(applicationContext)
             } catch (e: Exception) {
-                Log.w(TAG, "BinaryDomainFilter pre-init failed", e)
+                Timber.tag(TAG).w(e, "BinaryDomainFilter pre-init failed")
             }
             for (cmd in commandChannel) {
                 handleCommand(cmd)
@@ -137,6 +154,7 @@ class CurfewBlackholeVpnService : VpnService() {
         }
 
         isServiceRevoked = false
+        physicalNetworkMonitor?.register()
         val forceRebuild = intent?.getBooleanExtra("force_rebuild", false) == true
         commandChannel.trySend(VpnCommand.StartOrUpdate(forceRebuild = forceRebuild))
         return START_STICKY
@@ -144,11 +162,13 @@ class CurfewBlackholeVpnService : VpnService() {
 
     override fun onBind(intent: Intent?): IBinder? {
         if (intent?.action == SERVICE_INTERFACE) {
+            isServiceRevoked = false
+            physicalNetworkMonitor?.register()
             synchronized(companionStateLock) {
                 activeService = WeakReference(this)
                 isStartPending = false
             }
-            Log.i(TAG, "Always-On OS direct bind received; promoting foreground and ensuring tunnel")
+            Timber.tag(TAG).i("Always-On OS direct bind received; promoting foreground and ensuring tunnel")
             safeStartForegroundNotification()
             commandChannel.trySend(VpnCommand.StartOrUpdate(forceRebuild = false))
         }
@@ -162,23 +182,23 @@ class CurfewBlackholeVpnService : VpnService() {
         when (cmd) {
             is VpnCommand.StopIfAllowed -> {
                 if (isCurfewBlackoutActive) {
-                    Log.w(TAG, "Rejected ACTION_STOP because curfew blackout is actively enforced!")
+                    Timber.tag(TAG).w("Rejected ACTION_STOP because curfew blackout is actively enforced!")
                     establishTunnel(VpnMode.CURFEW_BLACKHOLE, forceRebuild = false)
                     syncNotificationSafely(appContext)
                     return
                 }
                 if (cmd.startId > 0 && lastStartId > cmd.startId) {
-                    Log.i(TAG, "Ignoring superseded ACTION_STOP(startId=${cmd.startId}, latest=$lastStartId)")
+                    Timber.tag(TAG).i("Ignoring superseded ACTION_STOP(startId=${cmd.startId}, latest=$lastStartId)")
                     return
                 }
-                Log.i(TAG, "Received ACTION_STOP. Tearing down VPN tunnel and stopping service.")
+                Timber.tag(TAG).i("Received ACTION_STOP. Tearing down VPN tunnel and stopping service.")
                 stopVpnAndSelf(appContext, cmd.startId)
             }
 
             is VpnCommand.StartOrUpdate -> {
                 refreshBlockedUrlsCache()
                 val targetMode = evaluateRequiredMode(appContext, fallbackOnFailure = currentMode)
-                Log.i(TAG, "Evaluating targetMode: $targetMode (currentMode=$currentMode)")
+                Timber.tag(TAG).i("Evaluating targetMode: $targetMode (currentMode=$currentMode)")
                 if (targetMode == VpnMode.IDLE) {
                     stopVpnAndSelf(appContext, lastStartId)
                     return
@@ -193,7 +213,7 @@ class CurfewBlackholeVpnService : VpnService() {
         tunnelMutex.withLock {
             val appContext = applicationContext ?: this
             if (isServiceDestroyed || isServiceRevoked) {
-                Log.i(TAG, "Aborting establishTunnel because service is destroyed or revoked")
+                Timber.tag(TAG).i("Aborting establishTunnel because service is destroyed or revoked")
                 completeTunnelWaiters(false)
                 return@withLock
             }
@@ -278,7 +298,7 @@ class CurfewBlackholeVpnService : VpnService() {
                             )
                         }
                     } catch (e: Exception) {
-                        Log.w(TAG, "Could not update Always-On VPN lockdown bypassed packages", e)
+                        Timber.tag(TAG).w(e, "Could not update Always-On VPN lockdown bypassed packages")
                     }
                 }
                 for (pkg in bypassedPackages) {
@@ -286,7 +306,7 @@ class CurfewBlackholeVpnService : VpnService() {
                     try {
                         builder.addDisallowedApplication(pkg)
                     } catch (e: Exception) {
-                        Log.w(TAG, "Failed to bypass package $pkg from VPN", e)
+                        Timber.tag(TAG).w(e, "Failed to bypass package $pkg from VPN")
                     }
                 }
             } else {
@@ -308,18 +328,23 @@ class CurfewBlackholeVpnService : VpnService() {
                 }
             }
 
+            var pendingVpnInterface: ParcelFileDescriptor? = null
+            try {
             val newVpnInterface = try {
                 builder.establish()
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to establish TUN interface for mode $targetMode", e)
+                Timber.tag(TAG).e(e, "Failed to establish TUN interface for mode $targetMode")
                 null
             }
+            pendingVpnInterface = newVpnInterface
 
             if (isServiceDestroyed || isServiceRevoked) {
                 try {
-                    newVpnInterface?.close()
+                    pendingVpnInterface?.close()
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error closing TUN interface after service destroy/revoke", e)
+                    Timber.tag(TAG).w(e, "Error closing TUN interface after service destroy/revoke")
+                } finally {
+                    pendingVpnInterface = null
                 }
                 withContext(NonCancellable) {
                     stopVpnInternal(removeActiveRef = true)
@@ -332,15 +357,17 @@ class CurfewBlackholeVpnService : VpnService() {
                 try {
                     oldVpnInterface?.close()
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error closing previous TUN interface during handover", e)
+                    Timber.tag(TAG).w(e, "Error closing previous TUN interface during handover")
                 }
                 stopActiveIoLoop()
 
                 if (isServiceDestroyed || isServiceRevoked) {
                     try {
-                        newVpnInterface.close()
+                        pendingVpnInterface?.close()
                     } catch (e: Exception) {
-                        Log.w(TAG, "Error closing TUN interface after IoLoop stop on destroy/revoke", e)
+                        Timber.tag(TAG).w(e, "Error closing TUN interface after IoLoop stop on destroy/revoke")
+                    } finally {
+                        pendingVpnInterface = null
                     }
                     withContext(NonCancellable) {
                         stopVpnInternal(removeActiveRef = true)
@@ -350,7 +377,17 @@ class CurfewBlackholeVpnService : VpnService() {
                 }
 
                 vpnInterface = newVpnInterface
+                pendingVpnInterface = null
                 currentMode = targetMode
+                lastBypassedPackages = appliedBypassedPackages
+
+                if (!isServiceDestroyed && !isServiceRevoked) {
+                    refreshBlockedUrlsCache()
+                    if (targetMode == VpnMode.DNS_FILTERING_ONLY) {
+                        startDnsFilteringLoop(newVpnInterface)
+                    }
+                }
+
                 var tunnelActivated = false
                 synchronized(companionStateLock) {
                     if (!isServiceDestroyed && !isServiceRevoked && (activeService?.get() === this || activeService == null)) {
@@ -361,19 +398,12 @@ class CurfewBlackholeVpnService : VpnService() {
                         tunnelActivated = true
                     }
                 }
-                lastBypassedPackages = appliedBypassedPackages
-
-                refreshBlockedUrlsCache()
-
-                if (targetMode == VpnMode.DNS_FILTERING_ONLY) {
-                    startDnsFilteringLoop(newVpnInterface)
-                }
                 if (tunnelActivated) {
                     completeTunnelWaiters(true)
                 } else if (synchronized(companionStateLock) { activeService == null || activeService?.get() === this }) {
                     completeTunnelWaiters(false)
                 }
-                Log.i(TAG, "Seamless Handover completed successfully to mode: $targetMode")
+                Timber.tag(TAG).i("Seamless Handover completed successfully to mode: $targetMode")
                 try {
                     BlackBoxRecorder.record(
                         context = appContext,
@@ -391,8 +421,16 @@ class CurfewBlackholeVpnService : VpnService() {
                     stopServiceForStartId(lastStartId)
                 }
             }
+            } finally {
+                val leakedPfd = pendingVpnInterface
+                if (leakedPfd != null) {
+                    runCatching { leakedPfd.close() }
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
-            Log.e(TAG, "Error during tunnel establishment for mode $targetMode", e)
+            Timber.tag(TAG).e(e, "Error during tunnel establishment for mode $targetMode")
             completeTunnelWaiters(oldVpnInterface != null && isRunning && !isServiceDestroyed && !isServiceRevoked)
             if (isServiceDestroyed || isServiceRevoked || oldVpnInterface == null) {
                 withContext(NonCancellable) {
@@ -427,9 +465,9 @@ class CurfewBlackholeVpnService : VpnService() {
             activePolicy = policy
             compiledBlockedDomainsCache = DnsPacketParser.compileEffectiveBlockedDomains(policy.customBlockedUrls)
             dnsForwarder?.setCustomDnsHost(policy.dnsHost)
-            dnsForwarder?.clearCache()
+            dnsForwarder?.clearResponseCache()
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to refresh policy cache", e)
+            Timber.tag(TAG).w(e, "Failed to refresh policy cache")
         }
     }
 
@@ -437,9 +475,13 @@ class CurfewBlackholeVpnService : VpnService() {
         val job = dnsWorkerJob
         dnsWorkerJob = null
         forwarderJob.cancelChildren()
+        // Immediately close active & pooled DoT sockets so blocking connect/read threads unblock in 0ms
+        runCatching { dnsForwarder?.onNetworkChanged() }
         if (job != null) {
             try {
                 job.cancelAndJoin()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Timber.tag(TAG).w(e, "Error stopping DNS worker loop")
             }
@@ -448,7 +490,19 @@ class CurfewBlackholeVpnService : VpnService() {
 
     private fun startDnsFilteringLoop(pfd: ParcelFileDescriptor) {
         val worker = dnsTunnelWorker ?: return
-        dnsWorkerJob = worker.start(serviceScope, forwarderScope, pfd)
+        val job = worker.start(serviceScope, forwarderScope, pfd)
+        dnsWorkerJob = job
+        job.invokeOnCompletion { cause ->
+            if (cause !is CancellationException &&
+                !isServiceDestroyed &&
+                !isServiceRevoked &&
+                currentMode == VpnMode.DNS_FILTERING_ONLY &&
+                vpnInterface === pfd
+            ) {
+                Timber.tag(TAG).e(cause, "DnsTunnelWorker exited unexpectedly; scheduling tunnel self-heal")
+                commandChannel.trySend(VpnCommand.StartOrUpdate(forceRebuild = true))
+            }
+        }
     }
 
     private fun safeStartForegroundNotification() {
@@ -460,7 +514,7 @@ class CurfewBlackholeVpnService : VpnService() {
                 startForeground(NOTIFICATION_ID, notification)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed promoting CurfewBlackholeVpnService to foreground", e)
+            Timber.tag(TAG).e(e, "Failed promoting CurfewBlackholeVpnService to foreground")
         }
     }
 
@@ -468,18 +522,18 @@ class CurfewBlackholeVpnService : VpnService() {
         try {
             ProtectionNotificationCoordinator.syncProtectionNotification(appContext)
         } catch (e: Exception) {
-            Log.w(TAG, "Error syncing protection notification from VPN service", e)
+            Timber.tag(TAG).w(e, "Error syncing protection notification from VPN service")
         }
     }
 
     private suspend fun stopVpnAndSelf(appContext: Context, expectedStartId: Int = -1) {
         if (expectedStartId > 0 && lastStartId > expectedStartId) {
-            Log.i(TAG, "Skipping superseded stopVpnAndSelf(expected=$expectedStartId, latest=$lastStartId)")
+            Timber.tag(TAG).i("Skipping superseded stopVpnAndSelf(expected=$expectedStartId, latest=$lastStartId)")
             return
         }
         val shouldStop: Boolean = tunnelMutex.withLock {
             if (expectedStartId > 0 && lastStartId > expectedStartId) {
-                Log.i(TAG, "Skipping stopVpnInternal inside lock due to newer startId=$lastStartId")
+                Timber.tag(TAG).i("Skipping stopVpnInternal inside lock due to newer startId=$lastStartId")
                 false
             } else {
                 stopVpnInternal(removeActiveRef = true)
@@ -522,31 +576,31 @@ class CurfewBlackholeVpnService : VpnService() {
 
         dnsWorkerJob?.cancel()
         dnsWorkerJob = null
+        dnsTunnelWorker?.closeActiveStreams()
         forwarderJob.cancelChildren()
+        if (!isServiceDestroyed) {
+            runCatching { dnsForwarder?.onNetworkChanged() }
+        }
         try {
             vpnInterface?.close()
         } catch (e: Exception) {
-            Log.w(TAG, "Error closing VPN interface descriptor", e)
+            Timber.tag(TAG).w(e, "Error closing VPN interface descriptor")
         } finally {
             vpnInterface = null
             completeTunnelStoppedWaiters(true)
         }
 
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-            } else {
-                @Suppress("DEPRECATION")
-                stopForeground(true)
-            }
+            stopForeground(STOP_FOREGROUND_REMOVE)
         } catch (e: Exception) {
-            Log.w(TAG, "Error stopping foreground notification", e)
+            Timber.tag(TAG).w(e, "Error stopping foreground notification")
         }
     }
 
     override fun onRevoke() {
-        Log.w(TAG, "Protection VPN revoked by system or user")
+        Timber.tag(TAG).w("Protection VPN revoked by system or user")
         isServiceRevoked = true
+        physicalNetworkMonitor?.unregister()
         completeTunnelWaiters(false)
         if (tunnelMutex.tryLock()) {
             try {
@@ -559,14 +613,30 @@ class CurfewBlackholeVpnService : VpnService() {
         super.onRevoke()
     }
 
+    private fun monotonicNowMs(): Long = try {
+        SystemClock.elapsedRealtime()
+    } catch (_: Throwable) {
+        System.nanoTime() / 1_000_000L
+    }
+
+    /**
+     * Coalesces burst network transition notifications across both local and watchdog monitors
+     * with leading + trailing-edge semantics and dispatches DNS/DoT invalidation off Binder threads.
+     */
+    internal fun notifyNetworkChanged(reason: String) {
+        networkChangeCoalescer.notify(reason)
+    }
+
     override fun onDestroy() {
         isServiceDestroyed = true
+        physicalNetworkMonitor?.unregister()
+        physicalNetworkMonitor = null
         val ownsActiveState = synchronized(companionStateLock) { activeService == null || activeService?.get() === this }
         if (ownsActiveState) {
             completeTunnelWaiters(false)
         }
         super.onDestroy()
-        Log.i(TAG, "CurfewBlackholeVpnService destroyed")
+        Timber.tag(TAG).i("CurfewBlackholeVpnService destroyed")
         commandChannel.close()
         try {
             if (tunnelMutex.tryLock()) {
@@ -577,6 +647,11 @@ class CurfewBlackholeVpnService : VpnService() {
                 }
             }
         } finally {
+            try {
+                dnsForwarder?.clearCache()
+            } catch (e: Exception) {
+                Timber.tag(TAG).w(e, "Error clearing DNS forwarder cache/sockets on destroy")
+            }
             serviceScope.cancel()
             val shouldCompleteStopped = synchronized(companionStateLock) {
                 val isOwner = activeService?.get() === this
@@ -606,6 +681,13 @@ class CurfewBlackholeVpnService : VpnService() {
 
         @Volatile
         private var activeService: WeakReference<CurfewBlackholeVpnService>? = null
+
+        fun onNetworkChanged(reason: String = "external") {
+            val service = synchronized(companionStateLock) { activeService?.get() }
+            if (service != null && !service.isServiceDestroyed) {
+                service.notifyNetworkChanged(reason)
+            }
+        }
 
         @Volatile
         private var isStartPending: Boolean = false
@@ -685,9 +767,16 @@ class CurfewBlackholeVpnService : VpnService() {
                 if (e is InterruptedException) {
                     Thread.currentThread().interrupt()
                 }
-                Log.w(TAG, "Interrupted/failed awaiting VPN tunnel readiness", e)
+                Timber.tag(TAG).w(e, "Interrupted/failed awaiting VPN tunnel readiness")
                 return synchronized(companionStateLock) { isModeSatisfiedLocked() }
             }
+        }
+
+        fun isTunnelHealthy(expectedMode: VpnMode? = null): Boolean = synchronized(companionStateLock) {
+            val svc = activeService?.get() ?: return false
+            if (!isRunning || svc.isServiceDestroyed || svc.isServiceRevoked) return false
+            if (expectedMode != null && currentMode != expectedMode) return false
+            currentMode != VpnMode.DNS_FILTERING_ONLY || svc.dnsWorkerJob?.isActive == true
         }
 
         fun isServiceOrTunnelActive(): Boolean = synchronized(companionStateLock) {
@@ -711,7 +800,7 @@ class CurfewBlackholeVpnService : VpnService() {
                 (policy.isFullSystemFilteringEnabled && policy.browserFilterMode != DevicePolicyBundle.BROWSER_FILTER_OFF) ||
                     policy.isAdBlockingEnabled
             } catch (e: Exception) {
-                Log.w(TAG, "Failed reading policy for VPN mode evaluation; preserving safe fallback=$fallbackOnFailure", e)
+                Timber.tag(TAG).w(e, "Failed reading policy for VPN mode evaluation; preserving safe fallback=$fallbackOnFailure")
                 return if (fallbackOnFailure != VpnMode.IDLE) fallbackOnFailure else VpnMode.IDLE
             }
             return if (isDnsFilterRequired) {
@@ -746,7 +835,7 @@ class CurfewBlackholeVpnService : VpnService() {
                     stop(appContext)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error syncing policy in CurfewBlackholeVpnService", e)
+                Timber.tag(TAG).e(e, "Error syncing policy in CurfewBlackholeVpnService")
             }
         }
 
@@ -756,10 +845,10 @@ class CurfewBlackholeVpnService : VpnService() {
 
         fun forceReleaseVpnAndAwait(context: Context, timeoutMs: Long = 2000L): Boolean {
             if (!isServiceOrTunnelActive()) {
-                Log.d(TAG, "VPN already inactive; skipping forceReleaseVpnAndAwait")
+                Timber.tag(TAG).d("VPN already inactive; skipping forceReleaseVpnAndAwait")
                 return true
             }
-            Log.i(TAG, "Force releasing VPN interface and awaiting tunnel teardown (timeout=${timeoutMs}ms)")
+            Timber.tag(TAG).i("Force releasing VPN interface and awaiting tunnel teardown (timeout=${timeoutMs}ms)")
             val waiter = synchronized(companionStateLock) {
                 prepareTunnelStoppedWaiter()
             }
@@ -775,7 +864,7 @@ class CurfewBlackholeVpnService : VpnService() {
                 if (e is InterruptedException) {
                     Thread.currentThread().interrupt()
                 }
-                Log.w(TAG, "Interrupted/failed awaiting VPN tunnel release", e)
+                Timber.tag(TAG).w(e, "Interrupted/failed awaiting VPN tunnel release")
                 !isServiceOrTunnelActive()
             }
             return stopped
@@ -801,14 +890,14 @@ class CurfewBlackholeVpnService : VpnService() {
                     isStartPending = false
                 }
                 completeTunnelWaiters(false)
-                Log.e(TAG, "Failed to start CurfewBlackholeVpnService", e)
+                Timber.tag(TAG).e(e, "Failed to start CurfewBlackholeVpnService")
             }
         }
 
         fun stop(context: Context) {
             val appContext = context.applicationContext ?: context
             if (isBlackoutActive(appContext)) {
-                Log.w(TAG, "Rejected CurfewBlackholeVpnService.stop() because curfew blackout is actively enforced")
+                Timber.tag(TAG).w("Rejected CurfewBlackholeVpnService.stop() because curfew blackout is actively enforced")
                 return
             }
             val runningService = synchronized(companionStateLock) {
@@ -826,7 +915,7 @@ class CurfewBlackholeVpnService : VpnService() {
                 try {
                     appContext.stopService(Intent(appContext, CurfewBlackholeVpnService::class.java))
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to stop CurfewBlackholeVpnService", e)
+                    Timber.tag(TAG).e(e, "Failed to stop CurfewBlackholeVpnService")
                 } finally {
                     completeTunnelStoppedWaiters(true)
                 }
@@ -836,11 +925,11 @@ class CurfewBlackholeVpnService : VpnService() {
             val sent = try {
                 runningService.commandChannel.trySend(VpnCommand.StopIfAllowed(startId = targetStartId)).isSuccess
             } catch (e: Exception) {
-                Log.w(TAG, "Error signaling active VPN service stop", e)
+                Timber.tag(TAG).w(e, "Error signaling active VPN service stop")
                 false
             }
             if (!sent) {
-                Log.w(TAG, "Failed enqueuing StopIfAllowed; falling back to stopService")
+                Timber.tag(TAG).w("Failed enqueuing StopIfAllowed; falling back to stopService")
                 synchronized(companionStateLock) {
                     if (activeService?.get() === runningService) {
                         activeService = null
@@ -851,7 +940,7 @@ class CurfewBlackholeVpnService : VpnService() {
                 try {
                     appContext.stopService(Intent(appContext, CurfewBlackholeVpnService::class.java))
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to stop CurfewBlackholeVpnService", e)
+                    Timber.tag(TAG).e(e, "Failed to stop CurfewBlackholeVpnService")
                 } finally {
                     completeTunnelStoppedWaiters(true)
                 }

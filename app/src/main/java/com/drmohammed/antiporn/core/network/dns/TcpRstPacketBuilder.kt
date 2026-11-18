@@ -23,8 +23,8 @@ internal object TcpRstPacketBuilder {
         val ihl = (versionAndIhl and 0x0F) * 4
         if (ihl < IPV4_HEADER_MIN_LEN || length < ihl + TCP_HEADER_MIN_LEN) return null
 
-        // Reject IPv4 non-first fragments (fragment offset != 0)
-        if ((buffer.getShort(6).toInt() and 0x1FFF) != 0) return null
+        // Reject ALL IPv4 fragments: both MF (0x2000) and non-zero fragment offset (0x1FFF)
+        if ((buffer.getShort(6).toInt() and 0x3FFF) != 0) return null
 
         val protocol = buffer.get(9).toInt() and 0xFF
         if (protocol != PROTOCOL_TCP) return null
@@ -68,18 +68,9 @@ internal object TcpRstPacketBuilder {
         if (length > packet.size || length < IPV6_HEADER_LEN + TCP_HEADER_MIN_LEN) return null
 
         val buffer = ByteBuffer.wrap(packet, 0, length)
-        val version = (buffer.get(0).toInt() and 0xFF) ushr 4
-        if (version != 6) return null
-
-        val nextHeader = buffer.get(6).toInt() and 0xFF
-        if (nextHeader != PROTOCOL_TCP) return null
-
-        val payloadLenField = buffer.getShort(4).toInt() and 0xFFFF
-        val actualIpLen = if (IPV6_HEADER_LEN + payloadLenField in (IPV6_HEADER_LEN + TCP_HEADER_MIN_LEN)..length) {
-            IPV6_HEADER_LEN + payloadLenField
-        } else {
-            length
-        }
+        val upper = Ipv6DnsPacketCodec.resolveUpperLayer(buffer, length) ?: return null
+        if (upper.protocol != PROTOCOL_TCP) return null
+        if (upper.headerOffset + TCP_HEADER_MIN_LEN > upper.actualIpEnd) return null
 
         val srcIp = ByteArray(16)
         val dstIp = ByteArray(16)
@@ -87,7 +78,7 @@ internal object TcpRstPacketBuilder {
         buffer.get(srcIp)
         buffer.get(dstIp)
 
-        val tcpInfo = parseIncomingTcp(buffer, IPV6_HEADER_LEN, actualIpLen) ?: return null
+        val tcpInfo = parseIncomingTcp(buffer, upper.headerOffset, upper.actualIpEnd) ?: return null
 
         val respTotalLen = IPV6_HEADER_LEN + TCP_HEADER_MIN_LEN
         val response = ByteArray(respTotalLen)

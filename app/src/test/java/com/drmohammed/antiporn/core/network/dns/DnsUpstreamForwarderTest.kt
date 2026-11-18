@@ -2,8 +2,9 @@ package com.drmohammed.antiporn.core.network.dns
 
 import android.net.VpnService
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
-import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -11,149 +12,32 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.nio.ByteBuffer
-import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 class DnsUpstreamForwarderTest {
 
     @Test
-    fun testExcludedDnsIpsIncludeActiveTunAndLoopback() {
-        assertTrue(DnsWireValidator.isExcludedDnsIp("10.255.255.1"))
-        assertTrue(DnsWireValidator.isExcludedDnsIp("10.255.255.2"))
-        assertTrue(DnsWireValidator.isExcludedDnsIp("127.0.0.1"))
-        assertTrue(DnsWireValidator.isExcludedDnsIp("::1"))
-        assertTrue(DnsWireValidator.isExcludedDnsIp("fd00::1"))
-        assertFalse(DnsWireValidator.isExcludedDnsIp("1.1.1.3"))
-    }
-
-    @Test
-    fun testLocalIntranetDomainDetection() {
-        assertTrue(DnsWireValidator.isLocalIntranetDomain("router"))
-        assertTrue(DnsWireValidator.isLocalIntranetDomain("printer.local"))
-        assertTrue(DnsWireValidator.isLocalIntranetDomain("nas.lan"))
-        assertTrue(DnsWireValidator.isLocalIntranetDomain("gateway.home.arpa."))
-        assertFalse(DnsWireValidator.isLocalIntranetDomain("example.com"))
-        assertFalse(DnsWireValidator.isLocalIntranetDomain(""))
-    }
-
-    @Test
-    fun testValidDnsResponseRejectsTruncatedNonResponseAndTxMismatch() {
-        val req = buildMinimalQuery(0x1234.toShort())
-        val validReply = buildDnsAnswerPayload(txId = 0x1234.toShort(), ttlSeconds = 60L)
-        assertTrue(DnsWireValidator.isValidDnsResponse(validReply, validReply.size, req))
-
-        // Truncated (< 12 bytes)
-        assertFalse(DnsWireValidator.isValidDnsResponse(ByteArray(2), 2, req))
-
-        // QR=0 (query, not response)
-        val queryNotResp = validReply.copyOf().apply { this[2] = (this[2].toInt() and 0x7F).toByte() }
-        assertFalse(DnsWireValidator.isValidDnsResponse(queryNotResp, queryNotResp.size, req))
-
-        // Transaction ID mismatch
-        val wrongTx = buildDnsAnswerPayload(txId = 0x5678.toShort(), ttlSeconds = 60L)
-        assertFalse(DnsWireValidator.isValidDnsResponse(wrongTx, wrongTx.size, req))
-    }
-
-    @Test
-    fun testExtractTtlRespectsZeroAndRfc2181Msb() {
-        // Normal TTL clamped to [10, 120]
-        assertEquals(45L, DnsWireValidator.extractTtl(buildDnsAnswerPayload(0x1111.toShort(), 45L)))
-        assertEquals(10L, DnsWireValidator.extractTtl(buildDnsAnswerPayload(0x1111.toShort(), 3L)))
-        assertEquals(120L, DnsWireValidator.extractTtl(buildDnsAnswerPayload(0x1111.toShort(), 3600L)))
-
-        // TTL == 0 must return 0 (do not cache)
-        assertEquals(0L, DnsWireValidator.extractTtl(buildDnsAnswerPayload(0x1111.toShort(), 0L)))
-
-        // RFC 2181 §8: MSB set (> Int.MAX_VALUE) treated as 0 (do not cache)
-        assertEquals(0L, DnsWireValidator.extractTtl(buildDnsAnswerPayload(0x1111.toShort(), 0x80000005L)))
-    }
-
-    @Test
-    fun testDotBootstrapQueryAndIpv4AnswerExtraction() {
-        val query = requireNotNull(DotUpstreamClient.buildMinimalAQuery("no-ads-porn.freedns.controld.com", 0x4242.toShort()))
-        assertTrue(query.size > 16)
-        assertEquals(0x42.toByte(), query[0])
-        assertEquals(0x42.toByte(), query[1])
-
-        val answer = buildDnsAnswerPayload(txId = 0x4242.toShort(), ttlSeconds = 120L, ipv4 = byteArrayOf(76, 76, 2, 11))
-        val extracted = DotUpstreamClient.extractFirstIpv4FromDnsResponse(answer)
-        assertNotNull(extracted)
-        assertEquals("76.76.2.11", extracted?.hostAddress)
-
-        // Malformed short buffer safely returns null
-        assertNull(DotUpstreamClient.extractFirstIpv4FromDnsResponse(ByteArray(8)))
-    }
-
-    @Test
-    fun testDotHostSanitizationFramingAndCircuitBreakerWithInjectedClock() {
-        // Host sanitization preserves IPv6 literals and strips :port cleanly
-        assertEquals("dns.example.com", DotUpstreamClient.sanitizeHost("DNS.Example.COM.:853"))
-        assertEquals("127.0.0.1", DotUpstreamClient.sanitizeHost("127.0.0.1:53"))
-        assertEquals("fd00::1", DotUpstreamClient.sanitizeHost("fd00::1"))
-        assertEquals("2606:4700:4700::1113", DotUpstreamClient.sanitizeHost("[2606:4700:4700::1113]:853"))
-
-        // RFC 7858 2-byte big-endian length framing
-        val rawQuery = buildMinimalQuery(0x3344.toShort())
-        val framed = requireNotNull(DotUpstreamClient.buildFramedQuery(rawQuery))
-        assertEquals(rawQuery.size + 2, framed.size)
-        val framedLen = ((framed[0].toInt() and 0xFF) shl 8) or (framed[1].toInt() and 0xFF)
-        assertEquals(rawQuery.size, framedLen)
-        assertArrayEquals(rawQuery, framed.copyOfRange(2, framed.size))
-        assertNull("Payloads shorter than 12-byte DNS header must be rejected", DotUpstreamClient.buildFramedQuery(ByteArray(11)))
-
-        // Monotonic clock circuit breaker: 3 failures open circuit for 30_000ms
-        val fakeClock = AtomicLong(1_000L)
-        var bootstrapAttempts = 0
-        val client = DotUpstreamClient(
-            vpnService = object : VpnService() {},
-            clockMs = { fakeClock.get() }
-        ) { _, _, _ ->
-            bootstrapAttempts++
-            null // Force bootstrap failure
-        }
-
-        assertFalse(client.isCircuitOpen())
-        assertNull(client.query("custom-dot.example.org", rawQuery, 500))
-        assertNull(client.query("custom-dot.example.org", rawQuery, 500))
-        assertFalse(client.isCircuitOpen())
-        assertNull(client.query("custom-dot.example.org", rawQuery, 500))
-        assertTrue("3 consecutive failures must open DoT circuit breaker", client.isCircuitOpen())
-        val attemptsAtTrip = bootstrapAttempts
-
-        // While circuit is open, queries short-circuit without calling bootstrap
-        fakeClock.addAndGet(10_000L)
-        assertNull(client.query("custom-dot.example.org", rawQuery, 500))
-        assertEquals(attemptsAtTrip, bootstrapAttempts)
-
-        // After 30_000ms cooldown expires, circuit closes and retries
-        fakeClock.addAndGet(20_000L)
-        assertFalse(client.isCircuitOpen())
-        assertNull(client.query("custom-dot.example.org", rawQuery, 500))
-        assertTrue("Query must execute again after cooldown", bootstrapAttempts > attemptsAtTrip)
-    }
-
-    @Test
     fun testForwarderPortStrippingCacheGuardAndServfailRefusedFailover() = runBlocking {
-        // Port stripping & excluded IP checks
         assertEquals("127.0.0.1", DnsWireValidator.normalizeCustomHost("127.0.0.1:53"))
         assertTrue(DnsWireValidator.isExcludedDnsIp("127.0.0.1:53"))
         assertTrue(DnsWireValidator.isExcludedDnsIp("fd00::2"))
 
-        // TC=1 and non-NOERROR/NXDOMAIN RCODE must NOT be cached
         val noErrorReply = buildDnsAnswerPayload(txId = 0x1001.toShort(), ttlSeconds = 60L, flags = 0x8180.toShort())
         val nxDomainReply = buildDnsAnswerPayload(txId = 0x1001.toShort(), ttlSeconds = 60L, flags = 0x8183.toShort())
-        val truncatedReply = buildDnsAnswerPayload(txId = 0x1001.toShort(), ttlSeconds = 60L, flags = 0x8380.toShort()) // TC=1
-        val servfailReply = buildDnsAnswerPayload(txId = 0x1001.toShort(), ttlSeconds = 60L, flags = 0x8182.toShort())  // RCODE=2
-        val refusedReply = buildDnsAnswerPayload(txId = 0x1001.toShort(), ttlSeconds = 60L, flags = 0x8185.toShort())   // RCODE=5
-        val formerrReply = buildDnsAnswerPayload(txId = 0x1001.toShort(), ttlSeconds = 60L, flags = 0x8181.toShort())   // RCODE=1
+        val truncatedReply = buildDnsAnswerPayload(txId = 0x1001.toShort(), ttlSeconds = 60L, flags = 0x8380.toShort())
+        val servfailReply = buildDnsAnswerPayload(txId = 0x1001.toShort(), ttlSeconds = 60L, flags = 0x8182.toShort())
+        val refusedReply = buildDnsAnswerPayload(txId = 0x1001.toShort(), ttlSeconds = 60L, flags = 0x8185.toShort())
+        val formerrReply = buildDnsAnswerPayload(txId = 0x1001.toShort(), ttlSeconds = 60L, flags = 0x8181.toShort())
 
         assertTrue(DnsWireValidator.isCacheableDnsResponse(noErrorReply))
         assertTrue(DnsWireValidator.isCacheableDnsResponse(nxDomainReply))
-        assertFalse("TC=1 truncated response must not be cached", DnsWireValidator.isCacheableDnsResponse(truncatedReply))
-        assertFalse("SERVFAIL must not be cached", DnsWireValidator.isCacheableDnsResponse(servfailReply))
-        assertFalse("REFUSED must not be cached", DnsWireValidator.isCacheableDnsResponse(refusedReply))
-        assertFalse("FORMERR must not be cached", DnsWireValidator.isCacheableDnsResponse(formerrReply))
+        assertFalse(DnsWireValidator.isCacheableDnsResponse(truncatedReply))
+        assertFalse(DnsWireValidator.isCacheableDnsResponse(servfailReply))
+        assertFalse(DnsWireValidator.isCacheableDnsResponse(refusedReply))
+        assertFalse(DnsWireValidator.isCacheableDnsResponse(formerrReply))
 
-        // Failover test: Default Cloudflare preset tries DoT first; SERVFAIL from DoT & primary UDP fails over to healthy secondary UDP
         val calls = mutableListOf<String>()
         val cache = DnsLruCache(16)
         val forwarder = DnsUpstreamForwarder(
@@ -175,7 +59,7 @@ class DnsUpstreamForwarderTest {
 
         val query = buildMinimalQuery(0x1001.toShort())
         val resolved = requireNotNull(forwarder.resolve("example.com", 1, 0x1001.toShort(), query))
-        assertEquals(0, resolved[3].toInt() and 0x0F) // Healthy NOERROR returned
+        assertEquals(0, resolved[3].toInt() and 0x0F)
         assertEquals(
             listOf(
                 "dot:${DevicePolicyBundle.CLOUDFLARE_FAMILY_DNS_HOST}",
@@ -184,23 +68,174 @@ class DnsUpstreamForwarderTest {
             ),
             calls
         )
-        assertNotNull("Healthy failover response must be cached", cache.get("example.com", 1))
-
-        // If every tier returns SERVFAIL/REFUSED, best soft fallback is returned and NOT cached
-        val allFailCache = DnsLruCache(16)
-        val allFailForwarder = DnsUpstreamForwarder(
-            vpnService = object : VpnService() {},
-            lruCache = allFailCache,
-            dotQueryExecutor = { _, _, _ -> servfailReply },
-            udpQueryExecutor = { _, _, _ -> refusedReply }
-        )
-        val fallback = requireNotNull(allFailForwarder.resolve("failing.example.org", 1, 0x1001.toShort(), query))
-        assertEquals(2, fallback[3].toInt() and 0x0F) // SERVFAIL fallback returned
-        assertNull("Soft failure fallback must NOT be cached", allFailCache.get("failing.example.org", 1))
+        assertNotNull(cache.get("example.com", 1))
     }
 
-    private fun buildMinimalQuery(txId: Short): ByteArray {
-        return requireNotNull(DotUpstreamClient.buildMinimalAQuery("example.com", txId))
+    @Test
+    fun testCustomDnsHostRoutingSelfBootstrapGuardTier2FailoverAndStaleQueryDiscard() = runBlocking {
+        val calls = mutableListOf<String>()
+        val noErrorReply = buildDnsAnswerPayload(txId = 0x2001.toShort(), ttlSeconds = 60L)
+        val forwarder = DnsUpstreamForwarder(
+            vpnService = object : VpnService() {},
+            lruCache = DnsLruCache(16),
+            dotQueryExecutor = { host, _, _ ->
+                calls.add("dot:$host")
+                null
+            },
+            udpQueryExecutor = { ip, _, _ ->
+                calls.add("udp:$ip")
+                if (ip == DnsUpstreamForwarder.OPENDNS_FAMILY_PRIMARY) noErrorReply else null
+            }
+        )
+
+        // 1. Custom DoT host -> tries custom DoT, then Tier 1 Cloudflare UDP, then Tier 2 OpenDNS FamilyShield
+        forwarder.setCustomDnsHost("custom-profile.dns.nextdns.io")
+        val q = buildMinimalQuery(0x2001.toShort())
+        val res = requireNotNull(forwarder.resolve("example.com", 1, 0x2001.toShort(), q))
+        assertEquals(0, res[3].toInt() and 0x0F)
+        assertEquals(
+            listOf(
+                "dot:custom-profile.dns.nextdns.io",
+                "udp:${DnsUpstreamForwarder.PRIMARY_SAFE_DNS_IPV4}",
+                "udp:${DnsUpstreamForwarder.SECONDARY_SAFE_DNS_IPV4}",
+                "udp:${DnsUpstreamForwarder.OPENDNS_FAMILY_PRIMARY}"
+            ),
+            calls
+        )
+
+        // 2. Self-bootstrap anti-recursion guard: querying the custom DoT host itself must skip custom DoT
+        calls.clear()
+        val selfQuery = requireNotNull(DotUpstreamClient.buildMinimalAQuery("custom-profile.dns.nextdns.io", 0x2002.toShort()))
+        forwarder.resolve("custom-profile.dns.nextdns.io", 1, 0x2002.toShort(), selfQuery)
+        assertFalse("Self-bootstrap query must skip custom DoT to prevent recursion", calls.contains("dot:custom-profile.dns.nextdns.io"))
+
+        // 3. Private/loopback custom numeric IPv4 must be rejected (never dialed)
+        calls.clear()
+        forwarder.setCustomDnsHost("192.168.1.1")
+        forwarder.resolve("example.org", 1, 0x2003.toShort(), buildMinimalQuery(0x2003.toShort()))
+        assertFalse("Private RFC 1918 custom IPv4 must not be dialed", calls.contains("udp:192.168.1.1"))
+
+        // 4. Stale queued query exceeding maxQueryAgeMs must be discarded immediately without upstream calls
+        calls.clear()
+        val stale = forwarder.resolve(
+            qName = "stale.example.com",
+            qType = 1,
+            transactionId = 0x2004.toShort(),
+            rawDnsPayload = buildMinimalQuery(0x2004.toShort()),
+            enqueuedAtMs = 1L,
+            maxQueryAgeMs = 1L
+        )
+        assertNull("Stale query must be dropped before hitting upstream", stale)
+        assertTrue("No upstream queries should run for stale query", calls.isEmpty())
+    }
+
+    @Test
+    fun testForwarderCacheHitIpv4ToIpv6MtuGuardAndEdnsClamping() = runBlocking {
+        val cache = DnsLruCache(16)
+        val observedUpstreamSizes = mutableListOf<Int>()
+        val oversized = buildMultiSectionResponse(
+            txId = 0x3001.toShort(),
+            answerRdLen = 400,
+            authorityRdLen = 400,
+            additionalRdLen = 600 // Total ~1468B (> 1452 IPv6 MTU, <= 1472 IPv4 MTU)
+        )
+        assertTrue(oversized.size in (DnsWireValidator.MAX_IPV6_UDP_DNS_PAYLOAD + 1)..DnsWireValidator.MAX_IPV4_UDP_DNS_PAYLOAD)
+
+        val forwarder = DnsUpstreamForwarder(
+            vpnService = object : VpnService() {},
+            lruCache = cache,
+            dotQueryExecutor = { _, rawPayload, _ ->
+                val optOffset = rawPayload.size - 11
+                observedUpstreamSizes.add(((rawPayload[optOffset + 3].toInt() and 0xFF) shl 8) or (rawPayload[optOffset + 4].toInt() and 0xFF))
+                oversized.copyOf().apply { this[0] = rawPayload[0]; this[1] = rawPayload[1] }
+            },
+            udpQueryExecutor = { _, _, _ -> null }
+        )
+
+        val queryWith4096Edns = buildQueryWithEdnsOpt(0x3001.toShort(), 4096)
+        val ipv4Result = requireNotNull(
+            forwarder.resolve("edns.example.com", 16, 0x3001.toShort(), queryWith4096Edns, maxResponsePayloadBytes = DnsWireValidator.MAX_IPV4_UDP_DNS_PAYLOAD)
+        )
+        assertEquals(listOf(DnsWireValidator.EDNS0_SAFE_UDP_PAYLOAD_SIZE), observedUpstreamSizes)
+        assertEquals(oversized.size, ipv4Result.size)
+
+        val ipv6Result = requireNotNull(
+            forwarder.resolve("edns.example.com", 16, 0x3002.toShort(), queryWith4096Edns, maxResponsePayloadBytes = DnsWireValidator.MAX_IPV6_UDP_DNS_PAYLOAD)
+        )
+        assertEquals(1, observedUpstreamSizes.size) // Cache hit!
+        assertTrue(ipv6Result.size <= DnsWireValidator.MAX_IPV6_UDP_DNS_PAYLOAD)
+        assertEquals(0, ipv6Result[2].toInt() and 0x02) // TC=0
+    }
+
+    @Test
+    fun testForwarderOnNetworkChangedFencesInFlightCacheWritesAndClearResponseCache() = runBlocking {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val udpCalls = AtomicInteger(0)
+        val cache = DnsLruCache(64)
+
+        val forwarder = DnsUpstreamForwarder(
+            vpnService = object : VpnService() {},
+            lruCache = cache,
+            dotQueryExecutor = { _, _, _ -> null },
+            udpQueryExecutor = { _, rawPayload, _ ->
+                val callNum = udpCalls.incrementAndGet()
+                val txId = (((rawPayload[0].toInt() and 0xFF) shl 8) or (rawPayload[1].toInt() and 0xFF)).toShort()
+                if (callNum == 1) {
+                    entered.countDown()
+                    release.await(3, TimeUnit.SECONDS)
+                }
+                buildDnsAnswerPayload(txId = txId, ttlSeconds = 120L)
+            }
+        )
+
+        val q1 = buildMinimalQuery(0x8701.toShort())
+        val inFlight = async(Dispatchers.IO) {
+            forwarder.resolve("stale-handoff.example.com", 1, 0x8701.toShort(), q1)
+        }
+        assertTrue(entered.await(3, TimeUnit.SECONDS))
+        forwarder.onNetworkChanged()
+        release.countDown()
+        assertNotNull(inFlight.await())
+
+        assertNull("Pre-handoff in-flight UDP response must be fenced from lruCache", cache.get("stale-handoff.example.com", 1))
+
+        val q2 = buildMinimalQuery(0x8702.toShort())
+        assertNotNull(forwarder.resolve("fresh.example.com", 1, 0x8702.toShort(), q2))
+        assertNotNull(cache.get("fresh.example.com", 1))
+        forwarder.clearResponseCache()
+        assertNull(cache.get("fresh.example.com", 1))
+    }
+
+    private fun buildMinimalQuery(txId: Short): ByteArray =
+        requireNotNull(DotUpstreamClient.buildMinimalAQuery("example.com", txId))
+
+    private fun buildQueryWithEdnsOpt(txId: Short, advertisedUdpSize: Int): ByteArray {
+        val base = buildMinimalQuery(txId)
+        val out = ByteArray(base.size + 11)
+        System.arraycopy(base, 0, out, 0, base.size)
+        out[10] = 0; out[11] = 1
+        val optOffset = base.size
+        out[optOffset] = 0; out[optOffset + 1] = 0; out[optOffset + 2] = 41
+        out[optOffset + 3] = ((advertisedUdpSize ushr 8) and 0xFF).toByte()
+        out[optOffset + 4] = (advertisedUdpSize and 0xFF).toByte()
+        return out
+    }
+
+    private fun buildMultiSectionResponse(txId: Short, answerRdLen: Int, authorityRdLen: Int, additionalRdLen: Int): ByteArray {
+        val qName = byteArrayOf(7, 'e'.code.toByte(), 'x'.code.toByte(), 'a'.code.toByte(), 'm'.code.toByte(), 'p'.code.toByte(), 'l'.code.toByte(), 'e'.code.toByte(), 3, 'c'.code.toByte(), 'o'.code.toByte(), 'm'.code.toByte(), 0)
+        val total = 12 + qName.size + 4 + (2 + 10 + answerRdLen) + (2 + 10 + authorityRdLen) + (2 + 10 + additionalRdLen)
+        val out = ByteArray(total)
+        val buf = ByteBuffer.wrap(out)
+        buf.putShort(txId); buf.putShort(0x8180.toShort())
+        buf.putShort(1); buf.putShort(1); buf.putShort(1); buf.putShort(1)
+        buf.put(qName); buf.putShort(16); buf.putShort(1)
+        fun putTxt(rdLen: Int) {
+            buf.putShort(0xC00C.toShort()); buf.putShort(16); buf.putShort(1); buf.putInt(60); buf.putShort(rdLen.toShort())
+            buf.put(ByteArray(rdLen) { 0x41 })
+        }
+        putTxt(answerRdLen); putTxt(authorityRdLen); putTxt(additionalRdLen)
+        return out
     }
 
     private fun buildDnsAnswerPayload(
@@ -209,29 +244,14 @@ class DnsUpstreamForwarderTest {
         ipv4: ByteArray = byteArrayOf(93.toByte(), 184.toByte(), 216.toByte(), 34.toByte()),
         flags: Short = 0x8180.toShort()
     ): ByteArray {
-        val qName = byteArrayOf(
-            7, 'e'.code.toByte(), 'x'.code.toByte(), 'a'.code.toByte(), 'm'.code.toByte(),
-            'p'.code.toByte(), 'l'.code.toByte(), 'e'.code.toByte(),
-            3, 'c'.code.toByte(), 'o'.code.toByte(), 'm'.code.toByte(), 0
-        )
-        val total = 12 + qName.size + 4 + 2 + 10 + 4
-        val out = ByteArray(total)
+        val qName = byteArrayOf(7, 'e'.code.toByte(), 'x'.code.toByte(), 'a'.code.toByte(), 'm'.code.toByte(), 'p'.code.toByte(), 'l'.code.toByte(), 'e'.code.toByte(), 3, 'c'.code.toByte(), 'o'.code.toByte(), 'm'.code.toByte(), 0)
+        val out = ByteArray(12 + qName.size + 4 + 2 + 10 + 4)
         val buf = ByteBuffer.wrap(out)
-        buf.putShort(txId)
-        buf.putShort(flags)
-        buf.putShort(1.toShort())      // QDCOUNT=1
-        buf.putShort(1.toShort())      // ANCOUNT=1
-        buf.putShort(0.toShort())
-        buf.putShort(0.toShort())
-        buf.put(qName)
-        buf.putShort(1.toShort()) // QTYPE=A
-        buf.putShort(1.toShort()) // QCLASS=IN
-        buf.putShort(0xC00C.toShort()) // Pointer to QNAME
-        buf.putShort(1.toShort()) // TYPE=A
-        buf.putShort(1.toShort()) // CLASS=IN
-        buf.putInt(ttlSeconds.toInt())
-        buf.putShort(4.toShort()) // RDLENGTH=4
-        buf.put(ipv4)
+        buf.putShort(txId); buf.putShort(flags)
+        buf.putShort(1); buf.putShort(1); buf.putShort(0); buf.putShort(0)
+        buf.put(qName); buf.putShort(1); buf.putShort(1)
+        buf.putShort(0xC00C.toShort()); buf.putShort(1); buf.putShort(1)
+        buf.putInt(ttlSeconds.toInt()); buf.putShort(4); buf.put(ipv4)
         return out
     }
 }

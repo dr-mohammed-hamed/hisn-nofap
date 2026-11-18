@@ -519,8 +519,7 @@ internal object CurfewVpnDnsBridge {
             } else {
                 globalMode != "hostname"
             }
-            val isVpnServiceUp = CurfewBlackholeVpnService.isRunning &&
-                CurfewBlackholeVpnService.currentMode == requiredVpnMode
+            val isVpnServiceUp = CurfewBlackholeVpnService.isTunnelHealthy(requiredVpnMode)
             return if (isHealthy && isDnsLocked && isVpnServiceUp) {
                 ShieldStatus.Active(context.getString(R.string.shield_dns_local_filter_active))
             } else {
@@ -720,15 +719,14 @@ internal object CurfewVpnDnsBridge {
         expectedMode: CurfewBlackholeVpnService.VpnMode = CurfewBlackholeVpnService.evaluateRequiredMode(context)
     ): Boolean {
         if (!isVpnConsentGranted(context)) return false
-        val ready = if (CurfewBlackholeVpnService.isRunning && CurfewBlackholeVpnService.currentMode == expectedMode) {
+        val ready = if (CurfewBlackholeVpnService.isTunnelHealthy(expectedMode)) {
             true
         } else {
             CurfewBlackholeVpnService.awaitTunnelReadyBlocking(expectedMode = expectedMode)
         }
         return ready &&
             isVpnConsentGranted(context) &&
-            CurfewBlackholeVpnService.isRunning &&
-            CurfewBlackholeVpnService.currentMode == expectedMode
+            CurfewBlackholeVpnService.isTunnelHealthy(expectedMode)
     }
 
     private fun readDpmPrivateDnsMode(context: Context): Int {

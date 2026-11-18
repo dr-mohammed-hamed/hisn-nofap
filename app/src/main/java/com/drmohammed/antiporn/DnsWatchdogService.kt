@@ -17,12 +17,12 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.Process
 import android.provider.Settings
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.drmohammed.antiporn.core.engine.ProtectionEngine
 import com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
+import com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService
 import com.drmohammed.antiporn.curfew.CurfewConfig
 import com.drmohammed.antiporn.curfew.CurfewEnforcer
 import com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge
@@ -35,8 +35,10 @@ import com.drmohammed.antiporn.notification.model.NotificationActionType
 import com.drmohammed.antiporn.notification.model.NotificationCategory
 import com.drmohammed.antiporn.notification.registry.NotificationRegistry
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
+import timber.log.Timber
 import java.util.TimeZone
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -69,7 +71,7 @@ class DnsWatchdogService : Service() {
 
         fun startService(context: Context) {
             if (isRunning) {
-                Log.d(TAG, "DnsWatchdogService is already running, skipping startService")
+                Timber.tag(TAG).d("DnsWatchdogService is already running, skipping startService")
                 return
             }
             try {
@@ -80,7 +82,7 @@ class DnsWatchdogService : Service() {
                     context.startService(intent)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to start DnsWatchdogService", e)
+                Timber.tag(TAG).e(e, "Failed to start DnsWatchdogService")
             }
         }
     }
@@ -89,54 +91,74 @@ class DnsWatchdogService : Service() {
     private val protectionCheckChannel = Channel<Unit>(Channel.CONFLATED)
     private val isSyncingApprovals = AtomicBoolean(false)
     private val needsApprovalResync = AtomicBoolean(false)
+    @Volatile
+    private var isDestroyed = false
 
     private val debounceHandler = Handler(Looper.getMainLooper())
     private val checkRunnable = Runnable {
-        checkAndEnforceProtection()
+        if (!isDestroyed) checkAndEnforceProtection()
+    }
+
+    private fun scheduleDebouncedCheck(delayMs: Long) {
+        if (isDestroyed) return
+        debounceHandler.removeCallbacks(checkRunnable)
+        if (!isDestroyed) {
+            debounceHandler.postDelayed(checkRunnable, delayMs)
+        }
     }
 
     private val screenDebounceRunnable = Runnable {
-        Log.i(TAG, "Layer 2 - Screen event debounced check: reconciling Zero-Trust and verifying shields")
+        if (isDestroyed) return@Runnable
+        Timber.tag(TAG).i("Layer 2 - Screen event debounced check: reconciling Zero-Trust and verifying shields")
         com.drmohammed.antiporn.data.repository.ApprovalRepository.getInstance(applicationContext).syncZeroTrustBaselineAndReconcileAsync()
         checkAndEnforceProtection()
     }
 
-    private var lastCloudHeartbeatElapsed = 0L
-    private var lastOtaCheckElapsed = 0L
+    private val lastCloudHeartbeatElapsed = AtomicLong(0L)
+    private val lastOtaCheckElapsed = AtomicLong(0L)
     private val heartbeatHandler = Handler(Looper.getMainLooper())
     private val heartbeatRunnable = object : Runnable {
         override fun run() {
-            Log.d(TAG, "Layer 3 - Periodic heartbeat (15m): verifying shields")
+            if (isDestroyed) return
+            Timber.tag(TAG).d("Layer 3 - Periodic heartbeat (15m): verifying shields")
             checkAndEnforceProtection()
             TrustedTimeProvider.syncNowAsync(applicationContext)
 
             val nowRealtime = android.os.SystemClock.elapsedRealtime()
-            if (nowRealtime - lastCloudHeartbeatElapsed >= CLOUD_HEARTBEAT_INTERVAL_MS || lastCloudHeartbeatElapsed == 0L) {
+            val lastCloud = lastCloudHeartbeatElapsed.get()
+            if (nowRealtime - lastCloud >= CLOUD_HEARTBEAT_INTERVAL_MS || lastCloud == 0L) {
                 serviceScope.launch {
                     try {
                         val res = com.drmohammed.antiporn.data.repository.AccountabilityRepository.getInstance(applicationContext).updateHeartbeat()
                         if (res.isSuccess) {
-                            lastCloudHeartbeatElapsed = nowRealtime
+                            lastCloudHeartbeatElapsed.set(nowRealtime)
                         }
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
-                        Log.w(TAG, "Watchdog cloud heartbeat update error: ${e.message}")
+                        Timber.tag(TAG).w(e, "Watchdog cloud heartbeat update error")
                     }
                 }
             }
 
-            if (nowRealtime - lastOtaCheckElapsed >= OTA_UPDATE_CHECK_INTERVAL_MS || lastOtaCheckElapsed == 0L) {
+            val lastOta = lastOtaCheckElapsed.get()
+            if (nowRealtime - lastOta >= OTA_UPDATE_CHECK_INTERVAL_MS || lastOta == 0L) {
                 serviceScope.launch {
                     try {
                         com.drmohammed.antiporn.ota.repository.OtaRepository.getInstance(applicationContext)
                             .checkForUpdatesAndAutoInstall(applicationContext)
-                        lastOtaCheckElapsed = android.os.SystemClock.elapsedRealtime()
+                        lastOtaCheckElapsed.set(android.os.SystemClock.elapsedRealtime())
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
-                        Log.w(TAG, "Watchdog periodic OTA update error: ${e.message}")
+                        Timber.tag(TAG).w(e, "Watchdog periodic OTA update error")
                     }
                 }
             }
 
-            heartbeatHandler.postDelayed(this, HEARTBEAT_INTERVAL_MS)
+            if (!isDestroyed) {
+                heartbeatHandler.postDelayed(this, HEARTBEAT_INTERVAL_MS)
+            }
         }
     }
 
@@ -150,7 +172,7 @@ class DnsWatchdogService : Service() {
             if (intent == null) return
             val action = intent.action ?: return
             val packageName = intent.data?.schemeSpecificPart?.takeIf { it.isNotBlank() } ?: return
-            Log.w(TAG, "[EVENT] [DYNAMIC_WATCHDOG_RECEIVER] onReceive: action=$action | package=$packageName")
+            Timber.tag(TAG).w("[EVENT] [DYNAMIC_WATCHDOG_RECEIVER] onReceive: action=$action | package=$packageName")
             when (action) {
                 Intent.ACTION_PACKAGE_ADDED -> {
                     val isReplacing = intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)
@@ -164,7 +186,7 @@ class DnsWatchdogService : Service() {
                 Intent.ACTION_PACKAGE_REMOVED -> {
                     val isReplacing = intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)
                     if (isReplacing) {
-                        Log.i(TAG, "[DYNAMIC_WATCHDOG_RECEIVER] Package $packageName is being replaced/updated (EXTRA_REPLACING=true). Ignoring temporary removal.")
+                        Timber.tag(TAG).i("[DYNAMIC_WATCHDOG_RECEIVER] Package $packageName is being replaced/updated (EXTRA_REPLACING=true). Ignoring temporary removal.")
                         return
                     }
                     PackageChangeHandler.handlePackageRemoved(
@@ -184,9 +206,12 @@ class DnsWatchdogService : Service() {
             if (intent == null) return
             val action = intent.action
             if (action == Intent.ACTION_USER_PRESENT || action == Intent.ACTION_SCREEN_ON) {
-                Log.d(TAG, "Layer 2 - Screen event observed ($action). Debouncing scan...")
+                if (isDestroyed) return
+                Timber.tag(TAG).d("Layer 2 - Screen event observed ($action). Debouncing scan...")
                 debounceHandler.removeCallbacks(screenDebounceRunnable)
-                debounceHandler.postDelayed(screenDebounceRunnable, SCREEN_DEBOUNCE_DELAY_MS)
+                if (!isDestroyed) {
+                    debounceHandler.postDelayed(screenDebounceRunnable, SCREEN_DEBOUNCE_DELAY_MS)
+                }
                 com.drmohammed.antiporn.waqfa.engine.WaqfaForegroundWatcher.getInstance(applicationContext).onScreenStateChanged(true)
             } else if (action == Intent.ACTION_SCREEN_OFF) {
                 com.drmohammed.antiporn.waqfa.engine.WaqfaForegroundWatcher.getInstance(applicationContext).onScreenStateChanged(false)
@@ -197,14 +222,14 @@ class DnsWatchdogService : Service() {
     override fun onCreate() {
         super.onCreate()
         isRunning = true
-        Log.i(TAG, "DnsWatchdogService created")
+        Timber.tag(TAG).i("DnsWatchdogService created")
         startForegroundNotification()
         serviceScope.launch {
             for (trigger in protectionCheckChannel) {
                 try {
                     checkAndEnforceProtectionInternal()
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error during serialized protection enforcement check", e)
+                    Timber.tag(TAG).e(e, "Error during serialized protection enforcement check")
                 }
             }
         }
@@ -221,7 +246,7 @@ class DnsWatchdogService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         isRunning = true
-        Log.i(TAG, "DnsWatchdogService started")
+        Timber.tag(TAG).i("DnsWatchdogService started")
         startForegroundNotification()
         com.drmohammed.antiporn.curfew.ZeroTrustForegroundWatcher.syncWatcherStateAsync(applicationContext)
         return START_STICKY
@@ -230,51 +255,56 @@ class DnsWatchdogService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        super.onDestroy()
+        isDestroyed = true
         isRunning = false
-        Log.w(TAG, "DnsWatchdogService destroyed")
+        super.onDestroy()
+        Timber.tag(TAG).w("DnsWatchdogService destroyed")
         networkWatchdog.unregister()
         stopHeartbeat()
-        debounceHandler.removeCallbacks(checkRunnable)
-        debounceHandler.removeCallbacks(screenDebounceRunnable)
         unregisterDnsObserver()
         unregisterPackageReceiver()
         unregisterScreenReceiver()
         com.drmohammed.antiporn.waqfa.engine.WaqfaForegroundWatcher.getInstance(applicationContext).stop()
         protectionCheckChannel.close()
         serviceScope.cancel()
-        // Service cleanup complete
+        debounceHandler.removeCallbacksAndMessages(null)
+        heartbeatHandler.removeCallbacksAndMessages(null)
     }
 
     private fun startForegroundNotification() {
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        try {
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-        val channelTitle = getString(R.string.watchdog_notification_title)
-        val channelDesc = getString(R.string.watchdog_notification_desc)
+            val channelTitle = getString(R.string.watchdog_notification_title)
+            val channelDesc = getString(R.string.watchdog_notification_desc)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                channelTitle,
-                NotificationManager.IMPORTANCE_MIN
-            ).apply {
-                description = channelDesc
-                setShowBadge(false)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = NotificationChannel(
+                    CHANNEL_ID,
+                    channelTitle,
+                    NotificationManager.IMPORTANCE_MIN
+                ).apply {
+                    description = channelDesc
+                    setShowBadge(false)
+                }
+                notificationManager.createNotificationChannel(channel)
             }
-            notificationManager.createNotificationChannel(channel)
-        }
 
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle(channelTitle)
-            .setSmallIcon(R.drawable.ic_shield_dns)
-            .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_MIN)
-            .build()
+            val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle(channelTitle)
+                .setSmallIcon(R.drawable.ic_shield_dns)
+                .setOngoing(true)
+                .setPriority(NotificationCompat.PRIORITY_MIN)
+                .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "Failed promoting DnsWatchdogService to foreground")
+            stopSelf()
         }
     }
 
@@ -288,6 +318,7 @@ class DnsWatchdogService : Service() {
 
         val observer = object : ContentObserver(Handler(observerThread.looper)) {
             override fun onChange(selfChange: Boolean, uri: Uri?) {
+                if (isDestroyed) return
                 handleImmediateDnsChange(uri)
             }
         }
@@ -297,7 +328,7 @@ class DnsWatchdogService : Service() {
             val specifierUri = Settings.Global.getUriFor("private_dns_specifier")
 
             if (modeUri == null && specifierUri == null) {
-                Log.w(TAG, "Settings.Global URIs for Private DNS unavailable; skipping observer registration")
+                Timber.tag(TAG).w("Settings.Global URIs for Private DNS unavailable; skipping observer registration")
                 observerThread.quitSafely()
                 return
             }
@@ -310,7 +341,7 @@ class DnsWatchdogService : Service() {
             }
             dnsObserverThread = observerThread
             dnsObserver = observer
-            Log.i(TAG, "ContentObserver registered for DNS settings on dedicated HandlerThread")
+            Timber.tag(TAG).i("ContentObserver registered for DNS settings on dedicated HandlerThread")
         } catch (e: Exception) {
             try {
                 contentResolver.unregisterContentObserver(observer)
@@ -320,7 +351,7 @@ class DnsWatchdogService : Service() {
             observerThread.quitSafely()
             dnsObserver = null
             dnsObserverThread = null
-            Log.e(TAG, "Failed to register ContentObserver for DNS settings", e)
+            Timber.tag(TAG).e(e, "Failed to register ContentObserver for DNS settings")
         }
     }
 
@@ -388,9 +419,9 @@ class DnsWatchdogService : Service() {
         dnsObserver?.let {
             try {
                 contentResolver.unregisterContentObserver(it)
-                Log.i(TAG, "ContentObserver unregistered")
+                Timber.tag(TAG).i("ContentObserver unregistered")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to unregister ContentObserver", e)
+                Timber.tag(TAG).e(e, "Failed to unregister ContentObserver")
             }
             dnsObserver = null
         }
@@ -405,10 +436,14 @@ class DnsWatchdogService : Service() {
     }
 
     private fun registerNetworkWatchdog() {
-        networkWatchdog.register(this) {
-            Log.i(TAG, "Network became available! Debouncing protection check...")
-            debounceHandler.removeCallbacks(checkRunnable)
-            debounceHandler.postDelayed(checkRunnable, 1000L)
+        // CurfewBlackholeVpnService owns PhysicalNetworkMonitor as single source of truth for VPN DNS/DoT flushes
+        // so dual monitors do not trigger a +300ms trailing double-flush on fresh post-handoff sockets.
+        networkWatchdog.register(
+            context = this,
+            onNetworkChanged = null
+        ) {
+            Timber.tag(TAG).i("Network became available! Debouncing protection check...")
+            scheduleDebouncedCheck(1000L)
             TrustedTimeProvider.syncNowAsync(applicationContext)
 
             needsApprovalResync.set(true)
@@ -422,7 +457,7 @@ class DnsWatchdogService : Service() {
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
-                            Log.w(TAG, "Failed syncing pending approvals on network recovery: ${e.message}")
+                            Timber.tag(TAG).w("Failed syncing pending approvals on network recovery: ${e.message}")
                         } finally {
                             isSyncingApprovals.set(false)
                         }
@@ -432,7 +467,7 @@ class DnsWatchdogService : Service() {
                     }
                 }
             } else {
-                Log.d(TAG, "Approval cloud sync already in progress; marked pending resync trigger")
+                Timber.tag(TAG).d("Approval cloud sync already in progress; marked pending resync trigger")
             }
         }
     }
@@ -449,9 +484,9 @@ class DnsWatchdogService : Service() {
             // ContextCompat requires RECEIVER_EXPORTED or RECEIVER_NOT_EXPORTED on all API levels.
             ContextCompat.registerReceiver(this, packageReceiver, filter, ContextCompat.RECEIVER_EXPORTED)
             isPackageReceiverRegistered = true
-            Log.i(TAG, "Layer 1 - Dynamic package BroadcastReceiver registered successfully (RECEIVER_EXPORTED)")
+            Timber.tag(TAG).i("Layer 1 - Dynamic package BroadcastReceiver registered successfully (RECEIVER_EXPORTED)")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to register dynamic package receiver", e)
+            Timber.tag(TAG).e(e, "Failed to register dynamic package receiver")
         }
     }
 
@@ -460,9 +495,9 @@ class DnsWatchdogService : Service() {
         try {
             unregisterReceiver(packageReceiver)
             isPackageReceiverRegistered = false
-            Log.i(TAG, "Layer 1 - Dynamic package BroadcastReceiver unregistered")
+            Timber.tag(TAG).i("Layer 1 - Dynamic package BroadcastReceiver unregistered")
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to unregister dynamic package receiver: ${e.message}")
+            Timber.tag(TAG).w("Failed to unregister dynamic package receiver: ${e.message}")
         }
     }
 
@@ -477,9 +512,9 @@ class DnsWatchdogService : Service() {
             // Explicit NOT_EXPORTED required for targetSdk=36 / API 33+.
             ContextCompat.registerReceiver(this, screenReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
             isScreenReceiverRegistered = true
-            Log.i(TAG, "Layer 2 - Screen / User Present BroadcastReceiver registered successfully")
+            Timber.tag(TAG).i("Layer 2 - Screen / User Present BroadcastReceiver registered successfully")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to register screen receiver", e)
+            Timber.tag(TAG).e(e, "Failed to register screen receiver")
         }
     }
 
@@ -488,21 +523,21 @@ class DnsWatchdogService : Service() {
         try {
             unregisterReceiver(screenReceiver)
             isScreenReceiverRegistered = false
-            Log.i(TAG, "Layer 2 - Screen / User Present BroadcastReceiver unregistered")
+            Timber.tag(TAG).i("Layer 2 - Screen / User Present BroadcastReceiver unregistered")
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to unregister screen receiver: ${e.message}")
+            Timber.tag(TAG).w("Failed to unregister screen receiver: ${e.message}")
         }
     }
 
     private fun startHeartbeat() {
         heartbeatHandler.removeCallbacks(heartbeatRunnable)
         heartbeatHandler.postDelayed(heartbeatRunnable, HEARTBEAT_INTERVAL_MS)
-        Log.i(TAG, "Layer 3 - Periodic heartbeat scheduled (every ${HEARTBEAT_INTERVAL_MS / 1000}s)")
+        Timber.tag(TAG).i("Layer 3 - Periodic heartbeat scheduled (every ${HEARTBEAT_INTERVAL_MS / 1000}s)")
     }
 
     private fun stopHeartbeat() {
         heartbeatHandler.removeCallbacks(heartbeatRunnable)
-        Log.i(TAG, "Layer 3 - Periodic heartbeat cancelled")
+        Timber.tag(TAG).i("Layer 3 - Periodic heartbeat cancelled")
     }
 
     private fun checkAndEnforceProtection() {
@@ -512,21 +547,20 @@ class DnsWatchdogService : Service() {
     private fun checkAndEnforceProtectionInternal() {
         val appContext = applicationContext ?: this
         if (!ProtectionEngine.isDeviceOwner(appContext)) {
-            Log.d(TAG, "Not Device Owner, skipping watchdog enforcement")
+            Timber.tag(TAG).d("Not Device Owner, skipping watchdog enforcement")
             return
         }
 
         // 0. Settle window & teardown check
         if (com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isWithinSettleWindow()) {
-            Log.d(TAG, "System is within legitimate transition or settle window. Postponing watchdog audit...")
-            debounceHandler.removeCallbacks(checkRunnable)
-            debounceHandler.postDelayed(checkRunnable, 3500L)
+            Timber.tag(TAG).d("System is within legitimate transition or settle window. Postponing watchdog audit...")
+            scheduleDebouncedCheck(3500L)
             return
         }
 
         // 0b. First-time baseline check: silently establish protection without false alarms
         if (!com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.hasCompletedInitialEnforcement(appContext)) {
-            Log.i(TAG, "Initial Device Owner protection baseline not yet established. Applying shields silently...")
+            Timber.tag(TAG).i("Initial Device Owner protection baseline not yet established. Applying shields silently...")
             val results = ProtectionEngine.applyAllSync(appContext)
             if (results.any { it.success }) {
                 com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.markInitialEnforcementCompleted(appContext)
@@ -538,12 +572,11 @@ class DnsWatchdogService : Service() {
         val shouldBlockBeActive = CurfewEnforcer.isEffectiveBlockActive(appContext)
         val wasBlockEnforced = CurfewConfig.isLastBlockEnforced(appContext)
         if (shouldBlockBeActive != wasBlockEnforced) {
-            Log.i(TAG, "Scheduled block state transition pending ($wasBlockEnforced -> $shouldBlockBeActive). Reconciling before audit.")
+            Timber.tag(TAG).i("Scheduled block state transition pending ($wasBlockEnforced -> $shouldBlockBeActive). Reconciling before audit.")
             CurfewEnforcer.syncBlockState(appContext)
             if (com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isWithinSettleWindow()) {
-                Log.d(TAG, "Curfew block reconciliation triggered internal transition. Postponing watchdog audit...")
-                debounceHandler.removeCallbacks(checkRunnable)
-                debounceHandler.postDelayed(checkRunnable, 3500L)
+                Timber.tag(TAG).d("Curfew block reconciliation triggered internal transition. Postponing watchdog audit...")
+                scheduleDebouncedCheck(3500L)
                 return
             }
         }
@@ -557,7 +590,7 @@ class DnsWatchdogService : Service() {
                 is ShieldStatus.Active -> { /* In fully active and enforced state */ }
                 is ShieldStatus.Unsupported -> {
                     // System/OS hardware limitation - not a tamper event and cannot be fixed by re-enforcing
-                    Log.d(TAG, "Shield [$shieldId] is unsupported on current OS API level (${status.minSdkRequired})")
+                    Timber.tag(TAG).d("Shield [$shieldId] is unsupported on current OS API level (${status.minSdkRequired})")
                 }
                 is ShieldStatus.NeedsEnforcement -> {
                     desyncReasons.add("[$shieldId: ${status.reason}]")
@@ -583,11 +616,11 @@ class DnsWatchdogService : Service() {
                     val isAppropriate = mode == "opportunistic" || mode == "off" || mode == null
                     if (!isAppropriate) {
                         val reason = "Settings.Global DNS mismatch: VPN required, expected mode='opportunistic' but found mode='$mode', specifier='$specifier'"
-                        Log.w(TAG, reason)
+                        Timber.tag(TAG).w(reason)
                         desyncReasons.add("[DNS_GLOBAL: $reason]")
                     }
-                    if (!com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService.isRunning) {
-                        Log.i(TAG, "VPN service not running while required. Enqueuing silent sync.")
+                    if (!com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService.isTunnelHealthy(requiredMode)) {
+                        Timber.tag(TAG).i("VPN service or DNS worker not healthy while required. Enqueuing silent sync.")
                         com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService.syncPolicy(appContext)
                     }
                 } else {
@@ -600,12 +633,12 @@ class DnsWatchdogService : Service() {
 
                         if (isPendingCurfewRelease) {
                             val reason = "Settings.Global DNS pending post-curfew restoration (mode=$mode, expected=$expectedHost)"
-                            Log.i(TAG, reason)
+                            Timber.tag(TAG).i(reason)
                             desyncReasons.add("[DNS_PENDING_RESTORE: $reason]")
                             com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge.restoreDnsShieldOnCurfewRelease(appContext)
                         } else {
                             val reason = "Settings.Global DNS mismatch (mode=$mode, specifier=$specifier, expected=$expectedHost)"
-                            Log.w(TAG, reason)
+                            Timber.tag(TAG).w(reason)
                             desyncReasons.add("[DNS_GLOBAL: $reason]")
                         }
                     } else if (CurfewConfig.isDnsRestorePending(appContext)) {
@@ -613,7 +646,7 @@ class DnsWatchdogService : Service() {
                     }
                 }
             } catch (e: Exception) {
-                Log.d(TAG, "Could not read Settings.Global directly", e)
+                Timber.tag(TAG).d(e, "Could not read Settings.Global directly")
             }
         }
 
@@ -622,7 +655,7 @@ class DnsWatchdogService : Service() {
             com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(appContext)
                 .getCurrentPolicy().isDateTimeLocked
         } catch (e: Exception) {
-            Log.w(TAG, "Failed reading dateTimeLocked policy", e)
+            Timber.tag(TAG).w(e, "Failed reading dateTimeLocked policy")
             false
         }
 
@@ -638,7 +671,7 @@ class DnsWatchdogService : Service() {
                         currentTz.getOffset(trustedTime) == targetTz.getOffset(trustedTime)
                     if (!isTargetTz) {
                         val tzReason = "Timezone mismatch (current=${currentTz.id}, expected=$targetTzId)"
-                        Log.w(TAG, tzReason)
+                        Timber.tag(TAG).w(tzReason)
                         desyncReasons.add("[TIMEZONE: $tzReason]")
                     }
                 }
@@ -647,18 +680,18 @@ class DnsWatchdogService : Service() {
                 val autoTime = Settings.Global.getInt(appContext.contentResolver, Settings.Global.AUTO_TIME, 1)
                 if (autoTime != 1) {
                     val autoTimeReason = "Auto time disabled (autoTime=$autoTime)"
-                    Log.w(TAG, autoTimeReason)
+                    Timber.tag(TAG).w(autoTimeReason)
                     desyncReasons.add("[AUTO_TIME: $autoTimeReason]")
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Could not verify Timezone or Auto Time directly in watchdog", e)
+                Timber.tag(TAG).w(e, "Could not verify Timezone or Auto Time directly in watchdog")
             }
         }
 
         val needsEnforce = desyncReasons.isNotEmpty()
         if (needsEnforce) {
             val detailedReasons = desyncReasons.joinToString(" | ")
-            Log.i(TAG, "Tampering or desync detected in protection shields: $detailedReasons. Re-enforcing via ProtectionEngine...")
+            Timber.tag(TAG).i("Tampering or desync detected in protection shields: $detailedReasons. Re-enforcing via ProtectionEngine...")
 
             // Forensic recording into Black Box Flight Recorder
             BlackBoxRecorder.record(
@@ -670,10 +703,8 @@ class DnsWatchdogService : Service() {
                 metadata = "failedCount=${desyncReasons.size}"
             )
 
-            // Silent self-healing first
-            ProtectionEngine.applyAllAsync(appContext)
-
-            // Post user-facing tamper alert ONLY for confirmed non-DNS external tampering.
+            // Evaluate transition safety BEFORE triggering applyAllAsync() so self-healing
+            // does not race with ProtectionTransitionGuard and suppress a real tamper alert.
             // Intentional silent DNS policy: Private DNS self-healing is recorded in Black Box only
             // with zero user-facing notifications in the notification shade.
             val isDirectTamper = desyncReasons.any {
@@ -687,6 +718,9 @@ class DnsWatchdogService : Service() {
                 !com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isTeardownInProgress &&
                 isCurfewStateSynchronized &&
                 !CurfewConfig.isDnsRestorePending(appContext)
+
+            // Silent self-healing
+            ProtectionEngine.applyAllAsync(appContext)
 
             if (isDirectTamper && isTransitionSafe) {
                 try {
@@ -703,7 +737,7 @@ class DnsWatchdogService : Service() {
                         importance = 3
                     )
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error posting tamper alert notification", e)
+                    Timber.tag(TAG).e(e, "Error posting tamper alert notification")
                 }
             }
         }

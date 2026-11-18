@@ -2,11 +2,12 @@ package com.drmohammed.antiporn.services
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
-import android.util.Log
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
+import timber.log.Timber
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -55,6 +56,31 @@ class NetworkWatchdog {
                 isValidated = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true,
                 isCaptivePortal = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL) == true
             )
+        }
+
+        /**
+         * Computes a deterministic signature from a physical network's interface name, local link
+         * addresses, and DNS servers so genuine IP/subnet roaming and DNS changes are detected
+         * while ignoring identical callbacks.
+         */
+        internal fun buildLinkSignature(linkProperties: LinkProperties?): String {
+            if (linkProperties == null) return ""
+            return buildLinkSignature(
+                interfaceName = linkProperties.interfaceName,
+                linkAddresses = linkProperties.linkAddresses.orEmpty().mapNotNull { it?.address?.hostAddress },
+                dnsServers = linkProperties.dnsServers.orEmpty().mapNotNull { it?.hostAddress }
+            )
+        }
+
+        internal fun buildLinkSignature(
+            interfaceName: String?,
+            linkAddresses: Collection<String>,
+            dnsServers: Collection<String>
+        ): String {
+            val iface = interfaceName.orEmpty()
+            val sortedAddresses = linkAddresses.filter { it.isNotBlank() }.sorted().joinToString(",")
+            val sortedDns = dnsServers.filter { it.isNotBlank() }.sorted().joinToString(",")
+            return "$iface|$sortedAddresses|$sortedDns"
         }
 
         /**
@@ -117,12 +143,30 @@ class NetworkWatchdog {
     private var connectivityManager: ConnectivityManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private val statesByNetwork = ConcurrentHashMap<String, NetworkStateSnapshot>()
+    private val linkSignaturesByNetwork = ConcurrentHashMap<String, String>()
 
     /**
      * Registers a network callback that notifies when Internet connectivity is restored
      * and records physical network lifecycle and capability transitions.
      */
     fun register(context: Context, onNetworkAvailable: () -> Unit) {
+        register(
+            context = context,
+            onNetworkChanged = null,
+            onNetworkAvailable = onNetworkAvailable
+        )
+    }
+
+    /**
+     * Registers a network callback that notifies [onNetworkAvailable] when Internet connectivity
+     * is restored and invokes [onNetworkChanged] on genuine physical network transitions
+     * (excluding VPN interfaces and RSSI-only updates).
+     */
+    fun register(
+        context: Context,
+        onNetworkChanged: ((reason: String) -> Unit)?,
+        onNetworkAvailable: () -> Unit
+    ) {
         synchronized(callbackLock) {
             if (networkCallback != null) return
 
@@ -130,7 +174,7 @@ class NetworkWatchdog {
                 val appContext = context.applicationContext
                 val manager = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
                 if (manager == null) {
-                    Log.w(TAG, "ConnectivityManager unavailable; skipping NetworkWatchdog registration.")
+                    Timber.tag(TAG).w("ConnectivityManager unavailable; skipping NetworkWatchdog registration.")
                     return
                 }
 
@@ -140,23 +184,9 @@ class NetworkWatchdog {
 
                 val callback = object : ConnectivityManager.NetworkCallback() {
                     override fun onAvailable(network: Network) {
+                        // Rely on onCapabilitiesChanged (guaranteed immediately after onAvailable)
+                        // instead of synchronous ConnectivityManager.getNetworkCapabilities() IPC.
                         if (!isRegistered) return
-                        try {
-                            val caps = manager.getNetworkCapabilities(network)
-                            if (caps == null) {
-                                // Defer onNetworkAvailable until onCapabilitiesChanged confirms non-VPN transport.
-                                return
-                            }
-                            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return
-                            val netKey = network.toString()
-                            val snapshot = buildSnapshot(caps)
-                            if (statesByNetwork.putIfAbsent(netKey, snapshot) == null) {
-                                recordNetworkAvailable(appContext, snapshot, netKey)
-                            }
-                            onNetworkAvailable.invoke()
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error handling onAvailable for network=$network", e)
-                        }
                     }
 
                     override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
@@ -165,6 +195,7 @@ class NetworkWatchdog {
                             val netKey = network.toString()
                             if (networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
                                 statesByNetwork.remove(netKey)
+                                linkSignaturesByNetwork.remove(netKey)
                                 return
                             }
 
@@ -177,17 +208,46 @@ class NetworkWatchdog {
                                         recordTransitionEvent(appContext, event)
                                     }
                                 }
+                                onNetworkChanged?.invoke("net_available:${current.transport}")
                                 onNetworkAvailable.invoke()
                                 return
                             }
 
                             val event = classifyCapabilityTransition(previous, current, netKey) ?: return
                             recordTransitionEvent(appContext, event)
-                            if (event.action == "NET_VALIDATED") {
-                                onNetworkAvailable.invoke()
+                            when (event.action) {
+                                "NET_VALIDATED" -> {
+                                    onNetworkChanged?.invoke("net_validated:${current.transport}")
+                                    onNetworkAvailable.invoke()
+                                }
+                                "NET_UNVALIDATED" -> {
+                                    onNetworkChanged?.invoke("net_unvalidated:${current.transport}")
+                                }
+                                "NET_TRANSPORT_CHANGED" -> {
+                                    onNetworkChanged?.invoke("net_transport_changed:${previous.transport}->${current.transport}")
+                                }
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "Error handling onCapabilitiesChanged for network=$network", e)
+                            Timber.tag(TAG).e(e, "Error handling onCapabilitiesChanged for network=$network")
+                        }
+                    }
+
+                    override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+                        if (!isRegistered) return
+                        try {
+                            val netKey = network.toString()
+                            // Only tracked non-VPN physical networks appear in statesByNetwork.
+                            if (!statesByNetwork.containsKey(netKey)) {
+                                return
+                            }
+                            val signature = buildLinkSignature(linkProperties)
+                            val previousSignature = linkSignaturesByNetwork.put(netKey, signature)
+                            if (previousSignature != null && previousSignature != signature) {
+                                Timber.tag(TAG).i("Physical network link properties changed: net=%s", netKey)
+                                onNetworkChanged?.invoke("net_link_changed")
+                            }
+                        } catch (e: Exception) {
+                            Timber.tag(TAG).e(e, "Error handling onLinkPropertiesChanged for network=$network")
                         }
                     }
 
@@ -195,11 +255,14 @@ class NetworkWatchdog {
                         if (!isRegistered) return
                         try {
                             val netKey = network.toString()
+                            linkSignaturesByNetwork.remove(netKey)
                             val removed = statesByNetwork.remove(netKey) ?: return
 
-                            Log.i(
-                                TAG,
-                                "Network connection lost: transport=${removed.transport}, wasValidated=${removed.isValidated}, net=$netKey"
+                            Timber.tag(TAG).i(
+                                "Network connection lost: transport=%s, wasValidated=%s, net=%s",
+                                removed.transport,
+                                removed.isValidated,
+                                netKey
                             )
                             BlackBoxRecorder.recordNetwork(
                                 context = appContext,
@@ -207,8 +270,9 @@ class NetworkWatchdog {
                                 isSuccess = true,
                                 details = "transport=${removed.transport}, wasValidated=${removed.isValidated}, net=$netKey"
                             )
+                            onNetworkChanged?.invoke("net_lost:${removed.transport}")
                         } catch (e: Exception) {
-                            Log.e(TAG, "Error handling onLost for network=$network", e)
+                            Timber.tag(TAG).e(e, "Error handling onLost for network=$network")
                         }
                     }
                 }
@@ -217,13 +281,14 @@ class NetworkWatchdog {
                 networkCallback = callback
                 isRegistered = true
                 manager.registerNetworkCallback(request, callback)
-                Log.i(TAG, "NetworkWatchdog registered successfully.")
+                Timber.tag(TAG).i("NetworkWatchdog registered successfully.")
             } catch (e: Exception) {
                 isRegistered = false
                 statesByNetwork.clear()
+                linkSignaturesByNetwork.clear()
                 networkCallback = null
                 connectivityManager = null
-                Log.e(TAG, "Failed to register NetworkWatchdog callback", e)
+                Timber.tag(TAG).e(e, "Failed to register NetworkWatchdog callback")
             }
         }
     }
@@ -235,12 +300,13 @@ class NetworkWatchdog {
         synchronized(callbackLock) {
             isRegistered = false
             statesByNetwork.clear()
+            linkSignaturesByNetwork.clear()
             networkCallback?.let {
                 try {
                     connectivityManager?.unregisterNetworkCallback(it)
-                    Log.i(TAG, "NetworkWatchdog unregistered.")
+                    Timber.tag(TAG).i("NetworkWatchdog unregistered.")
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to unregister NetworkWatchdog callback", e)
+                    Timber.tag(TAG).e(e, "Failed to unregister NetworkWatchdog callback")
                 }
                 networkCallback = null
                 connectivityManager = null
@@ -249,9 +315,12 @@ class NetworkWatchdog {
     }
 
     private fun recordNetworkAvailable(appContext: Context, snapshot: NetworkStateSnapshot, netKey: String) {
-        Log.i(
-            TAG,
-            "Internet connection detected as available: transport=${snapshot.transport}, validated=${snapshot.isValidated}, captive=${snapshot.isCaptivePortal}, net=$netKey"
+        Timber.tag(TAG).i(
+            "Internet connection detected as available: transport=%s, validated=%s, captive=%s, net=%s",
+            snapshot.transport,
+            snapshot.isValidated,
+            snapshot.isCaptivePortal,
+            netKey
         )
         BlackBoxRecorder.recordNetwork(
             context = appContext,
@@ -263,9 +332,9 @@ class NetworkWatchdog {
 
     private fun recordTransitionEvent(appContext: Context, event: NetworkTransitionEvent) {
         if (event.isSuccess) {
-            Log.i(TAG, "Network transition [${event.action}]: ${event.details}")
+            Timber.tag(TAG).i("Network transition [%s]: %s", event.action, event.details)
         } else {
-            Log.w(TAG, "Network transition [${event.action}]: ${event.error} (${event.details})")
+            Timber.tag(TAG).w("Network transition [%s]: %s (%s)", event.action, event.error, event.details)
         }
         BlackBoxRecorder.recordNetwork(
             context = appContext,

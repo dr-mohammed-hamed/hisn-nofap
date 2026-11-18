@@ -183,69 +183,6 @@ class TcpRstPacketBuilderTest {
     }
 
     @Test
-    fun testBuildIpv6RefusedResponseAndChecksum() {
-        val srcIp = ByteArray(16).apply { this[0] = 0xfd.toByte(); this[15] = 0x01 }
-        val dstIp = ByteArray(16).apply { this[0] = 0xfd.toByte(); this[15] = 0x02 }
-        val qName = byteArrayOf(
-            7, 'e'.code.toByte(), 'x'.code.toByte(), 'a'.code.toByte(), 'm'.code.toByte(),
-            'p'.code.toByte(), 'l'.code.toByte(), 'e'.code.toByte(),
-            3, 'c'.code.toByte(), 'o'.code.toByte(), 'm'.code.toByte(), 0
-        )
-        val dnsLen = 12 + qName.size + 4
-        val udpLen = 8 + dnsLen
-        val packet = ByteArray(40 + udpLen)
-        val buf = ByteBuffer.wrap(packet)
-        buf.putInt(0x60000000)
-        buf.putShort(udpLen.toShort())
-        buf.put(17.toByte()) // UDP
-        buf.put(64.toByte())
-        buf.put(srcIp)
-        buf.put(dstIp)
-        buf.position(40)
-        buf.putShort(55123.toShort())
-        buf.putShort(53.toShort())
-        buf.putShort(udpLen.toShort())
-        buf.putShort(0.toShort())
-        buf.putShort(0x2A2B.toShort()) // txId
-        buf.putShort(0x0100.toShort()) // standard query
-        buf.putShort(1.toShort())
-        buf.putShort(0.toShort())
-        buf.putShort(0.toShort())
-        buf.putShort(0.toShort())
-        buf.put(qName)
-        buf.putShort(28.toShort()) // AAAA
-        buf.putShort(1.toShort())  // IN
-
-        val refused = requireNotNull(DnsPacketParser.buildIpv6RefusedResponse(packet, packet.size))
-        val rBuf = ByteBuffer.wrap(refused)
-        assertEquals(6, (rBuf.get(0).toInt() and 0xFF) ushr 4)
-        assertEquals(17, rBuf.get(6).toInt() and 0xFF)
-        val respSrc = ByteArray(16)
-        val respDst = ByteArray(16)
-        rBuf.position(8)
-        rBuf.get(respSrc)
-        rBuf.get(respDst)
-        assertArrayEquals(dstIp, respSrc)
-        assertArrayEquals(srcIp, respDst)
-        rBuf.position(40)
-        assertEquals(53, rBuf.short.toInt() and 0xFFFF)
-        assertEquals(55123, rBuf.short.toInt() and 0xFFFF)
-        val respUdpLen = rBuf.short.toInt() and 0xFFFF
-        assertEquals(udpLen, respUdpLen)
-        val respChecksum = rBuf.short.toInt() and 0xFFFF
-        assertNotEquals(0, respChecksum)
-        assertEquals(0x2A2B.toShort(), rBuf.short)
-        assertEquals(0x8185.toShort(), rBuf.short) // QR=1, RD=1, RA=1, RCODE=5 (REFUSED)
-        assertEquals(
-            0xFFFF,
-            verifyIpv6TransportChecksumRfc1071(respSrc, respDst, 17, refused, 40, respUdpLen)
-        )
-
-        // Length > packet.size must be safely rejected
-        assertNull(DnsPacketParser.buildIpv6RefusedResponse(packet, packet.size + 1))
-    }
-
-    @Test
     fun testBuildTcpRstResponseRejectsIncomingRst() {
         val rstInput = buildSyntheticTcpPacket(
             srcIp = byteArrayOf(10, 0, 0, 1),

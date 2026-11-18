@@ -3,11 +3,18 @@ package com.drmohammed.antiporn.core.network.dns
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import timber.log.Timber
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -24,17 +31,71 @@ class DnsTunnelWorker(
     companion object {
         private const val TAG = "AntiPorn_DnsWorker"
         private const val PACKET_BUFFER_SIZE = 32767
-        private const val MAX_IN_FLIGHT_QUERIES = 96
+        internal const val MAX_IN_FLIGHT_QUERIES = 96
         private const val MAX_QUERY_AGE_MS = 3_500L
 
         private fun monotonicNowMs(): Long = try {
             SystemClock.elapsedRealtime()
-        } catch (_: Throwable) {
+        } catch (_: RuntimeException) {
             System.nanoTime() / 1_000_000L
         }
+
+        /**
+         * Inspects an incoming IPv4 or IPv6 packet for TCP probes on ports 853 (DoT),
+         * 443 (trapped DoH IPs), or 53 (TCP DNS), including IPv6 extension headers.
+         * Returns a ready-to-write TCP RST packet if intercepted, or null otherwise.
+         */
+        internal fun tryBuildTcpRstForProbe(packet: ByteArray, length: Int): ByteArray? {
+            if (length < 20 || length > packet.size) return null
+            val version = (packet[0].toInt() and 0xFF) ushr 4
+            if (version == 6 && length >= 44) {
+                val upper = Ipv6DnsPacketCodec.resolveUpperLayer(ByteBuffer.wrap(packet, 0, length), length)
+                    ?: return null
+                if (upper.protocol == 6 && upper.headerOffset + 4 <= upper.actualIpEnd) {
+                    val dstPort = ((packet[upper.headerOffset + 2].toInt() and 0xFF) shl 8) or
+                        (packet[upper.headerOffset + 3].toInt() and 0xFF)
+                    if (dstPort == 853 || dstPort == 443 || dstPort == 53) {
+                        return DnsPacketParser.buildIpv6TcpRstResponse(packet, length)
+                    }
+                }
+            } else if (version == 4) {
+                val protocol = packet[9].toInt() and 0xFF
+                if (protocol == 6) {
+                    val ihl = (packet[0].toInt() and 0x0F) * 4
+                    if (ihl >= 20 && length >= ihl + 4) {
+                        val dstPort = ((packet[ihl + 2].toInt() and 0xFF) shl 8) or
+                            (packet[ihl + 3].toInt() and 0xFF)
+                        if (dstPort == 853 || dstPort == 443 || dstPort == 53) {
+                            return DnsPacketParser.buildTcpRstResponse(packet, length)
+                        }
+                    }
+                }
+            }
+            return null
+        }
+
+        internal fun selectMaxResponsePayloadBytes(ipVersion: Int): Int =
+            if (ipVersion == 6) {
+                DnsWireValidator.MAX_IPV6_UDP_DNS_PAYLOAD
+            } else {
+                DnsWireValidator.MAX_IPV4_UDP_DNS_PAYLOAD
+            }
     }
 
     private val outStreamLock = Any()
+    @Volatile
+    private var activeInStream: FileInputStream? = null
+    @Volatile
+    private var outStreamClosed = false
+
+    fun closeActiveStreams() {
+        val inRef = activeInStream
+        activeInStream = null
+        try {
+            inRef?.close()
+        } catch (_: IOException) {
+        }
+    }
 
     fun start(
         scope: CoroutineScope,
@@ -51,7 +112,11 @@ class DnsTunnelWorker(
 
             try {
                 inStream = FileInputStream(pfd.fileDescriptor)
+                activeInStream = inStream
                 outStream = FileOutputStream(pfd.fileDescriptor)
+                synchronized(outStreamLock) {
+                    outStreamClosed = false
+                }
 
                 while (isActive && isRunningProvider()) {
                     val bytesRead = try {
@@ -69,45 +134,11 @@ class DnsTunnelWorker(
                     val version = (packetBuffer[0].toInt() and 0xFF) ushr 4
                     Timber.tag(TAG).d("TUN packet read: $bytesRead bytes, ipVersion=$version")
 
-                    if (version == 6) {
-                        if (bytesRead >= 44 && (packetBuffer[6].toInt() and 0xFF) == 6) {
-                            val dstPort = ((packetBuffer[42].toInt() and 0xFF) shl 8) or (packetBuffer[43].toInt() and 0xFF)
-                            // Instant RST on 853 (DoT), 443 (trapped DoH IPs), and 53 (no local TCP DNS proxy -> fast UDP fallback)
-                            if (dstPort == 853 || dstPort == 443 || dstPort == 53) {
-                                val ipv6Rst = DnsPacketParser.buildIpv6TcpRstResponse(packetBuffer, bytesRead)
-                                if (ipv6Rst != null) {
-                                    Timber.tag(TAG).i("Instant IPv6 TCP RST sent for TCP probe on port $dstPort -> fast fallback")
-                                    writeToTun(outStream, ipv6Rst)
-                                }
-                                continue
-                            }
-                        }
-                        val ipv6Refused = DnsPacketParser.buildIpv6RefusedResponse(packetBuffer, bytesRead)
-                        if (ipv6Refused != null) {
-                            Timber.tag(TAG).i("Instant REFUSED sent for IPv6 DNS query -> forces fast IPv4 fallback")
-                            writeToTun(outStream, ipv6Refused)
-                        }
+                    val tcpRst = tryBuildTcpRstForProbe(packetBuffer, bytesRead)
+                    if (tcpRst != null) {
+                        Timber.tag(TAG).i("Instant IPv$version TCP RST sent for TCP probe -> fast fallback")
+                        writeToTun(outStream, tcpRst)
                         continue
-                    }
-
-                    // Intercept IPv4 TCP probes on 853 (Opportunistic DoT), 443 (trapped DoH resolver IPs),
-                    // and 53 (no local TCP DNS proxy, so instant RST forces immediate UDP:53 retry without SYN hang)
-                    if (version == 4 && bytesRead >= 20) {
-                        val protocol = packetBuffer[9].toInt() and 0xFF
-                        if (protocol == 6) { // TCP
-                            val ihl = (packetBuffer[0].toInt() and 0x0F) * 4
-                            if (ihl >= 20 && bytesRead >= ihl + 4) {
-                                val dstPort = ((packetBuffer[ihl + 2].toInt() and 0xFF) shl 8) or (packetBuffer[ihl + 3].toInt() and 0xFF)
-                                if (dstPort == 853 || dstPort == 443 || dstPort == 53) {
-                                    val tcpRst = DnsPacketParser.buildTcpRstResponse(packetBuffer, bytesRead)
-                                    if (tcpRst != null) {
-                                        Timber.tag(TAG).i("Instant TCP RST sent for TCP probe on port $dstPort -> fast fallback")
-                                        writeToTun(outStream, tcpRst)
-                                    }
-                                    continue
-                                }
-                            }
-                        }
                     }
 
                     val parsedQuery = DnsPacketParser.parseDnsQuery(packetBuffer, bytesRead)
@@ -115,7 +146,7 @@ class DnsTunnelWorker(
                         Timber.tag(TAG).d("Non-DNS or unparsed packet received on TUN (version=$version, len=$bytesRead)")
                         continue
                     }
-                    Timber.tag(TAG).i("DNS Query: ${parsedQuery.qName} (type=${parsedQuery.qType}) from ${parsedQuery.srcPort}")
+                    Timber.tag(TAG).d("DNS Query received (ipVersion=${parsedQuery.ipVersion}, type=${parsedQuery.qType}, srcPort=${parsedQuery.srcPort})")
                     val policy = policyProvider()
                     val customBlocked = customBlockedProvider()
                     val action = DnsPolicyEvaluator.evaluate(parsedQuery, policy, customBlocked)
@@ -137,12 +168,13 @@ class DnsTunnelWorker(
                             val currentInFlight = inFlightQueries.incrementAndGet()
                             if (currentInFlight > MAX_IN_FLIGHT_QUERIES) {
                                 inFlightQueries.decrementAndGet()
-                                Timber.tag(TAG).w("Dropped excess DNS query for ${parsedQuery.qName} (inFlight=$currentInFlight)")
+                                Timber.tag(TAG).w("Dropped excess DNS query (type=${parsedQuery.qType}, inFlight=$currentInFlight)")
                                 continue
                             }
                             val activeOut = outStream
                             val enqueuedAtMs = monotonicNowMs()
-                            forwarderScope.launch {
+                            val maxPayloadBytes = selectMaxResponsePayloadBytes(parsedQuery.ipVersion)
+                            val workerJob = forwarderScope.launch {
                                 try {
                                     val replyPayload = forwarder.resolve(
                                         qName = parsedQuery.qName,
@@ -150,7 +182,8 @@ class DnsTunnelWorker(
                                         transactionId = parsedQuery.transactionId,
                                         rawDnsPayload = parsedQuery.rawDnsPayload,
                                         enqueuedAtMs = enqueuedAtMs,
-                                        maxQueryAgeMs = MAX_QUERY_AGE_MS
+                                        maxQueryAgeMs = MAX_QUERY_AGE_MS,
+                                        maxResponsePayloadBytes = maxPayloadBytes
                                     )
                                     if (replyPayload != null && isActive && isRunningProvider()) {
                                         val clientPacket = DnsPacketParser.wrapUpstreamDnsResponse(
@@ -165,26 +198,40 @@ class DnsTunnelWorker(
                                 } catch (e: CancellationException) {
                                     throw e
                                 } catch (e: Exception) {
-                                    Timber.tag(TAG).w("Upstream DNS query failed for ${parsedQuery.qName}: ${e.message}")
-                                } finally {
-                                    inFlightQueries.decrementAndGet()
+                                    Timber.tag(TAG).w("Upstream DNS query failed (type=${parsedQuery.qType}): ${e.message}")
                                 }
                             }
+                            workerJob.invokeOnCompletion { inFlightQueries.decrementAndGet() }
                         }
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                Timber.tag(TAG).d("DNS Filtering Loop terminated: ${e.message}")
+                Timber.tag(TAG).d(e, "DNS Filtering Loop terminated")
             } finally {
                 forwarderScope.coroutineContext.cancelChildren()
-                try { inStream?.close() } catch (_: Exception) {}
-                try { outStream?.close() } catch (_: Exception) {}
+                activeInStream = null
+                synchronized(outStreamLock) {
+                    outStreamClosed = true
+                    try {
+                        outStream?.close()
+                    } catch (e: IOException) {
+                        Timber.tag(TAG).d(e, "TUN outStream close failed")
+                    }
+                }
+                try {
+                    inStream?.close()
+                } catch (e: IOException) {
+                    Timber.tag(TAG).d(e, "TUN inStream close failed")
+                }
             }
         }
     }
 
     private fun writeToTun(outStream: FileOutputStream, packet: ByteArray) {
         synchronized(outStreamLock) {
+            if (outStreamClosed) return
             try {
                 outStream.write(packet)
                 Timber.tag(TAG).d("Sent response packet to TUN (${packet.size} bytes)")
