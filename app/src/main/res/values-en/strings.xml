@@ -967,6 +967,8 @@
     <string name="other_settings_title">Other Settings</string>
     <string name="switch_lock_date_time">Lock Phone Date &amp; Time</string>
     <string name="timezone_section_title">Curfew Timezone</string>
+    <string name="switch_allow_apps_data_clearing">Allow Clearing App Data</string>
+    <string name="desc_allow_apps_data_clearing">Allows clearing data and managing other apps, while Hisn remains protected</string>
     <string name="switch_total_internet_kill">Total Device Internet Cutoff</string>
     <string name="dialog_total_internet_kill_title">Severe Warning: Total Internet Cutoff</string>
     <string name="dialog_total_internet_kill_message">Internet access (Mobile Data &amp; Wi-Fi) will be completely cut off from this device until you disable this switch from this exact screen. Are you sure?</string>

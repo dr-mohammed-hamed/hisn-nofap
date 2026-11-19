@@ -382,8 +382,33 @@ internal class PolicyEnforcementHandler(
             }
         }
 
-        SafeDpmGateway.addUserRestriction(appContext, UserManager.DISALLOW_APPS_CONTROL)
-        Log.i(TAG, "Enforced DISALLOW_APPS_CONTROL restriction for self-protection via SafeDpmGateway and ${bundle.protectedAppPackages.size} protected packages")
+        try {
+            val isAppsControlCurrentlyRestricted = SafeDpmGateway.hasUserRestriction(appContext, UserManager.DISALLOW_APPS_CONTROL)
+            if (bundle.isClearAppDataAllowed) {
+                if (isAppsControlCurrentlyRestricted) {
+                    val result = SafeDpmGateway.clearUserRestriction(appContext, UserManager.DISALLOW_APPS_CONTROL)
+                    if (result.isSuccess) {
+                        Log.i(TAG, "Cleared DISALLOW_APPS_CONTROL restriction (clearing app data allowed by policy)")
+                    } else {
+                        val msg = (result as? com.drmohammed.antiporn.telemetry.DpmExecutionResult.Failure)?.message ?: "unknown error"
+                        Log.w(TAG, "Failed to clear DISALLOW_APPS_CONTROL: $msg")
+                    }
+                }
+            } else {
+                if (!isAppsControlCurrentlyRestricted) {
+                    val result = SafeDpmGateway.addUserRestriction(appContext, UserManager.DISALLOW_APPS_CONTROL)
+                    if (result.isSuccess) {
+                        Log.i(TAG, "Enforced DISALLOW_APPS_CONTROL restriction for self-protection via SafeDpmGateway and ${bundle.protectedAppPackages.size} protected packages")
+                    } else {
+                        val msg = (result as? com.drmohammed.antiporn.telemetry.DpmExecutionResult.Failure)?.message ?: "unknown error"
+                        Log.w(TAG, "Failed to enforce DISALLOW_APPS_CONTROL: $msg")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Log.e(TAG, "Failed reconciling DISALLOW_APPS_CONTROL restriction", e)
+        }
     }
 
     private suspend fun queryApprovalsSafely(

@@ -41,6 +41,7 @@ class DevicePolicyBundleTest {
         assertTrue(policy.customAllowedUrls.isEmpty())
         assertTrue(policy.isSelfControlAllowed)
         assertFalse(policy.isDateTimeLocked)
+        assertTrue(policy.isClearAppDataAllowed)
         assertEquals(DevicePolicyBundle.CLOUDFLARE_FAMILY_DNS_HOST, policy.dnsHost)
         assertEquals(com.drmohammed.antiporn.curfew.CurfewConfig.getDefaultFallbackTimeZone(), policy.timeZoneId)
         assertEquals(1L, policy.version)
@@ -65,6 +66,7 @@ class DevicePolicyBundleTest {
             lockNewInstallsUntilApproved = true,
             isSelfControlAllowed = false,
             isDateTimeLocked = true,
+            isClearAppDataAllowed = false,
             customBlacklistPackages = setOf("com.bad.app1", "com.bad.app2"),
             customCurfewWhitelistPackages = setOf("com.work.app1"),
             customAiScanPackages = setOf("com.target.ai1"),
@@ -108,6 +110,7 @@ class DevicePolicyBundleTest {
         assertEquals(original.lockNewInstallsUntilApproved, restored.lockNewInstallsUntilApproved)
         assertEquals(original.isSelfControlAllowed, restored.isSelfControlAllowed)
         assertEquals(original.isDateTimeLocked, restored.isDateTimeLocked)
+        assertEquals(original.isClearAppDataAllowed, restored.isClearAppDataAllowed)
         assertEquals(original.customBlacklistPackages, restored.customBlacklistPackages)
         assertEquals(original.customCurfewWhitelistPackages, restored.customCurfewWhitelistPackages)
         assertEquals(original.customAiScanPackages, restored.customAiScanPackages)
@@ -151,6 +154,7 @@ class DevicePolicyBundleTest {
             lockNewInstallsUntilApproved = true,
             isSelfControlAllowed = false,
             isDateTimeLocked = true,
+            isClearAppDataAllowed = false,
             customBlacklistPackages = setOf("pkg.a"),
             customCurfewWhitelistPackages = setOf("pkg.b"),
             customAiScanPackages = setOf("pkg.ai.scan"),
@@ -194,6 +198,7 @@ class DevicePolicyBundleTest {
         assertEquals(original.lockNewInstallsUntilApproved, restored.lockNewInstallsUntilApproved)
         assertEquals(original.isSelfControlAllowed, restored.isSelfControlAllowed)
         assertEquals(original.isDateTimeLocked, restored.isDateTimeLocked)
+        assertEquals(original.isClearAppDataAllowed, restored.isClearAppDataAllowed)
         assertEquals(original.customBlacklistPackages, restored.customBlacklistPackages)
         assertEquals(original.customCurfewWhitelistPackages, restored.customCurfewWhitelistPackages)
         assertEquals(original.customAiScanPackages, restored.customAiScanPackages)

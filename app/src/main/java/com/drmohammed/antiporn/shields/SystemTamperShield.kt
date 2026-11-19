@@ -101,12 +101,35 @@ object SystemTamperShield : ProtectionShield {
                     Log.w(TAG, "Could not setClearApplicationUserDataBlocked: ${e.message}")
                 }
 
-                // 4.2 Prevent force stop & application tampering via settings UI
-                try {
-                    dpm.addUserRestriction(admin, UserManager.DISALLOW_APPS_CONTROL)
-                    Log.i(TAG, "DISALLOW_APPS_CONTROL restriction applied successfully")
+                // 4.2 Application data clearing & app control policy
+                val isClearAppDataAllowed = try {
+                    PolicyRepository.getInstance(context.applicationContext).getCurrentPolicy().isClearAppDataAllowed
                 } catch (e: Exception) {
-                    Log.w(TAG, "Could not add DISALLOW_APPS_CONTROL: ${e.message}")
+                    Log.w(TAG, "Failed to query isClearAppDataAllowed policy: ${e.message}", e)
+                    true
+                }
+
+                val restrictions = dpm.getUserRestrictions(admin)
+                val isAppsControlBlocked = restrictions?.getBoolean(UserManager.DISALLOW_APPS_CONTROL, false) ?: false
+
+                if (isClearAppDataAllowed) {
+                    if (isAppsControlBlocked) {
+                        try {
+                            dpm.clearUserRestriction(admin, UserManager.DISALLOW_APPS_CONTROL)
+                            Log.i(TAG, "DISALLOW_APPS_CONTROL restriction cleared successfully")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Could not clear DISALLOW_APPS_CONTROL: ${e.message}")
+                        }
+                    }
+                } else {
+                    if (!isAppsControlBlocked) {
+                        try {
+                            dpm.addUserRestriction(admin, UserManager.DISALLOW_APPS_CONTROL)
+                            Log.i(TAG, "DISALLOW_APPS_CONTROL restriction applied successfully")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Could not add DISALLOW_APPS_CONTROL: ${e.message}")
+                        }
+                    }
                 }
             }
 
@@ -271,11 +294,19 @@ object SystemTamperShield : ProtectionShield {
             }
 
             val isDateTimeLocked = try {
-                com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(context).getCurrentPolicy().isDateTimeLocked
+                PolicyRepository.getInstance(context.applicationContext).getCurrentPolicy().isDateTimeLocked
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to query isDateTimeLocked policy during evaluation: ${e.message}", e)
                 false
             }
+
+            val isClearAppDataAllowed = try {
+                PolicyRepository.getInstance(context.applicationContext).getCurrentPolicy().isClearAppDataAllowed
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to query isClearAppDataAllowed policy during evaluation: ${e.message}", e)
+                true
+            }
+            val isAppsControlBlocked = restrictions?.getBoolean(UserManager.DISALLOW_APPS_CONTROL, false) ?: false
 
             val isDo = dpm.isDeviceOwnerApp(context.packageName)
             val isClearDataBlocked = if (isDo) {
@@ -294,8 +325,9 @@ object SystemTamperShield : ProtectionShield {
                 true
             }
 
+            val isAppsControlCompliant = if (isClearAppDataAllowed) !isAppsControlBlocked else isAppsControlBlocked
             val isFullyProtected = if (isDo) {
-                val baseProtected = isSafeBootBlocked && isFactoryResetBlocked && isAddUserBlocked && isAddManagedProfileBlocked && isUninstallBlocked && isClearDataBlocked
+                val baseProtected = isSafeBootBlocked && isFactoryResetBlocked && isAddUserBlocked && isAddManagedProfileBlocked && isUninstallBlocked && isClearDataBlocked && isAppsControlCompliant
                 if (isDateTimeLocked) {
                     baseProtected && isDateTimeBlocked && isTargetTz
                 } else {

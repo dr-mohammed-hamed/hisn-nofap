@@ -46,6 +46,7 @@ data class DevicePolicyBundle(
     val selfControlWaqfaAllowed: Boolean = true,
     val selfControlNewAppsAllowed: Boolean = false,
     val isDateTimeLocked: Boolean = false,
+    val isClearAppDataAllowed: Boolean = true,
     val timeZoneId: String = com.drmohammed.antiporn.curfew.CurfewConfig.getDefaultFallbackTimeZone(),
     val lastHeartbeat: Long = 0L,
     val breakoutStatus: String? = null,
@@ -112,6 +113,7 @@ data class DevicePolicyBundle(
             "selfControlWaqfaAllowed" to selfControlWaqfaAllowed,
             "selfControlNewAppsAllowed" to selfControlNewAppsAllowed,
             "isDateTimeLocked" to isDateTimeLocked,
+            "isClearAppDataAllowed" to isClearAppDataAllowed,
             "timeZoneId" to timeZoneId,
             "lastHeartbeat" to lastHeartbeat,
             "breakoutStatus" to breakoutStatus,
@@ -191,6 +193,7 @@ data class DevicePolicyBundle(
         json.put("selfControlWaqfaAllowed", selfControlWaqfaAllowed)
         json.put("selfControlNewAppsAllowed", selfControlNewAppsAllowed)
         json.put("isDateTimeLocked", isDateTimeLocked)
+        json.put("isClearAppDataAllowed", isClearAppDataAllowed)
         json.put("timeZoneId", timeZoneId)
         json.put("lastHeartbeat", lastHeartbeat)
         if (breakoutStatus != null) json.put("breakoutStatus", breakoutStatus)
@@ -259,6 +262,7 @@ data class DevicePolicyBundle(
             isSupervised = false,
             isSelfControlAllowed = true,
             isDateTimeLocked = false,
+            isClearAppDataAllowed = true,
             timeZoneId = com.drmohammed.antiporn.curfew.CurfewConfig.getDefaultFallbackTimeZone()
         )
 
@@ -330,6 +334,7 @@ data class DevicePolicyBundle(
             val selfControlWaqfaAllowed = (map["selfControlWaqfaAllowed"] as? Boolean) ?: true
             val selfControlNewAppsAllowed = (map["selfControlNewAppsAllowed"] as? Boolean) ?: false
             val isDateTimeLocked = (map["isDateTimeLocked"] as? Boolean) ?: false
+            val isClearAppDataAllowed = (map["isClearAppDataAllowed"] as? Boolean) ?: true
             val timeZoneId = (map["timeZoneId"] as? String)?.takeIf { it.isNotBlank() } ?: com.drmohammed.antiporn.curfew.CurfewConfig.DEFAULT_TIMEZONE_ID
             val lastHeartbeat = (map["lastHeartbeat"] as? Number)?.toLong() ?: 0L
             val breakoutStatus = (map["breakoutStatus"] as? String)?.takeIf { it.isNotBlank() }
@@ -390,6 +395,7 @@ data class DevicePolicyBundle(
                 selfControlWaqfaAllowed = selfControlWaqfaAllowed,
                 selfControlNewAppsAllowed = selfControlNewAppsAllowed,
                 isDateTimeLocked = isDateTimeLocked,
+                isClearAppDataAllowed = isClearAppDataAllowed,
                 timeZoneId = timeZoneId, lastHeartbeat = lastHeartbeat,
                 breakoutStatus = breakoutStatus,
                 breakoutRequestedAt = breakoutRequestedAt, breakoutUnlockAt = breakoutUnlockAt,
@@ -474,6 +480,7 @@ data class DevicePolicyBundle(
                 val selfControlWaqfaAllowed = json.optBoolean("selfControlWaqfaAllowed", true)
                 val selfControlNewAppsAllowed = json.optBoolean("selfControlNewAppsAllowed", false)
                 val isDateTimeLocked = json.optBoolean("isDateTimeLocked", false)
+                val isClearAppDataAllowed = json.optBoolean("isClearAppDataAllowed", true)
                 val timeZoneId = json.optNonBlankStringOrNull("timeZoneId") ?: com.drmohammed.antiporn.curfew.CurfewConfig.DEFAULT_TIMEZONE_ID
                 val lastHeartbeat = json.optLong("lastHeartbeat", 0L)
                 val breakoutStatus = json.optNonBlankStringOrNull("breakoutStatus")
@@ -552,6 +559,7 @@ data class DevicePolicyBundle(
                     selfControlWaqfaAllowed = selfControlWaqfaAllowed,
                     selfControlNewAppsAllowed = selfControlNewAppsAllowed,
                     isDateTimeLocked = isDateTimeLocked,
+                    isClearAppDataAllowed = isClearAppDataAllowed,
                     timeZoneId = timeZoneId, lastHeartbeat = lastHeartbeat,
                     breakoutStatus = breakoutStatus,
                     breakoutRequestedAt = breakoutRequestedAt, breakoutUnlockAt = breakoutUnlockAt,

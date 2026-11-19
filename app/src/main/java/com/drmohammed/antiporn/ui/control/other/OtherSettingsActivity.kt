@@ -44,6 +44,7 @@ class OtherSettingsActivity : AppCompatActivity() {
     private lateinit var initialPolicy: DevicePolicyBundle
 
     private var isDateTimeLocked = false
+    private var isClearAppDataAllowed = true
     private var selectedTimeZoneId = CurfewConfig.DEFAULT_TIMEZONE_ID
     private var isTotalInternetKillEnabled = false
 
@@ -54,6 +55,7 @@ class OtherSettingsActivity : AppCompatActivity() {
     private lateinit var actvTimezonePicker: AutoCompleteTextView
     private lateinit var btnAutoDetectTimezone: MaterialButton
     private lateinit var btnResetToMakkah: MaterialButton
+    private lateinit var switchAllowAppsDataClearing: MaterialSwitch
     private lateinit var switchTotalInternetKill: MaterialSwitch
     private lateinit var btnSaveOtherSettingsChanges: MaterialButton
 
@@ -120,6 +122,7 @@ class OtherSettingsActivity : AppCompatActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putBoolean(STATE_DATE_TIME_LOCKED, isDateTimeLocked)
+        outState.putBoolean(STATE_CLEAR_APP_DATA_ALLOWED, isClearAppDataAllowed)
         outState.putString(STATE_TIMEZONE_ID, selectedTimeZoneId)
         outState.putBoolean(STATE_TOTAL_INTERNET_KILL, isTotalInternetKillEnabled)
     }
@@ -127,11 +130,13 @@ class OtherSettingsActivity : AppCompatActivity() {
     private fun restoreDraftState(state: Bundle) {
         isProgrammaticUpdate = true
         isDateTimeLocked = state.getBoolean(STATE_DATE_TIME_LOCKED, isDateTimeLocked)
+        isClearAppDataAllowed = state.getBoolean(STATE_CLEAR_APP_DATA_ALLOWED, isClearAppDataAllowed)
         selectedTimeZoneId = state.getString(STATE_TIMEZONE_ID, selectedTimeZoneId)
             .ifBlank { CurfewConfig.DEFAULT_TIMEZONE_ID }
         isTotalInternetKillEnabled = state.getBoolean(STATE_TOTAL_INTERNET_KILL, isTotalInternetKillEnabled)
 
         switchLockDateTime.isChecked = isDateTimeLocked
+        switchAllowAppsDataClearing.isChecked = isClearAppDataAllowed
         switchTotalInternetKill.isChecked = isTotalInternetKillEnabled
         updateTimezoneViews()
         isProgrammaticUpdate = false
@@ -170,6 +175,8 @@ class OtherSettingsActivity : AppCompatActivity() {
         actvTimezonePicker = findViewById(R.id.actvTimezonePicker)
         btnAutoDetectTimezone = findViewById(R.id.btnAutoDetectTimezone)
         btnResetToMakkah = findViewById(R.id.btnResetToMakkah)
+        switchAllowAppsDataClearing = findViewById(R.id.switchAllowAppsDataClearing)
+        switchAllowAppsDataClearing.isSaveEnabled = false
         switchTotalInternetKill = findViewById(R.id.switchTotalInternetKill)
         switchTotalInternetKill.isSaveEnabled = false
         btnSaveOtherSettingsChanges = findViewById(R.id.btnSaveOtherSettingsChanges)
@@ -182,10 +189,12 @@ class OtherSettingsActivity : AppCompatActivity() {
     private fun bindInitialPolicy() {
         isProgrammaticUpdate = true
         isDateTimeLocked = initialPolicy.isDateTimeLocked
+        isClearAppDataAllowed = initialPolicy.isClearAppDataAllowed
         selectedTimeZoneId = initialPolicy.timeZoneId.ifBlank { CurfewConfig.DEFAULT_TIMEZONE_ID }
         isTotalInternetKillEnabled = initialPolicy.isInstantInternetKillEnabled
 
         switchLockDateTime.isChecked = isDateTimeLocked
+        switchAllowAppsDataClearing.isChecked = isClearAppDataAllowed
         switchTotalInternetKill.isChecked = isTotalInternetKillEnabled
         updateTimezoneViews()
         isProgrammaticUpdate = false
@@ -195,6 +204,12 @@ class OtherSettingsActivity : AppCompatActivity() {
         switchLockDateTime.setOnCheckedChangeListener { _, isChecked ->
             if (isProgrammaticUpdate) return@setOnCheckedChangeListener
             isDateTimeLocked = isChecked
+            updateSaveButtonState()
+        }
+
+        switchAllowAppsDataClearing.setOnCheckedChangeListener { _, isChecked ->
+            if (isProgrammaticUpdate) return@setOnCheckedChangeListener
+            isClearAppDataAllowed = isChecked
             updateSaveButtonState()
         }
 
@@ -277,6 +292,7 @@ class OtherSettingsActivity : AppCompatActivity() {
 
     private fun hasUnsavedChanges(): Boolean {
         return isDateTimeLocked != initialPolicy.isDateTimeLocked ||
+                isClearAppDataAllowed != initialPolicy.isClearAppDataAllowed ||
                 selectedTimeZoneId != initialPolicy.timeZoneId ||
                 isTotalInternetKillEnabled != initialPolicy.isInstantInternetKillEnabled
     }
@@ -295,6 +311,7 @@ class OtherSettingsActivity : AppCompatActivity() {
 
         val updatedPolicy = initialPolicy.copy(
             isDateTimeLocked = isDateTimeLocked,
+            isClearAppDataAllowed = isClearAppDataAllowed,
             timeZoneId = selectedTimeZoneId,
             isInstantInternetKillEnabled = isTotalInternetKillEnabled
         )
@@ -379,6 +396,7 @@ class OtherSettingsActivity : AppCompatActivity() {
         const val EXTRA_UPDATED_POLICY_JSON = "extra_updated_policy_json"
 
         private const val STATE_DATE_TIME_LOCKED = "state_date_time_locked"
+        private const val STATE_CLEAR_APP_DATA_ALLOWED = "state_clear_app_data_allowed"
         private const val STATE_TIMEZONE_ID = "state_timezone_id"
         private const val STATE_TOTAL_INTERNET_KILL = "state_total_internet_kill"
     }

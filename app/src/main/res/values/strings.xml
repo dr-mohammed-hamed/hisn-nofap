@@ -1307,6 +1307,8 @@
     <string name="other_settings_title">إعدادات إضافية</string>
     <string name="switch_lock_date_time">قفل التاريخ والوقت للهاتف</string>
     <string name="timezone_section_title">المنطقة الزمنية للحظر</string>
+    <string name="switch_allow_apps_data_clearing">السماح بمسح بيانات التطبيقات</string>
+    <string name="desc_allow_apps_data_clearing">يتيح مسح بيانات التطبيقات الأخرى وإدارتها، بينما يظل تطبيق حصن محمياً دائماً</string>
     <string name="switch_total_internet_kill">قطع الإنترنت بالكامل عن الجهاز</string>
     <string name="dialog_total_internet_kill_title">تنبيه شديد: قطع الإنترنت بالكامل</string>
     <string name="dialog_total_internet_kill_message">سيتم قطع الإنترنت نهائياً عن الهاتف (بيانات الهاتف والواي فاي) ولن يعود الإنترنت حتى تقوم بإلغاء تفعيل هذا الخيار من نفس هذه الشاشة. هل أنت متأكد؟</string>
