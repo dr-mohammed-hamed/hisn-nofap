@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- DeviceAdminService is enabled on Android 8.0+ (API 26+) for Device Owner persistent binding -->
+    <bool name="enable_device_admin_service">true</bool>
+</resources>

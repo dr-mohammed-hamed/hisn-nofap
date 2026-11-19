@@ -214,6 +214,12 @@ object DeviceOwnerPromoter {
         } catch (e: Exception) {
             Timber.tag(TAG).w(e, "Failed setting ACCESS_RESTRICTED_SETTINGS via ADB")
         }
+        try {
+            client.shell("dumpsys deviceidle whitelist +${appContext.packageName}")
+            Timber.tag(TAG).i("Whitelisted package in deviceidle via ADB")
+        } catch (e: Exception) {
+            Timber.tag(TAG).w(e, "Failed adding to deviceidle whitelist via ADB")
+        }
 
         val sdkVerStr = client.shell("getprop ro.build.version.sdk").stdoutText.trim()
         val sdkVersion = sdkVerStr.toIntOrNull() ?: android.os.Build.VERSION.SDK_INT

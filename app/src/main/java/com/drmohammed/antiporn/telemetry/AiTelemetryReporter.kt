@@ -309,6 +309,14 @@ object AiTelemetryReporter {
         sb.appendLine("| **RAM (Available / Total)** | `${env.availableMemoryMb} MB / ${env.totalMemoryMb} MB` |")
         sb.appendLine("| **Device Owner (DO) Active** | `${if (env.isDeviceOwner) "[YES]" else "[NO]"}` |")
         sb.appendLine("| **Device Admin (DA) Active** | `${if (env.isAdminActive) "[YES]" else "[NO]"}` |")
+        val isDeviceAdminBound = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            com.drmohammed.antiporn.HisnDeviceAdminService.isBound
+        } else {
+            false
+        }
+        val watchdogHost = com.drmohammed.antiporn.watchdog.ProtectionWatchdogRuntime.activeHost.name
+        val watchdogRunning = com.drmohammed.antiporn.watchdog.ProtectionWatchdogRuntime.isRunning
+        sb.appendLine("| **Active Watchdog Host** | `${watchdogHost} (Running=${watchdogRunning}, Bound=${isDeviceAdminBound})` |")
         sb.appendLine("| **Total Logged Events in Black Box** | `${if (totalEventsCount >= 0) totalEventsCount else "READ_ERROR"}` |")
         sb.appendLine()
 

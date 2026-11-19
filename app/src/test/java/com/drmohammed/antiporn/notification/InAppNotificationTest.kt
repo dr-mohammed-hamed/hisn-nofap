@@ -108,6 +108,7 @@ class InAppNotificationTest {
     @Test
     fun testNotificationRegistry_channelIdsAreDefined() {
         assertEquals("antiporn_watchdog", NotificationRegistry.CHANNEL_ID_WATCHDOG)
+        assertEquals("antiporn_watchdog_fallback", NotificationRegistry.CHANNEL_ID_WATCHDOG_FALLBACK)
         assertEquals("antiporn_curfew_vpn", NotificationRegistry.CHANNEL_ID_PROTECTION_VPN)
         assertEquals("antiporn_ai_channel", NotificationRegistry.CHANNEL_ID_AI)
         assertEquals("antiporn_protection_events", NotificationRegistry.CHANNEL_ID_PROTECTION_EVENTS)

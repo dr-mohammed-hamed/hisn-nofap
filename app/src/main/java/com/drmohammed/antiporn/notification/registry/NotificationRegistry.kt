@@ -13,8 +13,11 @@ object NotificationRegistry {
     // Notification Channel Identifiers
     // ==========================================
 
-    /** Low-priority persistent background watchdog channel. */
+    /** Legacy persistent background watchdog channel (deleted upon HisnDeviceAdminService binding). */
     const val CHANNEL_ID_WATCHDOG = "antiporn_watchdog"
+
+    /** Emergency fallback watchdog channel (LOW priority, created lazily only if FGS fallback triggers). */
+    const val CHANNEL_ID_WATCHDOG_FALLBACK = "antiporn_watchdog_fallback"
 
     /** Low-priority persistent protection and curfew VPN channel. */
     const val CHANNEL_ID_PROTECTION_VPN = "antiporn_curfew_vpn"

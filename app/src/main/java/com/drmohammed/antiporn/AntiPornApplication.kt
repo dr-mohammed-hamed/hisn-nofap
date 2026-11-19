@@ -11,6 +11,7 @@ import com.drmohammed.antiporn.ota.repository.OtaRepository
 import com.drmohammed.antiporn.telemetry.GlobalCrashHandler
 import com.drmohammed.antiporn.work.CloudSyncWorker
 import com.drmohammed.antiporn.work.OtaUpdateWorker
+import com.drmohammed.antiporn.work.WatchdogHealthWorker
 import com.google.android.material.color.DynamicColors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -131,6 +132,7 @@ class AntiPornApplication : Application(), Configuration.Provider {
         // Schedule periodic background workers with network constraints and ExistingPeriodicWorkPolicy.KEEP
         OtaUpdateWorker.schedule(this)
         CloudSyncWorker.schedule(this)
+        WatchdogHealthWorker.schedule(this)
 
         // Prune diagnostic events, in-app notifications, and obsolete OTA APKs in background (non-blocking)
         applicationScope.launch {

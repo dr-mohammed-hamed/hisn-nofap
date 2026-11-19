@@ -70,6 +70,11 @@ class AdminReceiver : DeviceAdminReceiver() {
     override fun onDisabled(context: Context, intent: Intent) {
         super.onDisabled(context, intent)
         Log.w(TAG, "Device Admin disabled.")
+        try {
+            com.drmohammed.antiporn.watchdog.WatchdogOrchestrator.stopAll(context.applicationContext)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping watchdog in onDisabled", e)
+        }
     }
 
     override fun onDisableRequested(context: Context, intent: Intent): CharSequence {

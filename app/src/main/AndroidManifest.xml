@@ -179,6 +179,18 @@
             </intent-filter>
         </receiver>
 
+        <!-- Official Android Enterprise Device Admin Service (API 26+) for zero-notification persistent foreground binding -->
+        <service
+            android:name=".HisnDeviceAdminService"
+            android:enabled="@bool/enable_device_admin_service"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN"
+            tools:targetApi="o">
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_SERVICE" />
+            </intent-filter>
+        </service>
+
         <service
             android:name=".DnsWatchdogService"
             android:exported="false"

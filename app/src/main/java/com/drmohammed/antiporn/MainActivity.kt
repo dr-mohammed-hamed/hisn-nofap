@@ -282,8 +282,8 @@ class MainActivity : AppCompatActivity(),
                             triggerEnforcement(showToast = false)
                         }
                     }
-                } else if (!DnsWatchdogService.isRunning && !com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isTeardownInProgress) {
-                    DnsWatchdogService.startService(this@MainActivity)
+                } else if (!com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isTeardownInProgress) {
+                    com.drmohammed.antiporn.watchdog.WatchdogOrchestrator.ensureActive(this@MainActivity)
                 }
             }
             com.drmohammed.antiporn.data.repository.ApprovalRepository.getInstance(this).syncZeroTrustBaselineAndReconcileAsync()

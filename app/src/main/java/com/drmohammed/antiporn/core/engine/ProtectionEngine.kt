@@ -6,6 +6,7 @@ import android.content.Context
 import android.util.Log
 import com.drmohammed.antiporn.AdminReceiver
 import com.drmohammed.antiporn.DnsWatchdogService
+import com.drmohammed.antiporn.watchdog.WatchdogOrchestrator
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.contract.ProtectionShield
 import com.drmohammed.antiporn.core.model.ShieldResult
@@ -321,11 +322,11 @@ object ProtectionEngine {
                 ProtectionTransitionGuard.markInitialEnforcementCompleted(appContext)
             }
 
-            if (!DnsWatchdogService.isRunning && !ProtectionTransitionGuard.isTeardownInProgress) {
+            if (!ProtectionTransitionGuard.isTeardownInProgress) {
                 try {
-                    DnsWatchdogService.startService(appContext)
+                    WatchdogOrchestrator.ensureActive(appContext)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to start watchdog service", e)
+                    Log.e(TAG, "Failed ensuring watchdog active in ProtectionEngine", e)
                 }
             }
 

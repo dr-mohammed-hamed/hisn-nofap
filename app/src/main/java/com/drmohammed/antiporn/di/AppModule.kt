@@ -30,6 +30,7 @@ import com.drmohammed.antiporn.ui.notification.NotificationCenterViewModel
 import com.drmohammed.antiporn.ui.settings.SettingsViewModel
 import com.drmohammed.antiporn.work.CloudSyncWorker
 import com.drmohammed.antiporn.work.OtaUpdateWorker
+import com.drmohammed.antiporn.work.WatchdogHealthWorker
 import org.koin.android.ext.koin.androidApplication
 import org.koin.android.ext.koin.androidContext
 import org.koin.androidx.viewmodel.dsl.viewModel
@@ -114,5 +115,8 @@ val appModule = module {
     }
     worker { (workerParams: WorkerParameters) ->
         CloudSyncWorker(androidContext(), workerParams, get(), get())
+    }
+    worker { (workerParams: WorkerParameters) ->
+        WatchdogHealthWorker(androidContext(), workerParams)
     }
 }

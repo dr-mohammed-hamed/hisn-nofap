@@ -22,6 +22,7 @@ import com.drmohammed.antiporn.ui.main.MainViewModel
 import com.drmohammed.antiporn.ui.settings.SettingsViewModel
 import com.drmohammed.antiporn.work.CloudSyncWorker
 import com.drmohammed.antiporn.work.OtaUpdateWorker
+import com.drmohammed.antiporn.work.WatchdogHealthWorker
 import com.drmohammed.antiporn.notification.manager.AppNotificationManager
 import com.drmohammed.antiporn.notification.repository.NotificationRepository
 import com.drmohammed.antiporn.ui.notification.NotificationCenterViewModel
@@ -102,7 +103,8 @@ class AppModuleTest : KoinTest {
             com.drmohammed.antiporn.accessibility.filter.TransientWindowEventFilter::class,
             com.drmohammed.antiporn.accountability.coordinator.GuardianSupervisionCoordinator::class,
             OtaUpdateWorker::class,
-            CloudSyncWorker::class
+            CloudSyncWorker::class,
+            WatchdogHealthWorker::class
         )
 
         for (expected in expectedTypes) {
@@ -111,7 +113,7 @@ class AppModuleTest : KoinTest {
                 registeredTypes.contains(expected)
             )
         }
-        assertEquals(33, registeredTypes.size)
+        assertEquals(34, registeredTypes.size)
     }
 
     @Test

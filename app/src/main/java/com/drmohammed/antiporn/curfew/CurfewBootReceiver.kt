@@ -60,6 +60,7 @@ class CurfewBootReceiver : BroadcastReceiver() {
                     ZeroTrustForegroundWatcher.syncWatcherState(appContext)
                     com.drmohammed.antiporn.waqfa.engine.WaqfaBootHandler.onBoot(appContext)
                     com.drmohammed.antiporn.pageshield.engine.PageShieldBootHandler.onBoot(appContext)
+                    com.drmohammed.antiporn.watchdog.WatchdogOrchestrator.ensureActive(appContext)
                 }
 
                 if (action == Intent.ACTION_TIME_CHANGED || action == Intent.ACTION_TIMEZONE_CHANGED) {

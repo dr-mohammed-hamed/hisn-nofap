@@ -73,6 +73,28 @@ class WorkManagerSchedulingTest {
     }
 
     @Test
+    fun testWatchdogHealthWorkerConstantsAndConstraints() {
+        assertEquals("antiporn_watchdog_health_worker", WatchdogHealthWorker.WORK_NAME)
+        assertEquals(30L, WatchdogHealthWorker.REPEAT_INTERVAL_MINUTES)
+
+        val constraints = Constraints.NONE
+        assertEquals(NetworkType.NOT_REQUIRED, constraints.requiredNetworkType)
+        org.junit.Assert.assertFalse(constraints.requiresBatteryNotLow())
+        org.junit.Assert.assertFalse(constraints.requiresCharging())
+        org.junit.Assert.assertFalse(constraints.requiresDeviceIdle())
+
+        val request = PeriodicWorkRequestBuilder<WatchdogHealthWorker>(
+            WatchdogHealthWorker.REPEAT_INTERVAL_MINUTES,
+            TimeUnit.MINUTES
+        )
+            .setConstraints(constraints)
+            .build()
+
+        assertNotNull(request.id)
+        assertEquals(NetworkType.NOT_REQUIRED, request.workSpec.constraints.requiredNetworkType)
+    }
+
+    @Test
     fun testPeriodicPolicyKeepInvariant() {
         // Enforcing that periodic background workers always use ExistingPeriodicWorkPolicy.KEEP
         // to prevent thrashing or duplicate scheduling on cold boot

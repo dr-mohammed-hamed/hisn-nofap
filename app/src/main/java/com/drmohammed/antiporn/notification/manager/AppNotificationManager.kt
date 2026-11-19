@@ -64,17 +64,10 @@ class AppNotificationManager(
 
         val manager = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
 
-        // 1. Watchdog Channel (MIN)
-        val channelWatchdog = NotificationChannel(
-            NotificationRegistry.CHANNEL_ID_WATCHDOG,
-            appContext.getString(R.string.watchdog_notification_title),
-            NotificationManager.IMPORTANCE_MIN
-        ).apply {
-            description = appContext.getString(R.string.watchdog_notification_desc)
-            setShowBadge(false)
-        }
+        // Note: Watchdog Fallback Channel is created LAZILY in DnsWatchdogService strictly
+        // if emergency fallback triggers, avoiding persistent notification channel leakage.
 
-        // 2. Curfew / VPN Ongoing Channel (LOW)
+        // 1. Curfew / VPN Ongoing Channel (LOW)
         val channelVpn = NotificationChannel(
             NotificationRegistry.CHANNEL_ID_PROTECTION_VPN,
             appContext.getString(R.string.protection_vpn_channel_name),
@@ -147,9 +140,9 @@ class AppNotificationManager(
         }
 
         manager.createNotificationChannels(
-            listOf(channelWatchdog, channelVpn, channelAi, channelOta, channelEvents, channelPairing, channelCritical, channelWaqfa)
+            listOf(channelVpn, channelAi, channelOta, channelEvents, channelPairing, channelCritical, channelWaqfa)
         )
-        Log.i(TAG, "All 8 NotificationChannels created/verified centrally via NotificationRegistry")
+        Log.i(TAG, "All 7 NotificationChannels created/verified centrally via NotificationRegistry")
     }
 
     /**

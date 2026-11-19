@@ -4,6 +4,7 @@
 -keep class com.drmohammed.antiporn.curfew.CurfewAlarmReceiver { *; }
 -keep class com.drmohammed.antiporn.curfew.CurfewBootReceiver { *; }
 -keep class com.drmohammed.antiporn.DnsWatchdogService { *; }
+-keep class com.drmohammed.antiporn.HisnDeviceAdminService { *; }
 
 # Keep AppPolicyRegistry and models
 -keep class com.drmohammed.antiporn.core.policy.** { *; }
