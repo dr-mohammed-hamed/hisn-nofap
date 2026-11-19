@@ -111,24 +111,28 @@ Developed by **Dr. Mohammed Hamed** (physician and systems engineer), this proje
 <div align="center">
 
 <a href="https://paypal.me/mh22887565" target="_blank">
-  <img src="https://img.shields.io/badge/PayPal-سهم_الوقف_الدولي-00457C?style=for-the-badge&logo=paypal&logoColor=white" alt="PayPal Waqf Support" />
+  <img src="https://img.shields.io/badge/PayPal-Sponsor_Hisn-00457C?style=for-the-badge&logo=paypal&logoColor=white" alt="PayPal Waqf Support" />
 </a>
 &nbsp;&nbsp;
 <a href="https://ko-fi.com/dr_mohammed_hamed" target="_blank">
-  <img src="https://img.shields.io/badge/Ko--fi-دعم_المنظومة_عبر_كوفي-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white" alt="Ko-fi Support" />
+  <img src="https://img.shields.io/badge/Ko--fi-Support_Waqf-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white" alt="Ko-fi Support" />
 </a>
 &nbsp;&nbsp;
 <a href="https://ipn.eg/S/mh22887565/instapay/4zd31u" target="_blank">
-  <img src="https://img.shields.io/badge/InstaPay-سهم_الوقف_داخل_مصر-0A6C74?style=for-the-badge&logo=cashapp&logoColor=white" alt="InstaPay Waqf Support" />
+  <img src="https://img.shields.io/badge/InstaPay-Egypt_Direct-0A6C74?style=for-the-badge&logo=cashapp&logoColor=white" alt="InstaPay Waqf Support" />
 </a>
 
-<br/><br/>
+</div>
+
+<br/>
+
+<div dir="rtl">
 
 | قنوات المساهمة ورعاية الوقف | آلية التحويل والوصول |
 | :--- | :--- |
-| **🌐 دولياً (الخليج وكافة الدول) عبر PayPal:** | 🔗 **[paypal.me/mh22887565](https://paypal.me/mh22887565)** (دعم فوري ببطاقات الائتمان والحسابات البنكية) |
-| **☕ دولياً عبر منصة Ko-fi:** | 🔗 **[ko-fi.com/dr_mohammed_hamed](https://ko-fi.com/dr_mohammed_hamed)** (مساهمة لمرة واحدة أو اشتراك دوري مستمر) |
-| **🇪🇬 محلياً (داخل مصر) عبر تطبيق InstaPay:** | 🔗 **[رابط التحويل الفوري المباشر (ipn.eg)](https://ipn.eg/S/mh22887565/instapay/4zd31u)** أو عنوان الدفع: `mh22887565` |
+| **🌐 عبر منصة PayPal (الخليج وكافة الدول)** | 🔗 **[paypal.me/mh22887565](https://paypal.me/mh22887565)** — دعم فوري ببطاقات الائتمان والحسابات البنكية الدولية |
+| **☕ عبر منصة Ko-fi (دولي)** | 🔗 **[ko-fi.com/dr_mohammed_hamed](https://ko-fi.com/dr_mohammed_hamed)** — مساهمة لمرة واحدة أو كفالة دورية مستمرة |
+| **🇪🇬 عبر تطبيق InstaPay (داخل مصر)** | 🔗 **[رابط التحويل الفوري المباشر (ipn.eg)](https://ipn.eg/S/mh22887565/instapay/4zd31u)** — أو عنوان الدفع اللحظي: `mh22887565` |
 
 </div>
 
