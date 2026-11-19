@@ -1,11 +1,11 @@
 {
-  "versionCode": 29,
-  "versionName": "1.90",
+  "versionCode": 30,
+  "versionName": "1.91",
   "minSupportedVersion": 1,
   "apkFileName": "antiporn-release.apk",
   "downloadUrl": "https://pub-e568dc85c0ec4f2fb3d1b90e310b4310.r2.dev/antiporn-release.apk",
-  "fileSizeBytes": 35701912,
+  "fileSizeBytes": 35714200,
   "sha256CertificateChecksum": "Cxi7DKn3ddcJXYIuDNXdlKN84EuKu8Bf0L0SkSPCOMk",
-  "releaseNotes": "إصدار 1.90 (كود البناء 29): إضافة خيار التحكم في مسح بيانات التطبيقات من الإعدادات الإضافية مع استمرار حماية تطبيق حصن ضد مسح البيانات أو إلغاء التثبيت، وتطبيق معايير Check-Before-Write الصارمة على دروع الحماية لتحسين الأداء واستقرار النظام.",
+  "releaseNotes": "إصدار 1.91 (كود البناء 30): تحسين استقرار خدمة الحراسة التلقائية Zero-Notification DeviceAdminService مع آلية التعافي الذاتي، وتحديث قنوات الوقف والدعم الخيري الدولية وتحسين التوافق البصري.",
   "releaseDate": "2026-11-19"
 }
