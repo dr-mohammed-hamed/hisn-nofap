@@ -22,6 +22,7 @@
   <a href="docs/APP_POLICY_REGISTRY.md"><img src="https://img.shields.io/badge/Security-Zero--Trust%20DO-red.svg?style=for-the-badge&logo=securityscorecard" alt="Security: Zero-Trust DO" /></a>
   <a href="docs/GENERATIONAL_ANTIPORN_ROADMAP.md"><img src="https://img.shields.io/badge/AI-100%25%20On--Device%20(Zero--Cloud)-purple.svg?style=for-the-badge&logo=tensorflow" alt="Edge AI" /></a>
   <a href="docs/OTA_DISTRIBUTION.md"><img src="https://img.shields.io/badge/OTA-Cloudflare%20R2%20%7C%20v2%2Fv3%20Lineage-orange.svg?style=for-the-badge&logo=cloudflare" alt="OTA Distribution" /></a>
+  <a href="#-support--continuous-development"><img src="https://img.shields.io/badge/Sponsor-💖%20Support%20Project-ff69b4.svg?style=for-the-badge&logo=githubsponsors" alt="Sponsor: Support Project" /></a>
 </p>
 
 ---
@@ -39,7 +40,8 @@
 9. [Verified Engineering Metrics & Test Suites](#-verified-engineering-metrics--test-suites)
 10. [Architectural Documentation Portal](#-architectural-documentation-portal)
 11. [Local Build, CI/CD Pipeline & Zero-Leak Gate](#-local-build-cicd-pipeline--zero-leak-gate)
-12. [Contributing, Responsible Disclosure & License](#-contributing-responsible-disclosure--license)
+12. [Support & Continuous Development](#-support--continuous-development)
+13. [Contributing, Responsible Disclosure & License](#-contributing-responsible-disclosure--license)
 
 ---
 
@@ -358,6 +360,26 @@ Comprehensive documentation is indexed across [`docs/`](docs/README.md) and [`sc
 
 ### CI Zero-Leak Gate
 Our GitHub Actions pipeline ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) enforces strict constitutional checks preventing any pull request from merging if release keystores (`antiporn-release.jks`) or environment properties (`local.properties`) are tracked.
+
+---
+
+## 💖 Support & Continuous Development
+
+> This project is a non-profit, open-source digital defense shield dedicated as an ongoing charitable endowment (Waqf) for protecting families and youth from harmful digital content.
+> 
+> *If you find this project valuable and wish to contribute to its continuous development, cloud infrastructure, and security research:*
+
+<div align="center">
+
+<a href="https://ipn.eg/S/mh22887565/instapay/4zd31u">
+  <img src="https://img.shields.io/badge/Support-InstaPay%20(Egypt)-0A6C74?style=for-the-badge&logo=cashapp&logoColor=white" alt="Support via InstaPay" />
+</a>
+
+<br/><br/>
+
+👉 **[Direct Support via InstaPay (ipn.eg)](https://ipn.eg/S/mh22887565/instapay/4zd31u)**
+
+</div>
 
 ---
 
