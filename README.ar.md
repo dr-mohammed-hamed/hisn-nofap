@@ -102,15 +102,25 @@
 
 <div align="center">
 
-<a href="https://ipn.eg/S/mh22887565/instapay/4zd31u">
-  <img src="https://img.shields.io/badge/InstaPay-سهم_رعاية_الوقف_عبر_انستاباي-0A6C74?style=for-the-badge&logo=cashapp&logoColor=white" alt="InstaPay Waqf Support" />
+<a href="https://paypal.me/mh22887565" target="_blank">
+  <img src="https://img.shields.io/badge/PayPal-سهم_الوقف_الدولي-00457C?style=for-the-badge&logo=paypal&logoColor=white" alt="PayPal Waqf Support" />
+</a>
+&nbsp;&nbsp;
+<a href="https://ko-fi.com/dr_mohammed_hamed" target="_blank">
+  <img src="https://img.shields.io/badge/Ko--fi-دعم_المنظومة_عبر_كوفي-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white" alt="Ko-fi Support" />
+</a>
+&nbsp;&nbsp;
+<a href="https://ipn.eg/S/mh22887565/instapay/4zd31u" target="_blank">
+  <img src="https://img.shields.io/badge/InstaPay-سهم_الوقف_داخل_مصر-0A6C74?style=for-the-badge&logo=cashapp&logoColor=white" alt="InstaPay Waqf Support" />
 </a>
 
 <br/><br/>
 
-**💳 التحويل المباشر عبر تطبيق InstaPay (داخل مصر):**  
-🔗 **[انقر هنا للتحويل الفوري عبر رابط InstaPay المباشر (ipn.eg)](https://ipn.eg/S/mh22887565/instapay/4zd31u)**  
-*أو عبر عنوان الدفع اللحظي (IPA / Username):* `mh22887565`
+| قنوات المساهمة ورعاية الوقف | آلية التحويل والوصول |
+| :--- | :--- |
+| **🌐 دولياً (الخليج وكافة الدول) عبر PayPal:** | 🔗 **[paypal.me/mh22887565](https://paypal.me/mh22887565)** (دعم فوري ببطاقات الائتمان والحسابات البنكية) |
+| **☕ دولياً عبر منصة Ko-fi:** | 🔗 **[ko-fi.com/dr_mohammed_hamed](https://ko-fi.com/dr_mohammed_hamed)** (مساهمة لمرة واحدة أو اشتراك دوري مستمر) |
+| **🇪🇬 محلياً (داخل مصر) عبر تطبيق InstaPay:** | 🔗 **[رابط التحويل الفوري المباشر (ipn.eg)](https://ipn.eg/S/mh22887565/instapay/4zd31u)** أو عنوان الدفع: `mh22887565` |
 
 </div>
 

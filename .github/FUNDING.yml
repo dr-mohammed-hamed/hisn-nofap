@@ -1,3 +1,5 @@
-# These are supported funding model platforms
-
-custom: ['https://ipn.eg/S/mh22887565/instapay/4zd31u']
+# GitHub Sponsors & Project Funding configuration
+ko_fi: dr_mohammed_hamed
+custom:
+  - 'https://paypal.me/mh22887565'
+  - 'https://ipn.eg/S/mh22887565/instapay/4zd31u'
