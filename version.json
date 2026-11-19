@@ -1,11 +1,11 @@
 {
-  "versionCode": 28,
-  "versionName": "1.89",
+  "versionCode": 29,
+  "versionName": "1.90",
   "minSupportedVersion": 1,
   "apkFileName": "antiporn-release.apk",
   "downloadUrl": "https://pub-e568dc85c0ec4f2fb3d1b90e310b4310.r2.dev/antiporn-release.apk",
-  "fileSizeBytes": 35669144,
+  "fileSizeBytes": 35701912,
   "sha256CertificateChecksum": "Cxi7DKn3ddcJXYIuDNXdlKN84EuKu8Bf0L0SkSPCOMk",
-  "releaseNotes": "إصدار 1.89 (كود البناء 28): حل جذري لمشكلة تجمد الفريمات واستنزاف المعالج عبر كسر حلقة المزامنة العكسية لموافقات التطبيقات أثناء حظر التجوال، وتفعيل التخزين المؤقت الذكي لفحص حزم النظام، وتحسين استقرار التطبيق والأداء العام.",
+  "releaseNotes": "إصدار 1.90 (كود البناء 29): إضافة خيار التحكم في مسح بيانات التطبيقات من الإعدادات الإضافية مع استمرار حماية تطبيق حصن ضد مسح البيانات أو إلغاء التثبيت، وتطبيق معايير Check-Before-Write الصارمة على دروع الحماية لتحسين الأداء واستقرار النظام.",
   "releaseDate": "2026-11-19"
 }
