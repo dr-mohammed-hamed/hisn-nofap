@@ -100,6 +100,7 @@ class AppModuleTest : KoinTest {
             com.drmohammed.antiporn.pageshield.ui.PageShieldSettingsViewModel::class,
             com.drmohammed.antiporn.accessibility.bus.ForegroundAppEventBus::class,
             com.drmohammed.antiporn.accessibility.filter.TransientWindowEventFilter::class,
+            com.drmohammed.antiporn.accountability.coordinator.GuardianSupervisionCoordinator::class,
             OtaUpdateWorker::class,
             CloudSyncWorker::class
         )
@@ -110,7 +111,7 @@ class AppModuleTest : KoinTest {
                 registeredTypes.contains(expected)
             )
         }
-        assertEquals(32, registeredTypes.size)
+        assertEquals(33, registeredTypes.size)
     }
 
     @Test

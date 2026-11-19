@@ -103,6 +103,9 @@ class AntiPornApplication : Application(), Configuration.Provider {
         // Initialize central Notification Channels
         com.drmohammed.antiporn.notification.manager.AppNotificationManager.getInstance(this).createNotificationChannels()
 
+        // Start Guardian supervision coordinator to monitor ward approvals and alerts in real-time
+        com.drmohammed.antiporn.accountability.coordinator.GuardianSupervisionCoordinator.getInstance(this).startSupervising()
+
         // Register Page Shield Accessibility Hook
         com.drmohammed.antiporn.pageshield.engine.PageShieldAccessibilityHook.getInstance()
 

@@ -53,6 +53,16 @@ class CloudSyncWorker(
             // 3. Reconcile supervision status if desync occurred
             accountabilityRepository.checkAndSelfHealSupervisionStatus()
 
+            // 4. Reconcile Guardian Supervision listeners for active wards
+            try {
+                com.drmohammed.antiporn.accountability.coordinator.GuardianSupervisionCoordinator
+                    .getInstance(applicationContext).reconcileWardListeners(
+                        accountabilityRepository.getWards()
+                    )
+            } catch (e: Exception) {
+                Timber.w(e, "Guardian coordinator reconciliation error in CloudSyncWorker")
+            }
+
             val duration = TrustedTimeProvider.currentTimeMillis(applicationContext) - startTime
             val isSuccess = heartbeatRes.isSuccess && partnerRes.isSuccess
 

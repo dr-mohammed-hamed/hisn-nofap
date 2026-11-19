@@ -82,6 +82,16 @@ val appModule = module {
             AppNotificationManager.setInstance(it)
         }
     }
+    single {
+        com.drmohammed.antiporn.accountability.coordinator.GuardianSupervisionCoordinator(
+            androidContext(),
+            get(),
+            get(),
+            get()
+        ).also {
+            com.drmohammed.antiporn.accountability.coordinator.GuardianSupervisionCoordinator.setInstance(it)
+        }
+    }
     single { com.drmohammed.antiporn.accessibility.bus.ForegroundAppEventBus.getInstance(androidContext()) }
     single { com.drmohammed.antiporn.accessibility.filter.TransientWindowEventFilter.getInstance(androidContext()) }
 

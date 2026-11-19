@@ -336,6 +336,11 @@ class GuardianApprovalsHubActivity : AppCompatActivity() {
                 if (isFinishing || isDestroyed) return@withContext
                 onComplete(success)
                 if (success) {
+                    val systemNotifId = com.drmohammed.antiporn.accountability.coordinator.GuardianSupervisionCoordinator
+                        .computeSystemNotificationId(item.wardId, item.packageName)
+                    com.drmohammed.antiporn.notification.manager.AppNotificationManager.getInstance(applicationContext)
+                        .cancelSystemNotification(systemNotifId)
+
                     val msg = if (approve) {
                         getString(R.string.toast_approval_granted)
                     } else {

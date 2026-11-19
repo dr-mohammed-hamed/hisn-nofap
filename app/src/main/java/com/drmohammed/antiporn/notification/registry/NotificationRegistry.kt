@@ -90,6 +90,9 @@ object NotificationRegistry {
     /** Emergency breakout request notification ID. */
     const val EVENT_BREAKOUT_REQUEST_ID = 8004
 
+    /** Ward self-control policy modification alert notification ID. */
+    const val EVENT_SELF_CONTROL_ALERT_ID = 8500
+
     /** Modesty AI violation detection notification ID. */
     const val EVENT_AI_DETECTION_ID = 3002
 

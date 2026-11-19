@@ -76,6 +76,8 @@ class GuardianApprovalsViewBinder(
         if (wardId.isNotBlank()) {
             for ((pkg, name) in items) {
                 try {
+                    val notifId = com.drmohammed.antiporn.accountability.coordinator.GuardianSupervisionCoordinator
+                        .computeSystemNotificationId(wardId, pkg)
                     AppNotificationManager.getInstance(context).postEventNotification(
                         category = NotificationCategory.APPROVALS,
                         title = context.getString(R.string.notif_ward_approval_req_title),
@@ -84,7 +86,7 @@ class GuardianApprovalsViewBinder(
                         cooldownMs = 60 * 60 * 1000L,
                         actionType = NotificationActionType.OPEN_APPROVALS_HUB,
                         actionPayload = "$wardId|$pkg",
-                        systemNotificationId = NotificationRegistry.EVENT_WARD_REQUEST_ID,
+                        systemNotificationId = notifId,
                         channelId = NotificationRegistry.CHANNEL_ID_PROTECTION_EVENTS,
                         postSystemNotification = false,
                         importance = 2
@@ -227,6 +229,10 @@ class GuardianApprovalsViewBinder(
                 val success = approvalRepo.resolveWardApproval(wardId, packageName, approve, guardianName)
                 if (activity.isFinishing || activity.isDestroyed) return@launch
                 if (success) {
+                    val notifId = com.drmohammed.antiporn.accountability.coordinator.GuardianSupervisionCoordinator
+                        .computeSystemNotificationId(wardId, packageName)
+                    AppNotificationManager.getInstance(activity.applicationContext).cancelSystemNotification(notifId)
+
                     Toast.makeText(
                         activity,
                         if (approve) activity.getString(R.string.toast_approval_granted) else activity.getString(R.string.toast_approval_rejected),
