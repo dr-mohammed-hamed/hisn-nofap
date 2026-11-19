@@ -366,8 +366,7 @@ class DnsWatchdogService : Service() {
                     return
                 }
                 DnsFastHealOutcome.HEALED_DIRECT -> {
-                    Log.i(
-                        TAG,
+                    Timber.tag(TAG).i(
                         "DNS fast-path healed silently in ${result.latencyMs}ms " +
                             "(wasMode=${result.observedMode}, wasHost=${result.observedHost}, restored=${result.expectedHost}, uri=$uri)"
                     )
@@ -383,8 +382,7 @@ class DnsWatchdogService : Service() {
                 }
                 DnsFastHealOutcome.PERMISSION_DENIED_NEEDS_DPM,
                 DnsFastHealOutcome.FAILED_NEEDS_DPM -> {
-                    Log.w(
-                        TAG,
+                    Timber.tag(TAG).w(
                         "DNS fast-path direct write unavailable (${result.outcome}); escalating immediately to DPM fast-path (uri=$uri)"
                     )
                     BlackBoxRecorder.record(
@@ -401,7 +399,7 @@ class DnsWatchdogService : Service() {
                 DnsFastHealOutcome.SKIPPED_ACTIVE_TRANSITION,
                 DnsFastHealOutcome.SKIPPED_VPN_EXPECTED -> {
                     val delayMs = if (ProtectionTransitionGuard.isWithinSettleWindow()) 3500L else DEBOUNCE_DELAY_MS
-                    Log.d(TAG, "DNS change deferred (${result.outcome}, uri=$uri). Scheduling post-transition audit in ${delayMs}ms...")
+                    Timber.tag(TAG).d("DNS change deferred (${result.outcome}, uri=$uri). Scheduling post-transition audit in ${delayMs}ms...")
                     debounceHandler.removeCallbacks(checkRunnable)
                     debounceHandler.postDelayed(checkRunnable, delayMs)
                 }
@@ -411,7 +409,7 @@ class DnsWatchdogService : Service() {
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error handling immediate DNS change (uri=$uri)", e)
+            Timber.tag(TAG).e(e, "Error handling immediate DNS change (uri=$uri)")
         }
     }
 
@@ -429,7 +427,7 @@ class DnsWatchdogService : Service() {
             try {
                 thread.quitSafely()
             } catch (e: Exception) {
-                Log.w(TAG, "Failed to quit DNS observer HandlerThread", e)
+                Timber.tag(TAG).w(e, "Failed to quit DNS observer HandlerThread")
             }
             dnsObserverThread = null
         }

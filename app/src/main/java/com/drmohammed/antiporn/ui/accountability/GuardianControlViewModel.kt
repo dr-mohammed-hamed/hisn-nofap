@@ -203,7 +203,6 @@ class GuardianControlViewModel(
                 Timber.tag(TAG).e(e, "Error loading ward policy for ${state.wardId}")
                 _uiState.update { it.copy(isLoading = false, isOffline = true) }
             }
-            }
         }
     }
 
@@ -408,19 +407,19 @@ class GuardianControlViewModel(
                                 version = updated.version
                             )
                         }
-                        _events.emit(GuardianControlEvent.ShowToastRes(R.string.toast_guardian_policy_saved))
+                        _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_guardian_policy_saved))
                     } else {
                         _uiState.update {
                             it.copy(isScreenAiEnabledGlobally = previousEnabled)
                         }
-                        _events.emit(GuardianControlEvent.ShowToastRes(R.string.toast_guardian_policy_save_failed))
+                        _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_guardian_policy_save_failed))
                     }
                 }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 Log.e(TAG, "Error updating Vision Guard AI state immediately", e)
                 _uiState.update { it.copy(isScreenAiEnabledGlobally = previousEnabled) }
-                _events.emit(GuardianControlEvent.ShowToastRes(R.string.toast_guardian_policy_save_failed))
+                _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_guardian_policy_save_failed))
             } finally {
                 _uiState.update { it.copy(isSaving = false) }
             }
