@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.SystemClock
 import android.provider.AlarmClock
 import android.provider.ContactsContract
 import android.provider.MediaStore
@@ -24,6 +25,29 @@ object CurfewAppResolver {
 
     private const val TAG = "AntiPorn_CurfewResolver"
     private val TOKEN_DELIMITER_REGEX = Regex("[\\s_.,;:!?/()\\[\\]\\-]+")
+
+    @Volatile
+    private var cachedCoreCriticalPackages: Set<String>? = null
+    @Volatile
+    private var lastCoreCriticalCacheMs: Long = 0L
+    private const val CORE_CRITICAL_CACHE_TTL_MS = 60_000L // 60s TTL
+
+    @Volatile
+    private var cachedImmunePackages: Set<String>? = null
+    @Volatile
+    private var lastImmuneCacheMs: Long = 0L
+    private const val IMMUNE_CACHE_TTL_MS = 30_000L // 30s TTL
+
+    /**
+     * Invalidates in-memory caches when packages change or policy updates.
+     */
+    @Synchronized
+    fun invalidateCache() {
+        cachedCoreCriticalPackages = null
+        cachedImmunePackages = null
+        lastCoreCriticalCacheMs = 0L
+        lastImmuneCacheMs = 0L
+    }
 
     /**
      * Dynamically identifies if an installed application is a Quran, Islamic, Prayer, or Athan app
@@ -121,7 +145,13 @@ object CurfewAppResolver {
     /**
      * Resolves all system immune packages dynamically (keyboards, launcher, dialer, camera, SMS, contacts, clock, and whitelisted/exempt packages).
      */
-    fun resolveImmunePackages(context: Context): Set<String> {
+    fun resolveImmunePackages(context: Context, forceRefresh: Boolean = false): Set<String> {
+        val now = SystemClock.elapsedRealtime()
+        val cached = cachedImmunePackages
+        if (!forceRefresh && cached != null && (now - lastImmuneCacheMs < IMMUNE_CACHE_TTL_MS)) {
+            return cached
+        }
+
         val immune = mutableSetOf<String>()
         val pm = context.packageManager
 
@@ -273,7 +303,10 @@ object CurfewAppResolver {
         immune.removeAll(CurfewConfig.KNOWN_APP_STORES)
         immune.removeAll(CurfewConfig.CURFEW_SEARCH_APPS)
 
-        return immune
+        val result = immune.toSet()
+        cachedImmunePackages = result
+        lastImmuneCacheMs = SystemClock.elapsedRealtime()
+        return result
     }
 
     /**
@@ -345,7 +378,13 @@ object CurfewAppResolver {
      * 6. Default Telecom / Phone Dialer
      * 7. Default SMS package
      */
-    fun resolveCoreSystemCriticalPackages(context: Context): Set<String> {
+    fun resolveCoreSystemCriticalPackages(context: Context, forceRefresh: Boolean = false): Set<String> {
+        val now = SystemClock.elapsedRealtime()
+        val cached = cachedCoreCriticalPackages
+        if (!forceRefresh && cached != null && (now - lastCoreCriticalCacheMs < CORE_CRITICAL_CACHE_TTL_MS)) {
+            return cached
+        }
+
         val critical = mutableSetOf<String>()
         val pm = context.packageManager
 
@@ -396,7 +435,10 @@ object CurfewAppResolver {
             Log.w(TAG, "Error resolving SMS for critical whitelist", e)
         }
 
-        return critical
+        val result = critical.toSet()
+        cachedCoreCriticalPackages = result
+        lastCoreCriticalCacheMs = SystemClock.elapsedRealtime()
+        return result
     }
 
     /**

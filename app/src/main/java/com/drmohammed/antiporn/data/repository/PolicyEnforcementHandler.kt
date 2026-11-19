@@ -128,6 +128,7 @@ internal class PolicyEnforcementHandler(
                 val blacklistChanged = bundle.customBlacklistPackages != effectivePreviousPolicy.customBlacklistPackages
                 val whitelistChanged = bundle.customCurfewWhitelistPackages != effectivePreviousPolicy.customCurfewWhitelistPackages
                 if (blacklistChanged || whitelistChanged) {
+                    CurfewAppResolver.invalidateCache()
                     AppInventoryManager.getInstance(appContext).syncInventoryToCloudAsync(force = true)
                 } else {
                     AppInventoryManager.getInstance(appContext).syncInventoryToCloud()

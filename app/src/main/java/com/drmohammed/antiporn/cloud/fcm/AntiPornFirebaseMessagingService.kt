@@ -87,10 +87,18 @@ class AntiPornFirebaseMessagingService : FirebaseMessagingService() {
                 val actuallyApproved = isApproved && !isPermanentlyBlocked
 
                 if (actuallyApproved) {
-                    ApprovalRepository.getInstance(applicationContext).unsuspendAndApprove(packageName, decidedBy)
+                    ApprovalRepository.getInstance(applicationContext).unsuspendAndApprove(
+                        packageName = packageName,
+                        decidedBy = decidedBy,
+                        syncToCloud = false
+                    )
                 } else {
                     // Stays suspended and record rejection in local SQLite
-                    ApprovalRepository.getInstance(applicationContext).recordRejection(packageName, decidedBy)
+                    ApprovalRepository.getInstance(applicationContext).recordRejection(
+                        packageName = packageName,
+                        decidedBy = decidedBy,
+                        syncToCloud = false
+                    )
                     Log.i(TAG, "Application $packageName rejection recorded from $decidedBy")
                 }
             }

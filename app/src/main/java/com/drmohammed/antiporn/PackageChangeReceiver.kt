@@ -61,6 +61,7 @@ object PackageChangeHandler {
         handledAddEvents[packageName] = now
 
         Timber.tag(TAG).w("[PACKAGE_ADDED] New package detected: $packageName (source: $source, isReplacing: $isReplacing)")
+        CurfewAppResolver.invalidateCache()
 
         val appContext = context.applicationContext
         try {
@@ -210,6 +211,7 @@ object PackageChangeHandler {
         handledRemoveEvents[packageName] = now
 
         Timber.tag(TAG).i("[PACKAGE_REMOVED] Package removed: $packageName (source: $source)")
+        CurfewAppResolver.invalidateCache()
 
         val appContext = context.applicationContext
         try {

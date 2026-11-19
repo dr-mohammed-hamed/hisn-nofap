@@ -1,11 +1,11 @@
 {
-  "versionCode": 25,
-  "versionName": "1.86",
+  "versionCode": 28,
+  "versionName": "1.89",
   "minSupportedVersion": 1,
   "apkFileName": "antiporn-release.apk",
   "downloadUrl": "https://pub-e568dc85c0ec4f2fb3d1b90e310b4310.r2.dev/antiporn-release.apk",
   "fileSizeBytes": 35669144,
   "sha256CertificateChecksum": "Cxi7DKn3ddcJXYIuDNXdlKN84EuKu8Bf0L0SkSPCOMk",
-  "releaseNotes": "إصدار 1.86 (كود البناء 25): منسّق ذكي لخدمة إمكانية الوصول مع التفعيل حسب الحاجة، وتأمين شامل للدخول البنكي الآمن (إنستاباي) بالتوقيت الموثوق والاستعادة بعد إعادة التشغيل وتوافق أندرويد 12–16، وتحسين استقرار حارس غض البصر ودرع الصفحات وتنبيهات المشرف وتباين ألوان Material 3.",
-  "releaseDate": "2026-11-18"
+  "releaseNotes": "إصدار 1.89 (كود البناء 28): حل جذري لمشكلة تجمد الفريمات واستنزاف المعالج عبر كسر حلقة المزامنة العكسية لموافقات التطبيقات أثناء حظر التجوال، وتفعيل التخزين المؤقت الذكي لفحص حزم النظام، وتحسين استقرار التطبيق والأداء العام.",
+  "releaseDate": "2026-11-19"
 }

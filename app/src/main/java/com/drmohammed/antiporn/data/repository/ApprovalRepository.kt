@@ -281,7 +281,12 @@ class ApprovalRepository(
      * 2. If Night Curfew or Nap is currently active and the app is not whitelisted, the approval
      *    is recorded in the database, but suspension remains active until morning curfew wakeup.
      */
-    fun unsuspendAndApprove(packageName: String, decidedBy: String? = null) {
+    fun unsuspendAndApprove(
+        packageName: String,
+        decidedBy: String? = null,
+        syncToCloud: Boolean = true,
+        forceInventorySync: Boolean = false
+    ) {
         // Under Unified Zero-Trust architecture, supervisor approval is unconditionally honored for all applications.
 
         val policy = PolicyRepository.getInstance(appContext).getCurrentPolicy()
@@ -307,7 +312,9 @@ class ApprovalRepository(
                 isSynced = 1
             )
             ZeroTrustForegroundWatcher.syncWatcherState(appContext)
-            syncApprovalDecisionToCloud(packageName, PendingApprovalEntity.STATUS_APPROVED, decidedBy)
+            if (syncToCloud) {
+                syncApprovalDecisionToCloud(packageName, PendingApprovalEntity.STATUS_APPROVED, decidedBy)
+            }
             postApprovalNotification(packageName, approved = true, isCurfewDeferred = true, decidedBy = decidedBy)
             return
         }
@@ -354,7 +361,9 @@ class ApprovalRepository(
                         isSynced = 1
                     )
                     ZeroTrustForegroundWatcher.syncWatcherState(appContext)
-                    syncApprovalDecisionToCloud(packageName, PendingApprovalEntity.STATUS_APPROVED, decidedBy)
+                    if (syncToCloud) {
+                        syncApprovalDecisionToCloud(packageName, PendingApprovalEntity.STATUS_APPROVED, decidedBy)
+                    }
                 } else {
                     Log.e(TAG, "Failed unfreezing package $packageName: DPM returned failure ($dpmResult)")
                 }
@@ -368,8 +377,12 @@ class ApprovalRepository(
                 )
                 Log.i(TAG, "Unfrozen and approved package: $packageName")
                 ZeroTrustForegroundWatcher.syncWatcherState(appContext)
-                syncApprovalDecisionToCloud(packageName, PendingApprovalEntity.STATUS_APPROVED, decidedBy)
-                AppInventoryManager.getInstance(appContext).syncInventoryToCloudAsync(force = true)
+                if (syncToCloud) {
+                    syncApprovalDecisionToCloud(packageName, PendingApprovalEntity.STATUS_APPROVED, decidedBy)
+                }
+                if (forceInventorySync) {
+                    AppInventoryManager.getInstance(appContext).syncInventoryToCloudAsync(force = true)
+                }
                 postApprovalNotification(packageName, approved = true, isCurfewDeferred = false, decidedBy = decidedBy)
             }
         } catch (e: Exception) {
@@ -394,7 +407,11 @@ class ApprovalRepository(
     /**
      * Records a rejection for a pending application in local database.
      */
-    fun recordRejection(packageName: String, decidedBy: String? = null) {
+    fun recordRejection(
+        packageName: String,
+        decidedBy: String? = null,
+        syncToCloud: Boolean = true
+    ) {
         try {
             approvalDao.upsertApprovalStatusBlocking(
                 packageName = packageName,
@@ -405,7 +422,9 @@ class ApprovalRepository(
             )
             Log.i(TAG, "Recorded rejection for package: $packageName by $decidedBy")
             ZeroTrustForegroundWatcher.syncWatcherState(appContext)
-            syncApprovalDecisionToCloud(packageName, PendingApprovalEntity.STATUS_REJECTED, decidedBy)
+            if (syncToCloud) {
+                syncApprovalDecisionToCloud(packageName, PendingApprovalEntity.STATUS_REJECTED, decidedBy)
+            }
             postApprovalNotification(packageName, approved = false, isCurfewDeferred = false, decidedBy = decidedBy)
         } catch (e: Exception) {
             Log.e(TAG, "Failed recording rejection for package $packageName", e)
@@ -552,23 +571,47 @@ class ApprovalRepository(
                     if (snapshots != null && !snapshots.isEmpty) {
                         scope.launch {
                             try {
+                                val isBlockActive = CurfewEnforcer.isEffectiveBlockActive(appContext)
+                                val policy = PolicyRepository.getInstance(appContext).getCurrentPolicy()
+                                val immunePackages = CurfewAppResolver.resolveImmunePackages(appContext)
+                                val isWhitelistedPkg = { pkg: String ->
+                                    CurfewConfig.STATIC_WHITELIST.contains(pkg) ||
+                                            immunePackages.contains(pkg) ||
+                                            policy.customCurfewWhitelistPackages.contains(pkg)
+                                }
+
+                                val pendingMap = getLocalPendingApprovals().associateBy { it.packageName }
                                 for (doc in snapshots.documents) {
                                     val packageName = doc.getString("packageName") ?: doc.id
                                     val status = doc.getString("status") ?: continue
                                     val decidedBy = doc.getString("decidedBy")
-                                    val pendingList = getLocalPendingApprovals()
-                                    val local = pendingList.find { it.packageName == packageName }
+                                    val local = pendingMap[packageName]
 
                                     if (status == "APPROVED") {
-                                        val isPhysicallySuspended = com.drmohammed.antiporn.telemetry.SafeDpmGateway.isPackageSuspendedBlocking(appContext, packageName).getOrNull() == true
-                                        if (local == null || !local.isApproved || isPhysicallySuspended) {
-                                            Log.i(TAG, "Real-time approval received for $packageName from $decidedBy (localApproved=${local?.isApproved}, suspended=$isPhysicallySuspended)")
-                                            unsuspendAndApprove(packageName, decidedBy)
+                                        val isCurfewDeferred = isBlockActive && !isWhitelistedPkg(packageName)
+                                        if (local != null && local.isApproved) {
+                                            if (isCurfewDeferred) {
+                                                // Already recorded as approved locally and legitimately deferred by curfew; skip!
+                                                continue
+                                            }
+                                            val isPhysicallySuspended = com.drmohammed.antiporn.telemetry.SafeDpmGateway.isPackageSuspendedBlocking(appContext, packageName).getOrNull() == true
+                                            if (!isPhysicallySuspended) {
+                                                // Already approved locally and physically active; skip!
+                                                continue
+                                            }
                                         }
+
+                                        Log.i(TAG, "Real-time approval received for $packageName from $decidedBy (localApproved=${local?.isApproved}, curfewDeferred=$isCurfewDeferred)")
+                                        unsuspendAndApprove(
+                                            packageName = packageName,
+                                            decidedBy = decidedBy,
+                                            syncToCloud = false, // Critical: originated from cloud, do not ping-pong back!
+                                            forceInventorySync = false
+                                        )
                                     } else if (status == "REJECTED") {
                                         if (local == null || !local.isRejected) {
                                             Log.i(TAG, "Real-time rejection received for $packageName from $decidedBy")
-                                            recordRejection(packageName, decidedBy)
+                                            recordRejection(packageName, decidedBy, syncToCloud = false)
                                         }
                                     }
                                 }
