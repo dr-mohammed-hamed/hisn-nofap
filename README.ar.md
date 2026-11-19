@@ -22,7 +22,7 @@
   <a href="docs/APP_POLICY_REGISTRY.md"><img src="https://img.shields.io/badge/Security-Zero--Trust%20DO-red.svg?style=for-the-badge&logo=securityscorecard" alt="Security: Zero-Trust DO" /></a>
   <a href="docs/GENERATIONAL_ANTIPORN_ROADMAP.md"><img src="https://img.shields.io/badge/AI-100%25%20On--Device%20(Zero--Cloud)-purple.svg?style=for-the-badge&logo=tensorflow" alt="Edge AI" /></a>
   <a href="docs/OTA_DISTRIBUTION.md"><img src="https://img.shields.io/badge/OTA-Cloudflare%20R2%20%7C%20v2%2Fv3%20Lineage-orange.svg?style=for-the-badge&logo=cloudflare" alt="OTA Distribution" /></a>
-  <a href="#-المساهمة-ودعم-استمرار-المشروع-support--sponsorship"><img src="https://img.shields.io/badge/Sponsor-💖%20ادعم_المشروع-ff69b4.svg?style=for-the-badge&logo=githubsponsors" alt="Sponsor: ادعم المشروع" /></a>
+  <a href="#-سهم-استدامة-الوقف-ورعاية-المنظومة-waqf-sponsorship"><img src="https://img.shields.io/badge/Waqf-💖%20سهم_استدامة_الوقف-ff69b4.svg?style=for-the-badge&logo=githubsponsors" alt="سهم استدامة الوقف" /></a>
 </p>
 
 ---
@@ -31,17 +31,18 @@
 
 1. [نظرة عامة والرؤية الطبية والهندسية (Executive Vision)](#-نظرة-عامة-والرؤية-الطبية-والهندسية-executive-vision)
 2. [معرض الواجهات والتجربة الحية (Visual Product Showcase)](#-معرض-الواجهات-والتجربة-الحية-visual-product-showcase)
-3. [المحدد الهندسي الصارم لحماية بيئة المطور (Core Developer Invariant)](#-المحدد-الهندسي-الصارم-لحماية-بيئة-المطور-core-developer-invariant)
-4. [المعمارية الهندسية الشاملة للنظام (High-Level System Topology)](#-المعمارية-الهندسية-الشاملة-للنظام-high-level-system-topology)
-5. [مصفوفة دروع الحماية السبعة (The 7 Modular Zero-Trust Shields)](#-مصفوفة-دروع-الحماية-السبعة-the-7-modular-zero-trust-shields)
-6. [خط أنابيب الرؤية العصبية المحلية (On-Device Edge AI Pipeline)](#-خط-أنابيب-الرؤية-العصبية-المحلية-on-device-edge-ai-pipeline)
-7. [محرك «وقفة» السلوكي لكسر تدفق الدوبامين (The Waqfa Behavioral Circuit Breaker)](#-محرك-وقفة-السلوكي-لكسر-تدفق-الدوبامين-the-waqfa-behavioral-circuit-breaker)
-8. [دليل التثبيت وتفعيل الصلاحية دون حذف الحسابات (Zero-Account-Loss Activation Guide)](#-دليل-التثبيت-وتفعيل-الصلاحية-دون-حذف-الحسابات-zero-account-loss-activation-guide)
-9. [المقاييس الهندسية وأجنحة الاختبار المؤتمتة (Verified Engineering Metrics)](#-المقاييس-الهندسية-وأجنحة-الاختبار-المؤتمتة-verified-engineering-metrics)
-10. [بوابة التوثيق المعماري الموسع (Documentation Portal)](#-بوابة-التوثيق-المعماري-الموسع-documentation-portal)
-11. [البناء والتطوير المحلي وبوابة الأمان (Local Build, CI/CD & Security)](#-البناء-والتطوير-المحلي-وبوابة-الأمان-local-build-cicd--security)
-12. [المساهمة ودعم استمرار المشروع (Support & Sponsorship)](#-المساهمة-ودعم-استمرار-المشروع-support--sponsorship)
-13. [الترخيص والملكية الفكرية (License & Attribution)](#-الترخيص-والملكية-الفكرية-license--attribution)
+3. [سهم استدامة الوقف ورعاية المنظومة (Waqf Sponsorship)](#-سهم-استدامة-الوقف-ورعاية-المنظومة-waqf-sponsorship)
+4. [المحدد الهندسي الصارم لحماية بيئة المطور (Core Developer Invariant)](#-المحدد-الهندسي-الصارم-لحماية-بيئة-المطور-core-developer-invariant)
+5. [المعمارية الهندسية الشاملة للنظام (High-Level System Topology)](#-المعمارية-الهندسية-الشاملة-للنظام-high-level-system-topology)
+6. [مصفوفة دروع الحماية السبعة (The 7 Modular Zero-Trust Shields)](#-مصفوفة-دروع-الحماية-السبعة-the-7-modular-zero-trust-shields)
+7. [خط أنابيب الرؤية العصبية المحلية (On-Device Edge AI Pipeline)](#-خط-أنابيب-الرؤية-العصبية-المحلية-on-device-edge-ai-pipeline)
+8. [محرك «وقفة» السلوكي لكسر تدفق الدوبامين (The Waqfa Behavioral Circuit Breaker)](#-محرك-وقفة-السلوكي-لكسر-تدفق-الدوبامين-the-waqfa-behavioral-circuit-breaker)
+9. [دليل التثبيت وتفعيل الصلاحية دون حذف الحسابات (Zero-Account-Loss Activation Guide)](#-دليل-التثبيت-وتفعيل-الصلاحية-دون-حذف-الحسابات-zero-account-loss-activation-guide)
+10. [المقاييس الهندسية وأجنحة الاختبار المؤتمتة (Verified Engineering Metrics)](#-المقاييس-الهندسية-وأجنحة-الاختبار-المؤتمتة-verified-engineering-metrics)
+11. [بوابة التوثيق المعماري الموسع (Documentation Portal)](#-بوابة-التوثيق-المعماري-الموسع-documentation-portal)
+12. [البناء والتطوير المحلي وبوابة الأمان (Local Build, CI/CD & Security)](#-البناء-والتطوير-المحلي-وبوابة-الأمان-local-build-cicd--security)
+13. [المساهمة والمسؤولية الأمنية (Contributing & Security)](#-المساهمة-والمسؤولية-الأمنية-contributing--security)
+14. [الترخيص والملكية الفكرية (License & Attribution)](#-الترخيص-والملكية-الفكرية-license--attribution)
 
 ---
 
@@ -84,6 +85,32 @@
 |:---:|
 | <img src="art/screenshots/10_accountability_supervision.jpg" width="260" alt="مركز رفيق المساءلة" style="border-radius: 14px;" /> |
 | **المشرفون المعتمدون، وقوائم المكفولين، ومزامنة السحابة المشفرة** |
+
+</div>
+
+---
+
+## 🏛️ سهم استدامة الوقف ورعاية المنظومة (Waqf Sponsorship)
+
+> ### 🌿 قال رسول الله ﷺ: «مَنْ دَلَّ عَلَى خَيْرٍ فَلَهُ مِثْلُ أَجْرِ فَاعِلِهِ»
+> 
+> تم تصميم وهندسة مشروع **«حِصْن»** عبر آلاف الساعات من العمل الطبي والبرمجي المتخصص، وهو **وقف تقني متاح مجاناً بنسبة 100% وبلا أي إعلانات أو قيود تجارية** لحماية عقول وأعراض وأبناء وبنات الأمة من مخاطر الإباحية والإدمان الرقمي.
+> 
+> **استدامة هذا الصرح وتطويره يتطلب تكاليف تشغيلية دورية مستمرة** (استضافة خوادم التحديثات الهوائية السحابية عبر Cloudflare R2، وعتاد فحص وتدريب نماذج الذكاء الاصطناعي على الجهاز، وأبحاث دروع الحماية المتقدمة).
+> 
+> **المنظومة مجانية بالكامل لكل مستفيد ومحتاج؛ والمساهمة المالية ليست مطلوبة من الجميع، بل هي باب شرف مفتوح لمن وسّع الله عليه في الرزق ورأى في هذا المشروع ثغراً حقيقياً يستحق البقاء والنماء، ليكون له سهم جارٍ وصدقة جارية في حفظ بيوت المسلمين.**
+
+<div align="center">
+
+<a href="https://ipn.eg/S/mh22887565/instapay/4zd31u">
+  <img src="https://img.shields.io/badge/InstaPay-سهم_رعاية_الوقف_عبر_انستاباي-0A6C74?style=for-the-badge&logo=cashapp&logoColor=white" alt="InstaPay Waqf Support" />
+</a>
+
+<br/><br/>
+
+**💳 التحويل المباشر عبر تطبيق InstaPay (داخل مصر):**  
+🔗 **[انقر هنا للتحويل الفوري عبر رابط InstaPay المباشر (ipn.eg)](https://ipn.eg/S/mh22887565/instapay/4zd31u)**  
+*أو عبر عنوان الدفع اللحظي (IPA / Username):* `mh22887565`
 
 </div>
 
@@ -368,29 +395,6 @@ adb shell pm enable com.google.android.gms
 * 🔒 **الإبلاغ عن الثغرات الأمنية:** يرجى مراجعة [سياسة الأمان (SECURITY.md)](SECURITY.md) للإبلاغ المسؤول والسري.
 * 🛠️ **إرشادات التطوير والكود النظيف:** يرجى قراءة [دليل المساهمة (CONTRIBUTING.md)](CONTRIBUTING.md) وقواعد الفحص الصارم.
 * 📜 **الملكية الفكرية والتبعيات:** تفاصيل التبعيات والمشاريع الحرة الشقيقة مسجلة في ملف [NOTICE](NOTICE).
-
----
-
-## 💖 المساهمة ودعم استمرار المشروع (Support & Sponsorship)
-
-> ### 🌿 قال رسول الله ﷺ: «مَنْ دَلَّ عَلَى خَيْرٍ فَلَهُ مِثْلُ أَجْرِ فَاعِلِهِ»
-> 
-> مشروع **«حِصْن»** هو وقف تقني وبرمجي لوجه الله تعالى، بُذل فيه آلاف الساعات من العمل الطبي والبرمجي المتواصل لحماية أعراض وعقول وشباب الأمة وأبنائها من مخاطر الإباحية والإدمان الرقمي دون أي مقابل مادي أو تجاري.
-> 
-> **من رأى أن لهذا المشروع نفعاً وأثراً حقيقياً في تحصين البيوت وإصلاح النفوس، وآتاه الله من واسع فضله، فلا يحرم نفسه من شرف المساهمة والمشاركة في الأجر واستدامة التطوير؛ ليبقى هذا الحصن منيعاً، متطوراً، ومتاحاً مجاناً لكل مسلم ومسلمة في أرجاء الأرض.**
-
-<div align="center">
-
-<a href="https://ipn.eg/S/mh22887565/instapay/4zd31u">
-  <img src="https://img.shields.io/badge/InstaPay-ادعم_المشروع_عبر_انستاباي-0A6C74?style=for-the-badge&logo=cashapp&logoColor=white" alt="Support via InstaPay" />
-</a>
-
-<br/><br/>
-
-**📱 رابط التحويل المباشر عبر تطبيق InstaPay:**  
-👉 **[انقر هنا للدعم السريع عبر InstaPay (ipn.eg)](https://ipn.eg/S/mh22887565/instapay/4zd31u)**  
-
-</div>
 
 ---
 

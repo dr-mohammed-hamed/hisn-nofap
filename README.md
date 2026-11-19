@@ -22,7 +22,7 @@
   <a href="docs/APP_POLICY_REGISTRY.md"><img src="https://img.shields.io/badge/Security-Zero--Trust%20DO-red.svg?style=for-the-badge&logo=securityscorecard" alt="Security: Zero-Trust DO" /></a>
   <a href="docs/GENERATIONAL_ANTIPORN_ROADMAP.md"><img src="https://img.shields.io/badge/AI-100%25%20On--Device%20(Zero--Cloud)-purple.svg?style=for-the-badge&logo=tensorflow" alt="Edge AI" /></a>
   <a href="docs/OTA_DISTRIBUTION.md"><img src="https://img.shields.io/badge/OTA-Cloudflare%20R2%20%7C%20v2%2Fv3%20Lineage-orange.svg?style=for-the-badge&logo=cloudflare" alt="OTA Distribution" /></a>
-  <a href="#-support--continuous-development"><img src="https://img.shields.io/badge/Sponsor-💖%20Support%20Project-ff69b4.svg?style=for-the-badge&logo=githubsponsors" alt="Sponsor: Support Project" /></a>
+  <a href="#-سهم-استدامة-الوقف-ورعاية-المنظومة--waqf-sponsorship--sustainability"><img src="https://img.shields.io/badge/Waqf-💖%20سهم_استدامة_الوقف-ff69b4.svg?style=for-the-badge&logo=githubsponsors" alt="Waqf: سهم استدامة الوقف" /></a>
 </p>
 
 ---
@@ -31,16 +31,16 @@
 
 1. [Executive Vision & Medical-Engineering Paradigm](#-executive-vision--medical-engineering-paradigm)
 2. [Visual Product Showcase](#-visual-product-showcase)
-3. [Core Developer Invariant: Permanent ADB Preservation](#-core-developer-invariant-permanent-adb-preservation)
-4. [High-Level System Topology & Architecture](#-high-level-system-topology--architecture)
-5. [The 7 Modular Zero-Trust Shields Matrix](#-the-7-modular-zero-trust-shields-matrix)
-6. [On-Device Cascaded Edge AI & Neural Vision Pipeline](#-on-device-cascaded-edge-ai--neural-vision-pipeline)
-7. [The "Waqfa" Behavioral Circuit Breaker](#-the-waqfa-behavioral-circuit-breaker)
-8. [Zero-Account-Loss Activation & Provisioning Guide](#-zero-account-loss-activation--provisioning-guide)
-9. [Verified Engineering Metrics & Test Suites](#-verified-engineering-metrics--test-suites)
-10. [Architectural Documentation Portal](#-architectural-documentation-portal)
-11. [Local Build, CI/CD Pipeline & Zero-Leak Gate](#-local-build-cicd-pipeline--zero-leak-gate)
-12. [Support & Continuous Development](#-support--continuous-development)
+3. [سهم استدامة الوقف ورعاية المنظومة (Waqf Sponsorship & Sustainability)](#-سهم-استدامة-الوقف-ورعاية-المنظومة--waqf-sponsorship--sustainability)
+4. [Core Developer Invariant: Permanent ADB Preservation](#-core-developer-invariant-permanent-adb-preservation)
+5. [High-Level System Topology & Architecture](#-high-level-system-topology--architecture)
+6. [The 7 Modular Zero-Trust Shields Matrix](#-the-7-modular-zero-trust-shields-matrix)
+7. [On-Device Cascaded Edge AI & Neural Vision Pipeline](#-on-device-cascaded-edge-ai--neural-vision-pipeline)
+8. [The "Waqfa" Behavioral Circuit Breaker](#-the-waqfa-behavioral-circuit-breaker)
+9. [Zero-Account-Loss Activation & Provisioning Guide](#-zero-account-loss-activation--provisioning-guide)
+10. [Verified Engineering Metrics & Test Suites](#-verified-engineering-metrics--test-suites)
+11. [Architectural Documentation Portal](#-architectural-documentation-portal)
+12. [Local Build, CI/CD Pipeline & Zero-Leak Gate](#-local-build-cicd-pipeline--zero-leak-gate)
 13. [Contributing, Responsible Disclosure & License](#-contributing-responsible-disclosure--license)
 
 ---
@@ -86,6 +86,39 @@ Developed by **Dr. Mohammed Hamed** (physician and systems engineer), this proje
 |:---:|
 | <img src="art/screenshots/10_accountability_supervision.jpg" width="260" alt="Accountability Center" style="border-radius: 14px;" /> |
 | **Trusted guardians, supervised wards, and end-to-end synced policies** |
+
+</div>
+
+---
+
+## 🏛️ سهم استدامة الوقف ورعاية المنظومة | Waqf Sponsorship & Sustainability
+
+<div dir="rtl">
+
+> ### 🌿 قال رسول الله ﷺ: «مَنْ دَلَّ عَلَى خَيْرٍ فَلَهُ مِثْلُ أَجْرِ فَاعِلِهِ»
+> 
+> تم تصميم وهندسة مشروع **«حِصْن»** عبر آلاف الساعات من العمل الطبي والبرمجي المتخصص، وهو **وقف تقني متاح مجاناً بنسبة 100% وبلا أي إعلانات أو قيود تجارية** لحماية عقول وأعراض وأبناء وبنات الأمة من مخاطر الإباحية والإدمان الرقمي.
+> 
+> **استدامة هذا الصرح وتطويره يتطلب تكاليف تشغيلية دورية مستمرة** (استضافة خوادم التحديثات الهوائية السحابية عبر Cloudflare R2، وعتاد فحص وتدريب نماذج الذكاء الاصطناعي على الجهاز، وأبحاث دروع الحماية المتقدمة).
+> 
+> **المنظومة مجانية بالكامل لكل مستفيد ومحتاج؛ والمساهمة المالية ليست مطلوبة من الجميع، بل هي باب شرف مفتوح لمن وسّع الله عليه في الرزق ورأى في هذا المشروع ثغراً حقيقياً يستحق البقاء والنماء، ليكون له سهم جارٍ وصدقة جارية في حفظ بيوت المسلمين.**
+
+</div>
+
+> **English Overview:**  
+> «Hisn» is an ongoing charitable endowment (Waqf) engineered to protect youth and families from digital addiction. The software is 100% free and open-source. For benefactors wishing to sponsor infrastructure (Cloudflare R2 OTA bandwidth, AI model training hardware, and security research), contributions can be made directly below.
+
+<div align="center">
+
+<a href="https://ipn.eg/S/mh22887565/instapay/4zd31u">
+  <img src="https://img.shields.io/badge/InstaPay-سهم_رعاية_الوقف_عبر_انستاباي-0A6C74?style=for-the-badge&logo=cashapp&logoColor=white" alt="InstaPay Waqf Support" />
+</a>
+
+<br/><br/>
+
+**💳 التحويل المباشر عبر تطبيق InstaPay (داخل مصر):**  
+🔗 **[انقر هنا للتحويل الفوري عبر رابط InstaPay المباشر (ipn.eg)](https://ipn.eg/S/mh22887565/instapay/4zd31u)**  
+*أو عبر عنوان الدفع اللحظي (IPA / Username):* `mh22887565`
 
 </div>
 
@@ -360,26 +393,6 @@ Comprehensive documentation is indexed across [`docs/`](docs/README.md) and [`sc
 
 ### CI Zero-Leak Gate
 Our GitHub Actions pipeline ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) enforces strict constitutional checks preventing any pull request from merging if release keystores (`antiporn-release.jks`) or environment properties (`local.properties`) are tracked.
-
----
-
-## 💖 Support & Continuous Development
-
-> This project is a non-profit, open-source digital defense shield dedicated as an ongoing charitable endowment (Waqf) for protecting families and youth from harmful digital content.
-> 
-> *If you find this project valuable and wish to contribute to its continuous development, cloud infrastructure, and security research:*
-
-<div align="center">
-
-<a href="https://ipn.eg/S/mh22887565/instapay/4zd31u">
-  <img src="https://img.shields.io/badge/Support-InstaPay%20(Egypt)-0A6C74?style=for-the-badge&logo=cashapp&logoColor=white" alt="Support via InstaPay" />
-</a>
-
-<br/><br/>
-
-👉 **[Direct Support via InstaPay (ipn.eg)](https://ipn.eg/S/mh22887565/instapay/4zd31u)**
-
-</div>
 
 ---
 
