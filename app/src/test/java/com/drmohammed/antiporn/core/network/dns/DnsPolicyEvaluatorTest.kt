@@ -293,4 +293,34 @@ class DnsPolicyEvaluatorTest {
         val actionDisabled = DnsPolicyEvaluator.evaluate(mockQuery("www.youtube.com", qType = 1), policyDisabled, emptySet())
         assertTrue("YouTube domain should pass when Restricted Mode is false", actionDisabled is DnsPolicyEvaluator.PolicyAction.Pass)
     }
+
+    @Test
+    fun testTier3Whitelist_allowsPathUrlsAndEducationalExemptions() {
+        val policy = DevicePolicyBundle.defaultPolicy().copy(
+            isFullSystemFilteringEnabled = true,
+            browserFilterMode = DevicePolicyBundle.BROWSER_FILTER_WHITELIST_ONLY,
+            customAllowedUrls = setOf("platform.edu/login", "mansoura.edu.eg/courses")
+        )
+
+        // Platform with path in rule must resolve base domain and subdomains on DNS
+        val platformAction = DnsPolicyEvaluator.evaluate(mockQuery("platform.edu"), policy, emptySet())
+        assertTrue("Base domain must pass even if raw rule contains a path", platformAction is DnsPolicyEvaluator.PolicyAction.Pass)
+
+        val subPlatformAction = DnsPolicyEvaluator.evaluate(mockQuery("student.platform.edu"), policy, emptySet())
+        assertTrue("Subdomain must pass when parent domain is in allowlist", subPlatformAction is DnsPolicyEvaluator.PolicyAction.Pass)
+
+        val mansouraAction = DnsPolicyEvaluator.evaluate(mockQuery("student.mansoura.edu.eg"), policy, emptySet())
+        assertTrue("Compound TLD subdomain must pass", mansouraAction is DnsPolicyEvaluator.PolicyAction.Pass)
+
+        // Educational streaming CDNs must pass automatically in Whitelist mode
+        val bunnyAction = DnsPolicyEvaluator.evaluate(mockQuery("iframe.mediadelivery.net"), policy, emptySet())
+        assertTrue("Bunny video player must pass in Whitelist mode", bunnyAction is DnsPolicyEvaluator.PolicyAction.Pass)
+
+        val vdoCipherAction = DnsPolicyEvaluator.evaluate(mockQuery("player.vdocipher.com"), policy, emptySet())
+        assertTrue("VdoCipher DRM player must pass in Whitelist mode", vdoCipherAction is DnsPolicyEvaluator.PolicyAction.Pass)
+
+        // Non-allowed domain must be blocked
+        val blockedAction = DnsPolicyEvaluator.evaluate(mockQuery("randomunallowedwebsite.com"), policy, emptySet())
+        assertTrue("Non-allowed domain must be blocked by custom rule in Whitelist mode", blockedAction is DnsPolicyEvaluator.PolicyAction.BlockCustom)
+    }
 }

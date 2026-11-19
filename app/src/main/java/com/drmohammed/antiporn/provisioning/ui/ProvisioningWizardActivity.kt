@@ -19,6 +19,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
@@ -36,6 +37,7 @@ import com.drmohammed.antiporn.provisioning.receiver.PairingCodeReceiver
 import com.drmohammed.antiporn.provisioning.service.AdbPairingNotificationService
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
+import com.google.android.material.checkbox.MaterialCheckBox
 import com.google.android.material.color.MaterialColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.textfield.TextInputEditText
@@ -91,6 +93,7 @@ class ProvisioningWizardActivity : AppCompatActivity() {
     private var discoveredConnectPort = 0
     private var isPromoting = false
     private var isWifiValid = false
+    private var dangerDialog: AlertDialog? = null
 
     private val wifiWatcher by lazy {
         ProvisioningWifiWatcher(this) { isConnected -> onWifiStateChanged(isConnected) }
@@ -253,34 +256,105 @@ class ProvisioningWizardActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
 
-            isPromoting = true
-            btnPairAndActivate.isEnabled = false
-            btnPairAndActivate.setText(R.string.provisioning_in_progress_title)
+            if (OemProvisioningHelper.hasConflictingProfile(this)) {
+                showDangerPrivateSpaceDialog {
+                    executePairingAndPromotion(code)
+                }
+                return@setOnClickListener
+            }
+            executePairingAndPromotion(code)
+        }
+    }
 
-            lifecycleScope.launch(Dispatchers.IO) {
-                try {
-                    val result = DeviceOwnerPromoter.pairAndPromote(
-                        this@ProvisioningWizardActivity, discoveredPairingPort, discoveredConnectPort, code
-                    )
-                    withContext(Dispatchers.Main) {
-                        if (isFinishing || isDestroyed) return@withContext
-                        if (result is PromotionResult.Success) {
-                            onProvisioningSuccessful()
-                        } else if (result is PromotionResult.Failure) {
-                            Toast.makeText(this@ProvisioningWizardActivity, getString(R.string.toast_provisioning_failed, result.message), Toast.LENGTH_LONG).show()
-                            btnPairAndActivate.setText(R.string.provisioning_btn_pair_and_activate)
-                        }
+    private fun executePairingAndPromotion(code: String) {
+        if (isPromoting) return
+        isPromoting = true
+        btnPairAndActivate.isEnabled = false
+        btnPairAndActivate.setText(R.string.provisioning_in_progress_title)
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val result = DeviceOwnerPromoter.pairAndPromote(
+                    this@ProvisioningWizardActivity, discoveredPairingPort, discoveredConnectPort, code
+                )
+                withContext(Dispatchers.Main) {
+                    if (isFinishing || isDestroyed) return@withContext
+                    if (result is PromotionResult.Success) {
+                        onProvisioningSuccessful()
+                    } else if (result is PromotionResult.Failure) {
+                        Toast.makeText(this@ProvisioningWizardActivity, getString(R.string.toast_provisioning_failed, result.message), Toast.LENGTH_LONG).show()
+                        btnPairAndActivate.setText(R.string.provisioning_btn_pair_and_activate)
                     }
-                } finally {
-                    withContext(Dispatchers.Main) {
-                        if (!isFinishing && !isDestroyed) {
-                            isPromoting = false
-                            validateInputs()
-                        }
+                }
+            } finally {
+                withContext(Dispatchers.Main) {
+                    if (!isFinishing && !isDestroyed) {
+                        isPromoting = false
+                        validateInputs()
                     }
                 }
             }
         }
+    }
+
+    private fun showDangerPrivateSpaceDialog(onProceed: () -> Unit) {
+        if (isFinishing || isDestroyed) return
+        dangerDialog?.let {
+            if (it.isShowing) {
+                try { it.dismiss() } catch (_: Exception) {}
+            }
+        }
+        dangerDialog = null
+
+        val dialogView = layoutInflater.inflate(R.layout.dialog_private_space_danger, null)
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setView(dialogView)
+            .setCancelable(true)
+            .create()
+        dangerDialog = dialog
+
+        val chkAcknowledgeDanger = dialogView.findViewById<MaterialCheckBox>(R.id.chkAcknowledgeDanger)
+        val btnDialogProceed = dialogView.findViewById<MaterialButton>(R.id.btnDialogProceed)
+        val btnDialogRecheck = dialogView.findViewById<MaterialButton>(R.id.btnDialogRecheck)
+        val btnDialogCancel = dialogView.findViewById<MaterialButton>(R.id.btnDialogCancel)
+
+        chkAcknowledgeDanger.setOnCheckedChangeListener { _, isChecked ->
+            btnDialogProceed.isEnabled = isChecked
+        }
+
+        btnDialogProceed.setOnClickListener {
+            if (!isFinishing && !isDestroyed) {
+                dialog.dismiss()
+            }
+            onProceed()
+        }
+
+        btnDialogRecheck.setOnClickListener {
+            val stillExists = OemProvisioningHelper.hasConflictingProfile(this)
+            if (!stillExists) {
+                Toast.makeText(this, R.string.dialog_danger_private_space_cleared, Toast.LENGTH_LONG).show()
+                if (!isFinishing && !isDestroyed) {
+                    dialog.dismiss()
+                }
+                setupOemGuidance()
+            } else {
+                Toast.makeText(this, R.string.dialog_danger_private_space_still_exists, Toast.LENGTH_LONG).show()
+            }
+        }
+
+        btnDialogCancel.setOnClickListener {
+            if (!isFinishing && !isDestroyed) {
+                dialog.dismiss()
+            }
+        }
+
+        dialog.setOnDismissListener {
+            if (dangerDialog === dialog) {
+                dangerDialog = null
+            }
+        }
+
+        dialog.show()
     }
 
     private fun launchWirelessDebuggingScreen() {
@@ -366,6 +440,7 @@ class ProvisioningWizardActivity : AppCompatActivity() {
             discoveredConnectPort = AdbPairingNotificationService.capturedConnectPort
             updateRadarUi()
         }
+        setupOemGuidance()
         checkDevOptionsStatus()
         updateOverlayPermissionUi()
         validateInputs()
@@ -392,6 +467,12 @@ class ProvisioningWizardActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        dangerDialog?.let {
+            if (it.isShowing) {
+                try { it.dismiss() } catch (_: Exception) {}
+            }
+        }
+        dangerDialog = null
         if (!isChangingConfigurations && !ProtectionEngine.isDeviceOwner(this)) {
             AdbPairingNotificationService.stop(this)
         }

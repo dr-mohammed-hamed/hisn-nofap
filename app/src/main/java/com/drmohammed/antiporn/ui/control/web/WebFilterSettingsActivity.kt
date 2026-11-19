@@ -502,7 +502,11 @@ class WebFilterSettingsActivity : AppCompatActivity() {
             .setView(frame)
             .setPositiveButton(R.string.browser_filter_btn_add) { dialog, _ ->
                 val raw = input.text?.toString()?.trim().orEmpty()
-                val sanitized = BrowserUrlSanitizer.sanitize(raw)
+                val sanitized = if (currentTab == UrlTab.ALLOWED) {
+                    BrowserUrlSanitizer.sanitizeForAllowlist(raw)
+                } else {
+                    BrowserUrlSanitizer.sanitize(raw)
+                }
                 if (sanitized != null) {
                     if (!targetSet.contains(sanitized)) {
                         targetSet.add(sanitized)

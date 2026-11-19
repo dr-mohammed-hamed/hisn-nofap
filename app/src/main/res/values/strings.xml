@@ -1288,7 +1288,7 @@
     <string name="switch_full_system_filter">تطبيق الفلترة على كامل النظام (VPN)</string>
     <string name="switch_block_ads">حجب الإعلانات والمتتبعات</string>
     <string name="dialog_whitelist_full_system_warning_title">تحذير: القائمة البيضاء مع فلترة النظام</string>
-    <string name="dialog_whitelist_full_system_warning_msg">تفعيل حصر التصفح على المواقع المسموحة فقط بالتزامن مع فلترة النظام قد يؤثر على عمل التطبيقات الأخرى. سيتم استثناء خدمات النظام الأساسية تلقائيًا لحماية عمل الهاتف.</string>
+    <string name="dialog_whitelist_full_system_warning_msg">تفعيل حصر التصفح على المواقع المسموحة فقط بالتزامن مع فلترة النظام الشاملة قد يمنع اتصالات التطبيقات والـ CDNs الخارجية. يُنصح بإبقاء فلترة النظام مغلقة عند استخدام وضع المواقع المسموحة للمنصات التعليمية، حيث يتكفل المتصفح بحصر التصفح بأمان.</string>
     <string name="vpn_permission_denied_msg">يتطلب تفعيل فلترة DNS المحلية وحجب الإعلانات الموافقة على إذن الـ VPN.</string>
     <string name="tab_blocked_websites">المحظورة (%1$d)</string>
     <string name="tab_allowed_websites">المسموحة (%1$d)</string>
@@ -1490,4 +1490,13 @@
     <string name="banking_mode_hint_a11y_off">إنستاباي وتطبيقات البنوك تعمل الآن مباشرة من الشاشة الرئيسية دون الحاجة لهذه القائمة.</string>
     <string name="banking_mode_hint_a11y_on_adb">سيتم إيقاف الحماية لحظياً عند فتح البنك وإعادتها تلقائياً فور خروجك.</string>
     <string name="banking_mode_hint_a11y_on_qr">سيتم إيقاف خدمة الوصول نظيفاً لفتح البنك، وستحتاج ضغطة واحدة من الإشعار لإعادة تفعيل الدرع بعد الانتهاء.</string>
+
+    <!-- Universal Private Space & Secure Folder Danger Modal -->
+    <string name="dialog_danger_private_space_title">تنبيه شديد الخطورة: احتمال فقدان بيانات دائم</string>
+    <string name="dialog_danger_private_space_desc">تم رصد وجود «المجلد الآمن» أو «المساحة الخاصة» على جهازك.\n\nبمجرد تفعيل حصن كمالك للجهاز، سيقوم نظام أندرويد (تحديداً أندرويد 15 وسامسونج) بحذف هذه المساحة ومسح كافة الصور والملفات والمستندات الموجودة بداخلها فوراً وبلا رجعة!\n\nيرجى الخروج الآن ونقل كافة ملفاتك الهامة (مثل أوراق الزمالة أو الصور) إلى مكان آمن خارج هذه المساحة، ثم إلغاء تثبيت المساحة قبل المتابعة.</string>
+    <string name="dialog_danger_private_space_checkbox">أقر بأنني قمت بنقل جميع ملفاتي الهامة (أو لا أحتاجها)، وأتحمل كامل المسؤولية عن حذف هذه المساحة.</string>
+    <string name="dialog_danger_private_space_btn_recheck">إعادة الفحص الآن</string>
+    <string name="dialog_danger_private_space_btn_proceed">متابعة التفعيل على مسؤوليتي</string>
+    <string name="dialog_danger_private_space_cleared">رائع! تم التأكد من خلو الجهاز من المساحات الخاصة، يمكنك التفعيل بأمان الآن.</string>
+    <string name="dialog_danger_private_space_still_exists">تنبيه: ما زالت المساحة الخاصة أو المجلد الآمن نشطاً في الهاتف. يرجى إزالتها أولاً ثم الضغط مجدداً.</string>
 </resources>

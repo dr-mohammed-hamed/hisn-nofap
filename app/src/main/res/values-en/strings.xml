@@ -948,7 +948,7 @@
     <string name="switch_full_system_filter">Filter Entire System (VPN)</string>
     <string name="switch_block_ads">Block Ads &amp; Trackers</string>
     <string name="dialog_whitelist_full_system_warning_title">Warning: Whitelist Mode with System Filter</string>
-    <string name="dialog_whitelist_full_system_warning_msg">Restricting traffic to allowed sites while system filtering is active may affect background apps. Core Android system services are exempt automatically.</string>
+    <string name="dialog_whitelist_full_system_warning_msg">Restricting traffic to allowed sites while full system filtering is active may block background apps and external CDNs. We recommend keeping system filtering disabled when using Whitelist mode for educational platforms, as browsers enforce website lockdown safely.</string>
     <string name="vpn_permission_denied_msg">Enabling local DNS filtering and ad blocking requires granting VPN permission.</string>
     <string name="tab_blocked_websites">Blocked (%1$d)</string>
     <string name="tab_allowed_websites">Allowed (%1$d)</string>
@@ -1213,4 +1213,13 @@
     <string name="banking_mode_hint_a11y_off">InstaPay and banking apps now work directly from your home screen without needing this menu.</string>
     <string name="banking_mode_hint_a11y_on_adb">Protection will pause momentarily when opening your bank and automatically resume as soon as you leave.</string>
     <string name="banking_mode_hint_a11y_on_qr">Accessibility will turn off cleanly to open your bank, and you will need one tap from the notification to re-enable the shield afterwards.</string>
+
+    <!-- Universal Private Space & Secure Folder Danger Modal -->
+    <string name="dialog_danger_private_space_title">Critical Warning: Permanent Data Loss Risk</string>
+    <string name="dialog_danger_private_space_desc">A \'Secure Folder\' or \'Private Space\' was detected on your device.\n\nUpon activating Hisn as Device Owner, Android (especially Android 15 and Samsung Knox) will automatically and permanently delete this space and destroy all files, documents, and photos inside it!\n\nPlease exit now and back up or move all your important documents/files to a safe location outside this space, then uninstall it before proceeding.</string>
+    <string name="dialog_danger_private_space_checkbox">I acknowledge that I have moved all important files (or do not need them), and I take full responsibility for removing this space.</string>
+    <string name="dialog_danger_private_space_btn_recheck">Re-check Now</string>
+    <string name="dialog_danger_private_space_btn_proceed">Proceed at My Own Risk</string>
+    <string name="dialog_danger_private_space_cleared">Great! No conflicting profiles found. You may now safely activate.</string>
+    <string name="dialog_danger_private_space_still_exists">Warning: Secure Folder / Private Space is still active. Please remove it first, then tap re-check.</string>
 </resources>

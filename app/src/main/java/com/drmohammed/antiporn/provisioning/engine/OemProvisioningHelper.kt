@@ -32,10 +32,11 @@ object OemProvisioningHelper {
         manufacturer.contains("realme") || manufacturer.contains("oppo") || manufacturer.contains("oneplus")
 
     /**
-     * Checks if secondary users, work profiles, or Samsung Knox Secure Folder are active.
+     * Checks if secondary users, work profiles, Samsung Knox Secure Folder,
+     * or Android 15 Private Space are active on the device.
+     * Works across all OEMs and Android versions.
      */
-    fun checkSamsungMultiUser(context: Context): Boolean {
-        if (!isSamsung()) return false
+    fun hasConflictingProfile(context: Context): Boolean {
         return try {
             val userManager = context.getSystemService(Context.USER_SERVICE) as? UserManager
             val profiles = userManager?.userProfiles ?: emptyList()
@@ -44,6 +45,14 @@ object OemProvisioningHelper {
             Timber.tag(TAG).w(e, "Failed inspecting user profiles: ${e.message}")
             false
         }
+    }
+
+    /**
+     * Checks if secondary users, work profiles, or Samsung Knox Secure Folder are active.
+     */
+    fun checkSamsungMultiUser(context: Context): Boolean {
+        if (!isSamsung()) return false
+        return hasConflictingProfile(context)
     }
 
     /**
@@ -67,14 +76,23 @@ object OemProvisioningHelper {
      * Returns the OEM-specific pre-flight guidance warning, if applicable.
      */
     fun getOemWarning(context: Context): OemWarning? {
+        if (hasConflictingProfile(context)) {
+            return if (isSamsung()) {
+                OemWarning(
+                    titleRes = R.string.oem_samsung_multiuser_title,
+                    descRes = R.string.oem_samsung_multiuser_desc
+                )
+            } else {
+                OemWarning(
+                    titleRes = R.string.dialog_danger_private_space_title,
+                    descRes = R.string.dialog_danger_private_space_desc
+                )
+            }
+        }
         return when {
             isXiaomi() -> OemWarning(
                 titleRes = R.string.oem_xiaomi_title,
                 descRes = R.string.oem_xiaomi_desc
-            )
-            isSamsung() && checkSamsungMultiUser(context) -> OemWarning(
-                titleRes = R.string.oem_samsung_multiuser_title,
-                descRes = R.string.oem_samsung_multiuser_desc
             )
             isRealmeOrOppo() -> OemWarning(
                 titleRes = R.string.oem_realme_oppo_title,

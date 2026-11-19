@@ -193,4 +193,59 @@ class BrowserUrlSanitizerTest {
         assertTrue(result.contains("example.com"))
         assertTrue(result.contains("*.youtube.com"))
     }
+
+    @Test
+    fun testExtractRootDomain_handlesGenericAndCompoundTlds() {
+        assertEquals("platform.edu", BrowserUrlSanitizer.extractRootDomain("student.platform.edu"))
+        assertEquals("mansoura.edu.eg", BrowserUrlSanitizer.extractRootDomain("student.mansoura.edu.eg"))
+        assertEquals("mansoura.edu.eg", BrowserUrlSanitizer.extractRootDomain("courses.portal.mansoura.edu.eg"))
+        assertEquals("academy.com.sa", BrowserUrlSanitizer.extractRootDomain("login.academy.com.sa"))
+        assertEquals("domain.co.uk", BrowserUrlSanitizer.extractRootDomain("sub.domain.co.uk"))
+        assertEquals("example.com", BrowserUrlSanitizer.extractRootDomain("example.com"))
+        assertEquals("192.168.1.1", BrowserUrlSanitizer.extractRootDomain("192.168.1.1"))
+
+        // Multi-tenant platforms must NEVER collapse subdomains to parent domain
+        assertEquals("myclass.wordpress.com", BrowserUrlSanitizer.extractRootDomain("myclass.wordpress.com"))
+        assertEquals("docs.google.com", BrowserUrlSanitizer.extractRootDomain("docs.google.com"))
+        assertEquals("student.github.io", BrowserUrlSanitizer.extractRootDomain("student.github.io"))
+        assertEquals("course.blogspot.com", BrowserUrlSanitizer.extractRootDomain("course.blogspot.com"))
+    }
+
+    @Test
+    fun testSanitizeForAllowlist_extractsCleanRootDomain() {
+        assertEquals("platform.edu", BrowserUrlSanitizer.sanitizeForAllowlist("https://student.platform.edu/login?ref=123"))
+        assertEquals("mansoura.edu.eg", BrowserUrlSanitizer.sanitizeForAllowlist("https://student.mansoura.edu.eg/courses/10#top"))
+        assertEquals("academy.com", BrowserUrlSanitizer.sanitizeForAllowlist("*.academy.com/courses/*"))
+        assertEquals("school.edu.eg", BrowserUrlSanitizer.sanitizeForAllowlist("www.courses.school.edu.eg:8080/lesson/1"))
+        // Multi-tenant platforms preserve subdomain
+        assertEquals("docs.google.com", BrowserUrlSanitizer.sanitizeForAllowlist("https://docs.google.com/document/d/123"))
+        assertEquals("myclass.wordpress.com", BrowserUrlSanitizer.sanitizeForAllowlist("https://myclass.wordpress.com/math"))
+        assertNull(BrowserUrlSanitizer.sanitizeForAllowlist("not-a-domain"))
+        assertNull(BrowserUrlSanitizer.sanitizeForAllowlist(null))
+        assertNull(BrowserUrlSanitizer.sanitizeForAllowlist("   "))
+        assertNull(BrowserUrlSanitizer.sanitizeForAllowlist("user:pass@example.com"))
+    }
+
+    @Test
+    fun testCleanForChromiumAllowlist_stripsWildcards() {
+        assertEquals("platform.edu", BrowserUrlSanitizer.cleanForChromiumAllowlist("*.platform.edu"))
+        assertEquals("platform.edu", BrowserUrlSanitizer.cleanForChromiumAllowlist("platform.edu/*"))
+        assertEquals("domain.com", BrowserUrlSanitizer.cleanForChromiumAllowlist("*.domain.com/*"))
+        assertEquals("example.com", BrowserUrlSanitizer.cleanForChromiumAllowlist(".example.com"))
+    }
+
+    @Test
+    fun testEducationalAndTechnicalExemptions_arePopulated() {
+        assertTrue(BrowserUrlSanitizer.EDUCATIONAL_ALLOWLIST_RULES.contains("iframe.mediadelivery.net"))
+        assertTrue(BrowserUrlSanitizer.EDUCATIONAL_ALLOWLIST_RULES.contains("player.vdocipher.com"))
+        assertTrue(BrowserUrlSanitizer.EDUCATIONAL_ALLOWLIST_RULES.contains("player.vimeo.com"))
+        assertTrue(BrowserUrlSanitizer.EDUCATIONAL_ALLOWLIST_RULES.contains("youtube.com/embed*"))
+        assertTrue(BrowserUrlSanitizer.EDUCATIONAL_ALLOWLIST_RULES.contains("googlevideo.com"))
+        assertTrue(BrowserUrlSanitizer.EDUCATIONAL_ALLOWLIST_RULES.contains("ytimg.com"))
+        assertTrue(BrowserUrlSanitizer.TECHNICAL_HELPER_EXEMPTIONS.contains("blob:*"))
+        assertTrue(BrowserUrlSanitizer.TECHNICAL_HELPER_EXEMPTIONS.contains("data:*"))
+        assertTrue(BrowserUrlSanitizer.EDUCATIONAL_DNS_DOMAINS.contains("b-cdn.net"))
+        assertTrue(BrowserUrlSanitizer.EDUCATIONAL_DNS_DOMAINS.contains("googlevideo.com"))
+        assertTrue(BrowserUrlSanitizer.EDUCATIONAL_DNS_DOMAINS.contains("ytimg.com"))
+    }
 }

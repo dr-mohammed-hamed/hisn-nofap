@@ -18,6 +18,112 @@ object BrowserUrlSanitizer {
         "ssl.gstatic.com"
     )
 
+    /**
+     * Vetted educational streaming services, DRM players, and SSO/Captcha verification endpoints
+     * required for online learning platforms (e.g. Bunny Stream, VdoCipher, Vimeo player, YouTube embed,
+     * Turnstile, Google Accounts) without unblocking full social media or video browsing.
+     */
+    val EDUCATIONAL_ALLOWLIST_RULES: List<String> = listOf(
+        // Bunny Stream & CDN (dominant in Middle East & global LMS platforms)
+        "iframe.mediadelivery.net",
+        "video.bunnycdn.com",
+        "b-cdn.net",
+        // VdoCipher DRM Video Player (widely used in academies and universities)
+        "player.vdocipher.com",
+        "vdocipher.com",
+        // Vimeo Embed Player (embed player only; main vimeo browsing remains restricted)
+        "player.vimeo.com",
+        "vimeocdn.com",
+        // YouTube Embed Player (embed endpoints only; main youtube.com browsing remains restricted)
+        "youtube-nocookie.com",
+        "youtube.com/embed*",
+        "googlevideo.com",
+        "ytimg.com",
+        // Cloudflare Stream & CDN Delivery
+        "iframe.cloudflarestream.com",
+        "cloudflarestream.com",
+        "videodelivery.net",
+        // Wistia & Gumlet video embeds
+        "fast.wistia.net",
+        "play.gumlet.io",
+        // Bot protection & Captcha Verification (Turnstile, hCaptcha, reCAPTCHA)
+        "challenges.cloudflare.com",
+        "hcaptcha.com",
+        "recaptcha.net",
+        // Single Sign-On (Google & Microsoft for university portals)
+        "accounts.google.com",
+        "login.microsoftonline.com"
+    )
+
+    /**
+     * Required technical helper schemes for Chromium enterprise lockdown mode (URLBlocklist = ["*"]).
+     * Allows in-memory blob URLs (PDF downloads, HLS streams) and data URIs without arbitrary navigation.
+     */
+    val TECHNICAL_HELPER_EXEMPTIONS: List<String> = listOf(
+        "about:blank",
+        "about:srcdoc",
+        "data:*",
+        "blob:*",
+        "chrome://*"
+    )
+
+    /**
+     * DNS host exemptions required when Full-System Filtering is enabled alongside Whitelist Only mode.
+     * Contains only valid DNS hostnames (no path rules or technical URI schemes).
+     */
+    val EDUCATIONAL_DNS_DOMAINS: List<String> = listOf(
+        "iframe.mediadelivery.net",
+        "video.bunnycdn.com",
+        "b-cdn.net",
+        "player.vdocipher.com",
+        "vdocipher.com",
+        "player.vimeo.com",
+        "vimeocdn.com",
+        "youtube-nocookie.com",
+        "googlevideo.com",
+        "ytimg.com",
+        "iframe.cloudflarestream.com",
+        "cloudflarestream.com",
+        "videodelivery.net",
+        "fast.wistia.net",
+        "play.gumlet.io",
+        "challenges.cloudflare.com",
+        "hcaptcha.com",
+        "recaptcha.net",
+        "accounts.google.com",
+        "login.microsoftonline.com"
+    )
+
+    private val KNOWN_COMPOUND_TLDS: Set<String> = setOf(
+        "edu.eg", "com.eg", "gov.eg", "org.eg", "net.eg", "sci.eg",
+        "edu.sa", "com.sa", "gov.sa", "org.sa", "net.sa", "med.sa",
+        "co.uk", "org.uk", "ac.uk", "gov.uk", "me.uk", "net.uk",
+        "com.au", "edu.au", "gov.au", "net.au", "org.au",
+        "co.za", "edu.za", "gov.za", "org.za",
+        "com.tr", "edu.tr", "gov.tr", "org.tr",
+        "co.in", "edu.in", "gov.in", "org.in", "net.in",
+        "com.br", "edu.br", "gov.br", "org.br",
+        "co.jp", "ac.jp", "ne.jp", "go.jp",
+        "com.mx", "edu.mx", "gob.mx", "org.mx",
+        "com.pk", "edu.pk", "gov.pk", "org.pk",
+        "com.ng", "edu.ng", "gov.ng",
+        "com.kw", "edu.kw", "gov.kw",
+        "com.qa", "edu.qa", "gov.qa",
+        "com.om", "edu.om", "gov.om",
+        "com.jo", "edu.jo", "gov.jo",
+        "com.lb", "edu.lb", "gov.lb",
+        "com.ae", "edu.ae", "gov.ae", "net.ae",
+        "edu.ps", "com.ps", "gov.ps"
+    )
+
+    /** Multi-tenant host providers and search platforms where subdomains must NEVER be stripped to parent domain */
+    private val PRESERVE_SUBDOMAIN_PROVIDERS: Set<String> = setOf(
+        "wordpress.com", "blogspot.com", "github.io", "gitlab.io",
+        "firebaseapp.com", "web.app", "pages.dev", "netlify.app",
+        "vercel.app", "wixsite.com", "weebly.com", "azurewebsites.net",
+        "google.com"
+    )
+
     val SOCIAL_MEDIA_PRESETS: List<String> = listOf(
         "facebook.com",
         "instagram.com",
@@ -193,6 +299,140 @@ object BrowserUrlSanitizer {
     fun sanitizeList(inputs: Collection<String>?): List<String> {
         if (inputs == null) return emptyList()
         return inputs.mapNotNull { sanitize(it) }.distinct()
+    }
+
+    /**
+     * Extracts the registered root domain (eTLD+1) for a given hostname.
+     * Examples:
+     * - "student.platform.edu" -> "platform.edu"
+     * - "student.mansoura.edu.eg" -> "mansoura.edu.eg"
+     * - "login.portal.academy.com" -> "academy.com"
+     * - "192.168.1.1" -> "192.168.1.1"
+     * - "example.com" -> "example.com"
+     */
+    fun extractRootDomain(host: String): String {
+        val trimmed = host.trim().lowercase().trimEnd('.')
+        if (trimmed.isEmpty()) return ""
+
+        val labels = trimmed.split('.')
+        if (labels.size <= 2) {
+            return trimmed
+        }
+
+        // If all labels are numeric, it's an IPv4 address; return as-is
+        if (labels.all { label -> label.all { ch -> ch.isDigit() } }) {
+            return trimmed
+        }
+
+        val secondToLast = labels[labels.size - 2]
+        val last = labels.last()
+        val suffixCandidate = "$secondToLast.$last"
+
+        if (PRESERVE_SUBDOMAIN_PROVIDERS.contains(suffixCandidate)) {
+            return trimmed
+        }
+
+        return if (KNOWN_COMPOUND_TLDS.contains(suffixCandidate)) {
+            if (labels.size >= 3) {
+                labels.takeLast(3).joinToString(".")
+            } else {
+                trimmed
+            }
+        } else {
+            labels.takeLast(2).joinToString(".")
+        }
+    }
+
+    /**
+     * Sanitizes and normalizes an input URL or domain specifically for the Allowlist (Whitelist).
+     * Extracts the root domain (eTLD+1) without path, query, port, or wildcard prefixes,
+     * ensuring that subpages, sibling subdomains, and authentication redirects within the platform
+     * function seamlessly without being blocked by Chromium or DNS.
+     */
+    fun sanitizeForAllowlist(input: String?): String? {
+        if (input == null) return null
+        val trimmed = input.trim()
+        if (trimmed.isEmpty()) return null
+
+        // Reject strings containing whitespace or credentials
+        if (trimmed.any { it.isWhitespace() } || trimmed.contains('@')) return null
+
+        var cleaned = trimmed
+
+        // Strip protocol schemes
+        val lowerForScheme = cleaned.lowercase()
+        if (lowerForScheme.startsWith("https://")) {
+            cleaned = cleaned.substring(8)
+        } else if (lowerForScheme.startsWith("http://")) {
+            cleaned = cleaned.substring(7)
+        }
+
+        while (cleaned.startsWith('/')) {
+            cleaned = cleaned.substring(1)
+        }
+        if (cleaned.isEmpty()) return null
+
+        // Strip trailing slash and fragment
+        cleaned = cleaned.trimEnd('/')
+        if (cleaned.contains('#')) {
+            cleaned = cleaned.substringBefore('#').trimEnd('/')
+        }
+        if (cleaned.isEmpty()) return null
+
+        // Extract host part (before '/', '?', ':')
+        val pathIndex = cleaned.indexOfAny(charArrayOf('/', '?'))
+        val hostAndPort = if (pathIndex != -1) cleaned.substring(0, pathIndex) else cleaned
+        val hostOnly = hostAndPort.split(':').first().trim()
+        if (hostOnly.isEmpty()) return null
+
+        // Remove wildcard (*.) or leading dot
+        var normalizedHost = hostOnly.lowercase()
+        if (normalizedHost.startsWith("*.")) {
+            normalizedHost = normalizedHost.removePrefix("*.")
+        }
+        if (normalizedHost.startsWith(".")) {
+            normalizedHost = normalizedHost.removePrefix(".")
+        }
+        if (normalizedHost.startsWith("www.") && normalizedHost.removePrefix("www.").contains('.')) {
+            normalizedHost = normalizedHost.removePrefix("www.")
+        }
+
+        if (normalizedHost.isEmpty() || !normalizedHost.contains('.')) {
+            return null
+        }
+
+        // Convert IDN to Punycode
+        val asciiHost = try {
+            IDN.toASCII(normalizedHost)
+        } catch (_: Exception) {
+            return null
+        }
+
+        val rootDomain = extractRootDomain(asciiHost)
+        if (rootDomain.isEmpty()) return null
+
+        val labels = rootDomain.split('.')
+        if (labels.size < 2 || labels.any { !isValidHostLabel(it) }) {
+            return null
+        }
+
+        return rootDomain
+    }
+
+    // Cleans an existing policy string to be compliant with Chromium URL filter format:
+    // - Removes wildcard prefixes ('*.') because naked domain covers all subdomains in Chromium.
+    // - Removes trailing wildcards (e.g. domain.com/wildcard -> domain.com).
+    fun cleanForChromiumAllowlist(rule: String): String {
+        var cleaned = rule.trim()
+        if (cleaned.startsWith("*.")) {
+            cleaned = cleaned.removePrefix("*.")
+        } else if (cleaned.startsWith(".")) {
+            cleaned = cleaned.removePrefix(".")
+        }
+        if (cleaned.endsWith("/*")) {
+            cleaned = cleaned.removeSuffix("/*")
+        }
+        return cleaned.trimEnd('/')
     }
 
     private fun isValidHostLabel(label: String): Boolean {

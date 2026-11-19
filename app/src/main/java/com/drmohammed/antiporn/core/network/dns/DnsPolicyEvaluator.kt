@@ -133,7 +133,8 @@ object DnsPolicyEvaluator {
             when (policy.browserFilterMode) {
                 DevicePolicyBundle.BROWSER_FILTER_WHITELIST_ONLY -> {
                     val isSystemExempt = isCoreGoogleSystemExempt(qName)
-                    if (!isSystemExempt && !isDomainInSet(qName, policy.customAllowedUrls)) {
+                    val isEducationalExempt = isEducationalDnsExempt(qName)
+                    if (!isSystemExempt && !isEducationalExempt && !isDomainInSet(qName, policy.customAllowedUrls, isAllowlist = true)) {
                         return PolicyAction.BlockCustom
                     }
                 }
@@ -151,7 +152,7 @@ object DnsPolicyEvaluator {
             binaryResult == BinaryDomainFilter.FilterResult.BLOCKED_ADS
         ) {
             if (!isDomainInSanitizedSet(qName, SANITIZED_ESSENTIAL_DEEP_LINK_DOMAINS) &&
-                !isDomainInSet(qName, policy.customAllowedUrls)
+                !isDomainInSet(qName, policy.customAllowedUrls, isAllowlist = true)
             ) {
                 return PolicyAction.BlockAds
             }
@@ -180,6 +181,15 @@ object DnsPolicyEvaluator {
 
     private fun isCoreGoogleSystemExempt(qName: String): Boolean {
         for (domain in CORE_GOOGLE_SYSTEM_DOMAINS) {
+            if (qName == domain || qName.endsWith(".$domain")) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun isEducationalDnsExempt(qName: String): Boolean {
+        for (domain in BrowserUrlSanitizer.EDUCATIONAL_DNS_DOMAINS) {
             if (qName == domain || qName.endsWith(".$domain")) {
                 return true
             }
@@ -227,7 +237,7 @@ object DnsPolicyEvaluator {
         return false
     }
 
-    private fun isDomainInSet(qName: String, domainSet: Set<String>): Boolean {
+    private fun isDomainInSet(qName: String, domainSet: Set<String>, isAllowlist: Boolean = false): Boolean {
         if (domainSet.isEmpty()) return false
         val normalizedQName = qName.trim().lowercase().trimEnd('.')
         val noWwwQuery = if (normalizedQName.startsWith("www.") && normalizedQName.removePrefix("www.").contains('.')) {
@@ -237,7 +247,11 @@ object DnsPolicyEvaluator {
         }
 
         for (target in domainSet) {
-            val cleanTarget = DnsPacketParser.sanitizeRule(target)
+            val cleanTarget = if (isAllowlist) {
+                DnsPacketParser.extractHostForAllowlist(target)
+            } else {
+                DnsPacketParser.sanitizeRule(target)
+            }
             if (cleanTarget.isBlank() || !cleanTarget.contains('.')) continue
 
             if (normalizedQName == cleanTarget || normalizedQName.endsWith(".$cleanTarget")) {

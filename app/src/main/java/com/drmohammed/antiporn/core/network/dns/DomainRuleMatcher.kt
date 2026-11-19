@@ -54,6 +54,45 @@ internal object DomainRuleMatcher {
     }
 
     /**
+     * Sanitizes a domain rule for the Allowlist (customAllowedUrls).
+     * Unlike [sanitizeRule], if a rule contains a URL path or query (e.g. "platform.edu/login"),
+     * this extracts the host portion so the DNS engine can resolve the educational platform,
+     * leaving path-level restrictions to BrowserShield.
+     */
+    fun extractHostForAllowlist(rule: String): String {
+        val trimmed = rule.trim().lowercase()
+            .removePrefix("https://")
+            .removePrefix("http://")
+
+        val pathIndex = trimmed.indexOfAny(charArrayOf('/', '?', '#'))
+        val hostPart = if (pathIndex != -1) trimmed.substring(0, pathIndex) else trimmed
+
+        val cleaned = hostPart
+            .split(':').first()
+            .removePrefix("*.")
+            .trimStart('.')
+            .trimEnd('.')
+            .trim()
+
+        if (cleaned.isEmpty()) return ""
+
+        val asciiCleaned = if (cleaned.any { it.code > 127 }) {
+            try {
+                IDN.toASCII(cleaned, IDN.ALLOW_UNASSIGNED).lowercase()
+            } catch (_: IllegalArgumentException) {
+                cleaned
+            }
+        } else {
+            cleaned
+        }
+        return if (asciiCleaned.startsWith("www.") && asciiCleaned.removePrefix("www.").contains('.')) {
+            asciiCleaned.removePrefix("www.")
+        } else {
+            asciiCleaned
+        }
+    }
+
+    /**
      * Pre-compiles raw user rules into a flattened, sanitized set of target domains,
      * including automatic smart service expansions.
      */

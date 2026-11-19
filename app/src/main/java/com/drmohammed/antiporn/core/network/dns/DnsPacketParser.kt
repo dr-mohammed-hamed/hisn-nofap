@@ -216,6 +216,8 @@ object DnsPacketParser {
 
     fun sanitizeRule(rule: String): String = DomainRuleMatcher.sanitizeRule(rule)
 
+    fun extractHostForAllowlist(rule: String): String = DomainRuleMatcher.extractHostForAllowlist(rule)
+
     fun compileEffectiveBlockedDomains(rules: Set<String>): Set<String> =
         DomainRuleMatcher.compileEffectiveBlockedDomains(rules)
 

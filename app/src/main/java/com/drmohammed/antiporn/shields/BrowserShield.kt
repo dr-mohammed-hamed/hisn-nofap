@@ -49,8 +49,15 @@ object BrowserShield : ProtectionShield {
             val (blocklist, allowlist) = when (policy.browserFilterMode) {
                 DevicePolicyBundle.BROWSER_FILTER_BLOCKLIST ->
                     baseBlocked.toTypedArray() to emptyArray()
-                DevicePolicyBundle.BROWSER_FILTER_WHITELIST_ONLY ->
-                    arrayOf("*") to (policy.customAllowedUrls + BrowserUrlSanitizer.CAPTIVE_PORTAL_EXEMPTIONS).distinct().toTypedArray()
+                DevicePolicyBundle.BROWSER_FILTER_WHITELIST_ONLY -> {
+                    val rawAllowed = policy.customAllowedUrls.map { BrowserUrlSanitizer.cleanForChromiumAllowlist(it) }
+                    val fullAllowlist = (rawAllowed +
+                            BrowserUrlSanitizer.CAPTIVE_PORTAL_EXEMPTIONS +
+                            BrowserUrlSanitizer.EDUCATIONAL_ALLOWLIST_RULES +
+                            BrowserUrlSanitizer.TECHNICAL_HELPER_EXEMPTIONS
+                    ).distinct()
+                    arrayOf("*", "chrome://flags*") to fullAllowlist.toTypedArray()
+                }
                 else ->
                     if (policy.isTelegramWebBlocked) {
                         com.drmohammed.antiporn.core.network.dns.DnsPolicyEvaluator.TELEGRAM_WEB_DOMAINS.toTypedArray() to emptyArray()
