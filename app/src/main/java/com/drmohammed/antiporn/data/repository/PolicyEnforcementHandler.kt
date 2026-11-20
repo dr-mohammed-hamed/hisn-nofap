@@ -104,6 +104,9 @@ internal class PolicyEnforcementHandler(
                 CurfewScheduler.scheduleNextAlarms(appContext)
                 CurfewConfig.setVpnBypassedPackages(appContext, bundle.curfewVpnBypassPackages)
                 CurfewEnforcer.syncBlockState(appContext)
+                if (bundle.dnsHost != effectivePreviousPolicy.dnsHost) {
+                    com.drmohammed.antiporn.core.network.dns.DnsResilienceManager.resetStateSync()
+                }
                 CurfewBlackholeVpnService.syncPolicy(appContext)
 
                 if (isDeviceOwner) {

@@ -497,4 +497,73 @@ class TrustedTimeTest {
             reboot2Time >= syncTime + (7L * 3600L * 1000L)
         )
     }
+
+    @Test
+    fun testBackwardDriftTolerance_acceptsSlightBackwardServerTimestamp() {
+        val (inMemoryPrefs, fakeCtx) = createInMemoryPrefsContext()
+        val syncTime = 1_720_000_000_000L
+        fakeElapsed = 100_000L
+        fakeWall = syncTime
+
+        TrustedTimeProvider.resetForTesting()
+        TrustedTimeProvider.sntpRequester = {
+            SntpResult(
+                timeMs = syncTime,
+                elapsedRealtimeMs = fakeElapsed,
+                roundTripLatencyMs = 20L,
+                source = "SNTP: initial"
+            )
+        }
+        assertTrue(TrustedTimeProvider.syncNow(fakeCtx, force = true))
+
+        // Device clock drifted forward +2000ms over next hour (fakeElapsed +1h, but true network time is +1h - 2000ms)
+        fakeElapsed += 3600_000L
+        val serverTimeSlightlyBehind = syncTime + 3600_000L - 2000L // 2s behind computed floor
+        TrustedTimeProvider.sntpRequester = {
+            SntpResult(
+                timeMs = serverTimeSlightlyBehind,
+                elapsedRealtimeMs = fakeElapsed,
+                roundTripLatencyMs = 15L,
+                source = "SNTP: drift_corrected"
+            )
+        }
+        // Within 10s backward tolerance -> MUST succeed without deadlocking!
+        assertTrue("Sync within 10s backward drift tolerance must succeed", TrustedTimeProvider.syncNow(fakeCtx, force = true))
+        assertTrue(TrustedTimeProvider.isTrusted())
+    }
+
+    @Test
+    fun testQuorumSelfHealing_recoversFromInflatedFloor() {
+        val (inMemoryPrefs, fakeCtx) = createInMemoryPrefsContext()
+        val baseTime = 1_720_000_000_000L
+        val inflatedTime = baseTime + (60 * 1000L) // +60s inflated
+        fakeElapsed = 100_000L
+        fakeWall = inflatedTime
+
+        TrustedTimeProvider.resetForTesting()
+        TrustedTimeProvider.sntpRequester = {
+            SntpResult(
+                timeMs = inflatedTime,
+                elapsedRealtimeMs = fakeElapsed,
+                roundTripLatencyMs = 20L,
+                source = "SNTP: inflated"
+            )
+        }
+        assertTrue(TrustedTimeProvider.syncNow(fakeCtx, force = true))
+
+        // Two servers agree on baseTime (+25s instead of +60s), meaning floor was inflated by 35s
+        val realNetworkTime = baseTime + 25_000L
+        TrustedTimeProvider.sntpRequester = {
+            SntpResult(
+                timeMs = realNetworkTime,
+                elapsedRealtimeMs = fakeElapsed,
+                roundTripLatencyMs = 15L,
+                source = "SNTP: real [quorum:time.cloudflare.com]",
+                isQuorumVerified = true
+            )
+        }
+        // Quorum verified -> MUST self-heal and update floor!
+        assertTrue("Quorum verified sync must heal inflated floor", TrustedTimeProvider.syncNow(fakeCtx, force = true))
+        assertEquals(realNetworkTime, TrustedTimeProvider.getLastKnownTrueTime())
+    }
 }

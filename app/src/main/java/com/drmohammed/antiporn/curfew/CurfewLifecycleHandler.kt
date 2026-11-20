@@ -11,6 +11,7 @@ import com.drmohammed.antiporn.curfew.notification.ProtectionNotificationCoordin
 import com.drmohammed.antiporn.data.repository.ApprovalRepository
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.shields.AppSuspensionShield
+import com.drmohammed.antiporn.shields.BrowserShield
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import com.drmohammed.antiporn.telemetry.SafeDpmGateway
 import com.drmohammed.antiporn.waqfa.engine.WaqfaCooldownStore
@@ -22,6 +23,35 @@ import com.drmohammed.antiporn.waqfa.engine.WaqfaCooldownStore
 internal object CurfewLifecycleHandler {
 
     private const val TAG = "AntiPorn_CurfewLifecycle"
+    private val unfreezableSystemPackages = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    private fun isSafeUnfreezableSystemApp(
+        context: Context,
+        pm: PackageManager,
+        pkg: String,
+        customBlacklist: Set<String> = emptySet()
+    ): Boolean {
+        return try {
+            val ai = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.getApplicationInfo(pkg, PackageManager.ApplicationInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getApplicationInfo(pkg, 0)
+            }
+            val isSystem = (ai.flags and ApplicationInfo.FLAG_SYSTEM != 0) ||
+                (ai.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP != 0)
+            val isStoreOrSearch = CurfewConfig.KNOWN_APP_STORES.contains(pkg) ||
+                pkg == CurfewConfig.GOOGLE_PLAY_STORE_PACKAGE ||
+                pkg == CurfewConfig.GOOGLE_SEARCH_PACKAGE ||
+                CurfewConfig.CURFEW_SEARCH_APPS.contains(pkg)
+            val isHighRiskOrBlacklisted = isHighRiskOrBlacklistedForRelease(pkg, emptySet(), customBlacklist)
+            val isBrowser = BrowserShield.TARGET_BROWSER_PACKAGES.contains(pkg)
+
+            isSystem && !isStoreOrSearch && !isHighRiskOrBlacklisted && !isBrowser && !customBlacklist.contains(pkg)
+        } catch (_: Exception) {
+            false
+        }
+    }
 
     fun isPackageInstalled(
         pm: PackageManager,
@@ -67,6 +97,7 @@ internal object CurfewLifecycleHandler {
         syncNotificationSafely(context, "enforceActivation")
 
         val targets = CurfewAppResolver.getCurfewTargetPackages(context)
+        val policySnapshot = loadPolicyAndApprovalsFailSecure(context, "suspendCurfewApps")
         Log.i(TAG, "Enforcing Curfew ON for ${targets.size} targeted packages")
 
         val pm = context.packageManager
@@ -77,12 +108,21 @@ internal object CurfewLifecycleHandler {
         val (storesOk, _) = suspendPackagesChecked(context, storesBatchToSuspend, suspend = true, label = "store/search")
         if (!storesOk) overallSuccess = false
 
-        val installedTargets = targets.filter { isPackageInstalled(pm, it) }
+        val installedTargets = targets.filter { isPackageInstalled(pm, it) && !unfreezableSystemPackages.contains(it) }
         val toSuspend = installedTargets.filter { pkg ->
             SafeDpmGateway.isPackageSuspendedBlocking(context, pkg).getOrNull() != true
         }
         val (appsOk, failedApps) = suspendPackagesChecked(context, toSuspend, suspend = true, label = "curfew target")
-        if (!appsOk) overallSuccess = false
+        var unmitigatedFailure = false
+        for (failed in failedApps) {
+            if (isSafeUnfreezableSystemApp(context, pm, failed, policySnapshot.customBlacklist)) {
+                unfreezableSystemPackages.add(failed)
+                Log.w(TAG, "Package $failed is an unfreezable system/OEM app; cached to prevent repeated curfew failure")
+            } else {
+                unmitigatedFailure = true
+            }
+        }
+        if (!appsOk && unmitigatedFailure) overallSuccess = false
         val newlySuspendedApps = toSuspend.filterNot { it in failedApps }
         val activeTrackedApps = installedTargets.filterNot { it in failedApps }
 
@@ -96,11 +136,12 @@ internal object CurfewLifecycleHandler {
         CurfewConfig.setLastBlockEnforced(context, true)
         CurfewConfig.setDnsRestorePending(context, false)
 
+        val failedDetails = if (failedApps.isNotEmpty()) ", failedPkgs=${failedApps.joinToString()}" else ""
         BlackBoxRecorder.recordCurfew(
             context,
             "CURFEW_ACTIVATED",
             isSuccess = overallSuccess,
-            details = "targets=${targets.size}, suspended=${newlySuspendedApps.size}, tracked=${activeTrackedApps.size}, failed=${failedApps.size}, vpnEnabled=$vpnEnabled, instantKill=$instantKill, nap=${NapController.isNapActive(context)}"
+            details = "targets=${targets.size}, suspended=${newlySuspendedApps.size}, tracked=${activeTrackedApps.size}, failed=${failedApps.size}$failedDetails, vpnEnabled=$vpnEnabled, instantKill=$instantKill, nap=${NapController.isNapActive(context)}"
         )
         overallSuccess
         }

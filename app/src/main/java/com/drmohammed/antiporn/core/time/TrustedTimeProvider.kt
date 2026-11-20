@@ -114,6 +114,7 @@ object TrustedTimeProvider {
     @Volatile private var trustedTimeZoneId: String = CurfewConfig.getDefaultFallbackTimeZone()
     @Volatile private var isInitialized: Boolean = false
     @Volatile private var cachedAppContext: Context? = null
+    private val isSyncInProgress = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private val stateLock = Any()
     private val persistLock = Any()
@@ -205,8 +206,9 @@ object TrustedTimeProvider {
         return if (result != null) {
             val currentLast = lastKnownTrueTimeMs.get()
             if (hasEverSynced() && currentLast > 0L) {
-                if (result.timeMs < currentLast) {
-                    safeLog(Log.WARN, "Rejecting sync result earlier than lastKnown: time=${result.timeMs}, lastKnown=$currentLast")
+                val floor = currentLast - SntpClient.MAX_BACKWARD_DRIFT_TOLERANCE_MS
+                if (result.timeMs < floor && !result.isQuorumVerified) {
+                    safeLog(Log.WARN, "Rejecting sync result earlier than floor: time=${result.timeMs}, floor=$floor, lastKnown=$currentLast")
                     return false
                 }
                 if (result.timeMs > currentLast + SntpClient.MAX_HTTP_FUTURE_DRIFT_MS && !result.isQuorumVerified) {
@@ -227,7 +229,11 @@ object TrustedTimeProvider {
                 )
                 currentAnchor.set(newAnchor)
 
-                lastKnownTrueTimeMs.accumulateAndGet(result.timeMs, ::maxOf)
+                if (result.isQuorumVerified) {
+                    lastKnownTrueTimeMs.set(result.timeMs)
+                } else {
+                    lastKnownTrueTimeMs.accumulateAndGet(result.timeMs, ::maxOf)
+                }
                 lastSyncElapsedRealtime = result.elapsedRealtimeMs
                 lastPersistedElapsedMs.set(result.elapsedRealtimeMs)
                 hasEverSyncedFlag = true
@@ -281,12 +287,14 @@ object TrustedTimeProvider {
             )
             true
         } else {
-            safeLog(Log.WARN, "TrustedTime network synchronization failed across all sources")
+            val failureDetail = SntpClient.lastFailureSummary?.takeIf { it.isNotBlank() }
+                ?: "Network synchronization failed across all sources"
+            safeLog(Log.WARN, "TrustedTime network synchronization failed across all sources: $failureDetail")
             safeRecordTime(
                 context,
                 "SNTP_SYNC_FAILED",
                 isSuccess = false,
-                error = "Network synchronization failed across all sources"
+                error = failureDetail
             )
             false
         }
@@ -306,16 +314,27 @@ object TrustedTimeProvider {
      */
     fun syncNowAsync(context: Context, force: Boolean = false, onComplete: ((Boolean) -> Unit)? = null) {
         val appContext = context.applicationContext ?: context
+        if (!force && !isSyncInProgress.compareAndSet(false, true)) {
+            safeLog(Log.DEBUG, "syncNowAsync skipped: single-flight sync already in progress")
+            return
+        }
+        if (force) {
+            isSyncInProgress.set(true)
+        }
         timeScope.launch {
-            val success = syncNow(appContext, force)
-            if (onComplete != null) {
-                mainHandler.post {
-                    try {
-                        onComplete(success)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Unhandled exception in syncNowAsync onComplete callback", e)
+            try {
+                val success = syncNow(appContext, force)
+                if (onComplete != null) {
+                    mainHandler.post {
+                        try {
+                            onComplete(success)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Unhandled exception in syncNowAsync onComplete callback", e)
+                        }
                     }
                 }
+            } finally {
+                isSyncInProgress.set(false)
             }
         }
     }
@@ -662,6 +681,7 @@ object TrustedTimeProvider {
             isInitialized = false
             cachedAppContext = null
             onTimeDriftCorrected = null
+            isSyncInProgress.set(false)
             sntpRequester = { SntpClient.requestTime() }
         }
     }

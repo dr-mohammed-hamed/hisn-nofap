@@ -31,7 +31,8 @@ object DnsShield : ProtectionShield {
     fun getEffectiveDnsHost(context: Context): String {
         return try {
             val policy = PolicyRepository.getInstance(context).getCurrentPolicy()
-            policy.dnsHost.takeIf { it.isNotBlank() } ?: DEFAULT_DNS_HOST
+            val host = policy.dnsHost.takeIf { it.isNotBlank() } ?: DEFAULT_DNS_HOST
+            com.drmohammed.antiporn.core.network.dns.DnsResilienceManager.getEffectiveRuntimeDnsHost(host)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to read policy for DNS host, falling back to default", e)
             DEFAULT_DNS_HOST

@@ -105,9 +105,11 @@ interface SafeDpmPolicyBridge : SafeDpmBaseGateway {
 
     private fun validatePrivateDnsResult(resultCode: Int): Int {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-            resultCode != DevicePolicyManager.PRIVATE_DNS_SET_NO_ERROR
+            resultCode != DevicePolicyManager.PRIVATE_DNS_SET_NO_ERROR &&
+            resultCode != DevicePolicyManager.PRIVATE_DNS_SET_ERROR_HOST_NOT_SERVING &&
+            resultCode != DevicePolicyManager.PRIVATE_DNS_SET_ERROR_FAILURE_SETTING
         ) {
-            throw IllegalStateException("DPM private DNS configuration failed with error code: $resultCode")
+            throw IllegalStateException("DPM private DNS configuration failed with unexpected error code: $resultCode")
         }
         return resultCode
     }

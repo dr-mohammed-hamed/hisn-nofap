@@ -144,6 +144,7 @@ class NetworkWatchdog {
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private val statesByNetwork = ConcurrentHashMap<String, NetworkStateSnapshot>()
     private val linkSignaturesByNetwork = ConcurrentHashMap<String, String>()
+    private val privateDnsStatesByNetwork = ConcurrentHashMap<String, Pair<Boolean, String?>>()
 
     /**
      * Registers a network callback that notifies when Internet connectivity is restored
@@ -165,6 +166,24 @@ class NetworkWatchdog {
     fun register(
         context: Context,
         onNetworkChanged: ((reason: String) -> Unit)?,
+        onNetworkAvailable: () -> Unit
+    ) {
+        register(
+            context = context,
+            onNetworkChanged = onNetworkChanged,
+            onDetailedNetworkTransition = null,
+            onNetworkAvailable = onNetworkAvailable
+        )
+    }
+
+    /**
+     * Extended registration overload passing the target [Network] and transport label
+     * to support fine-grained per-network DNS resilience and anti-flapping guards.
+     */
+    fun register(
+        context: Context,
+        onNetworkChanged: ((reason: String) -> Unit)? = null,
+        onDetailedNetworkTransition: ((reason: String, network: Network?, transport: String?) -> Unit)? = null,
         onNetworkAvailable: () -> Unit
     ) {
         synchronized(callbackLock) {
@@ -207,8 +226,12 @@ class NetworkWatchdog {
                                     classifyCapabilityTransition(null, current, netKey)?.let { event ->
                                         recordTransitionEvent(appContext, event)
                                     }
+                                    onNetworkChanged?.invoke("net_captive_portal:${current.transport}")
+                                    onDetailedNetworkTransition?.invoke("net_captive_portal:${current.transport}", network, current.transport)
+                                } else {
+                                    onNetworkChanged?.invoke("net_available:${current.transport}")
+                                    onDetailedNetworkTransition?.invoke("net_available:${current.transport}", network, current.transport)
                                 }
-                                onNetworkChanged?.invoke("net_available:${current.transport}")
                                 onNetworkAvailable.invoke()
                                 return
                             }
@@ -218,13 +241,20 @@ class NetworkWatchdog {
                             when (event.action) {
                                 "NET_VALIDATED" -> {
                                     onNetworkChanged?.invoke("net_validated:${current.transport}")
+                                    onDetailedNetworkTransition?.invoke("net_validated:${current.transport}", network, current.transport)
                                     onNetworkAvailable.invoke()
                                 }
                                 "NET_UNVALIDATED" -> {
                                     onNetworkChanged?.invoke("net_unvalidated:${current.transport}")
+                                    onDetailedNetworkTransition?.invoke("net_unvalidated:${current.transport}", network, current.transport)
+                                }
+                                "NET_CAPTIVE_PORTAL" -> {
+                                    onNetworkChanged?.invoke("net_captive_portal:${current.transport}")
+                                    onDetailedNetworkTransition?.invoke("net_captive_portal:${current.transport}", network, current.transport)
                                 }
                                 "NET_TRANSPORT_CHANGED" -> {
                                     onNetworkChanged?.invoke("net_transport_changed:${previous.transport}->${current.transport}")
+                                    onDetailedNetworkTransition?.invoke("net_transport_changed:${previous.transport}->${current.transport}", network, current.transport)
                                 }
                             }
                         } catch (e: Exception) {
@@ -245,6 +275,21 @@ class NetworkWatchdog {
                             if (previousSignature != null && previousSignature != signature) {
                                 Timber.tag(TAG).i("Physical network link properties changed: net=%s", netKey)
                                 onNetworkChanged?.invoke("net_link_changed")
+                                onDetailedNetworkTransition?.invoke("net_link_changed", network, statesByNetwork[netKey]?.transport)
+                            }
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                                val isPrivateDns = linkProperties.isPrivateDnsActive
+                                val dnsServerName = linkProperties.privateDnsServerName
+                                val currentDnsState = isPrivateDns to dnsServerName
+                                val previousDnsState = privateDnsStatesByNetwork.put(netKey, currentDnsState)
+                                if (previousDnsState == null || previousDnsState != currentDnsState) {
+                                    BlackBoxRecorder.recordNetwork(
+                                        context = appContext,
+                                        action = "NET_LINK_PROPERTIES",
+                                        isSuccess = true,
+                                        details = "net=$netKey, privateDnsActive=$isPrivateDns, server=$dnsServerName"
+                                    )
+                                }
                             }
                         } catch (e: Exception) {
                             Timber.tag(TAG).e(e, "Error handling onLinkPropertiesChanged for network=$network")
@@ -256,6 +301,7 @@ class NetworkWatchdog {
                         try {
                             val netKey = network.toString()
                             linkSignaturesByNetwork.remove(netKey)
+                            privateDnsStatesByNetwork.remove(netKey)
                             val removed = statesByNetwork.remove(netKey) ?: return
 
                             Timber.tag(TAG).i(
@@ -271,6 +317,7 @@ class NetworkWatchdog {
                                 details = "transport=${removed.transport}, wasValidated=${removed.isValidated}, net=$netKey"
                             )
                             onNetworkChanged?.invoke("net_lost:${removed.transport}")
+                            onDetailedNetworkTransition?.invoke("net_lost:${removed.transport}", network, removed.transport)
                         } catch (e: Exception) {
                             Timber.tag(TAG).e(e, "Error handling onLost for network=$network")
                         }
@@ -301,6 +348,7 @@ class NetworkWatchdog {
             isRegistered = false
             statesByNetwork.clear()
             linkSignaturesByNetwork.clear()
+            privateDnsStatesByNetwork.clear()
             networkCallback?.let {
                 try {
                     connectivityManager?.unregisterNetworkCallback(it)

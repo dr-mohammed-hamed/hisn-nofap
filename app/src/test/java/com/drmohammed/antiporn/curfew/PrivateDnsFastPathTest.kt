@@ -325,7 +325,7 @@ class PrivateDnsFastPathTest {
     }
 
     @Test
-    fun testApplyStandaloneDot_writesSettingsGlobalStrictlyBeforeDpmCall() {
+    fun testApplyStandaloneDot_dpmCalledFirst_andNeverWritesGlobalOnHostNotServing() {
         val executionLog = mutableListOf<String>()
 
         val (resultCode, usedFallback) = CurfewVpnDnsBridge.applyStandaloneDotInternal(
@@ -352,9 +352,9 @@ class PrivateDnsFastPathTest {
         assertEquals(
             listOf(
                 "markInternalMutation",
+                "setDpm:$expectedHost",
                 "writeGlobal:private_dns_mode=hostname",
                 "writeGlobal:private_dns_specifier=$expectedHost",
-                "setDpm:$expectedHost",
                 "clearPending"
             ),
             executionLog
@@ -362,32 +362,73 @@ class PrivateDnsFastPathTest {
     }
 
     @Test
-    fun testApplyStandaloneDot_dpmFailsAfterGlobalWriteSucceeded_returnsFallbackAndClearsPending() {
-        val dpmFailureCases = listOf(
-            true to DevicePolicyManager.PRIVATE_DNS_SET_ERROR_HOST_NOT_SERVING,
-            false to DevicePolicyManager.PRIVATE_DNS_SET_ERROR_FAILURE_SETTING
+    fun testApplyStandaloneDot_dpmFailsWithHostNotServing_strictlySkipsGlobalWrite() {
+        val executionLog = mutableListOf<String>()
+        var clearPendingHostNotServing = 0
+        val (resHostNotServing, fallbackHostNotServing) = CurfewVpnDnsBridge.applyStandaloneDotInternal(
+            targetHost = expectedHost,
+            currentDpmMode = DevicePolicyManager.PRIVATE_DNS_MODE_OFF,
+            currentDpmHost = null,
+            globalMode = "off",
+            globalHost = null,
+            isDeviceOwner = true,
+            markInternalMutation = { executionLog.add("markInternalMutation") },
+            writeGlobal = { key, value ->
+                executionLog.add("writeGlobal:$key=$value")
+                true
+            },
+            setDpmPrivateDns = { host ->
+                executionLog.add("setDpm:$host")
+                true to DevicePolicyManager.PRIVATE_DNS_SET_ERROR_HOST_NOT_SERVING
+            },
+            clearDnsRestorePending = { clearPendingHostNotServing++ }
+        )
+        assertEquals(DevicePolicyManager.PRIVATE_DNS_SET_ERROR_HOST_NOT_SERVING, resHostNotServing)
+        assertFalse("HOST_NOT_SERVING must NOT report usedFallback=true", fallbackHostNotServing)
+        assertEquals(0, clearPendingHostNotServing)
+        assertEquals(
+            "Settings.Global must NEVER be written when DPM returns HOST_NOT_SERVING (error 1)",
+            listOf("markInternalMutation", "setDpm:$expectedHost"),
+            executionLog
         )
 
-        for ((dpmOk, dpmCode) in dpmFailureCases) {
-            var clearPendingCalls = 0
-
-            val (resultCode, usedFallback) = CurfewVpnDnsBridge.applyStandaloneDotInternal(
-                targetHost = expectedHost,
-                currentDpmMode = DevicePolicyManager.PRIVATE_DNS_MODE_OFF,
-                currentDpmHost = null,
-                globalMode = "off",
-                globalHost = null,
-                isDeviceOwner = true,
-                markInternalMutation = {},
-                writeGlobal = { _, _ -> true },
-                setDpmPrivateDns = { dpmOk to dpmCode },
-                clearDnsRestorePending = { clearPendingCalls++ }
-            )
-
-            assertEquals(dpmCode, resultCode)
-            assertTrue("DPM failure ($dpmOk, $dpmCode) after Global write must report usedFallback=true", usedFallback)
-            assertEquals(1, clearPendingCalls)
-        }
+        // OEM Failure Setting (error 2) falls back to Settings.Global direct write
+        val fallbackLog = mutableListOf<String>()
+        var clearPendingFailureSetting = 0
+        val (resFailureSetting, fallbackFailureSetting) = CurfewVpnDnsBridge.applyStandaloneDotInternal(
+            targetHost = expectedHost,
+            currentDpmMode = DevicePolicyManager.PRIVATE_DNS_MODE_OFF,
+            currentDpmHost = null,
+            globalMode = "off",
+            globalHost = null,
+            isDeviceOwner = true,
+            markInternalMutation = { fallbackLog.add("markInternalMutation") },
+            writeGlobal = { key, value ->
+                fallbackLog.add("writeGlobal:$key=$value")
+                true
+            },
+            setDpmPrivateDns = { host ->
+                fallbackLog.add("setDpm:$host")
+                false to DevicePolicyManager.PRIVATE_DNS_SET_ERROR_FAILURE_SETTING
+            },
+            clearDnsRestorePending = {
+                clearPendingFailureSetting++
+                fallbackLog.add("clearPending")
+            }
+        )
+        assertEquals(DevicePolicyManager.PRIVATE_DNS_SET_ERROR_FAILURE_SETTING, resFailureSetting)
+        assertTrue("FAILURE_SETTING with successful Settings.Global write reports usedFallback=true", fallbackFailureSetting)
+        assertEquals(1, clearPendingFailureSetting)
+        assertEquals(
+            listOf(
+                "markInternalMutation",
+                "setDpm:$expectedHost",
+                "writeGlobal:private_dns_mode=hostname",
+                "writeGlobal:private_dns_specifier=$expectedHost",
+                "clearPending"
+            ),
+            fallbackLog
+        )
     }
 
     @Test

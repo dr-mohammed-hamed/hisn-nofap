@@ -67,7 +67,7 @@ object DnsFilteringValidator {
      * Executes the comprehensive pre-flight DoT probe against the given DNS host.
      * Must be called from a background thread (e.g. Dispatchers.IO).
      */
-    fun validateDnsHost(host: String): ValidationResult {
+    fun validateDnsHost(host: String, network: android.net.Network? = null): ValidationResult {
         val cleanHost = host.trim().lowercase()
         if (cleanHost.isBlank() || cleanHost.any { it.isWhitespace() }) {
             return ValidationResult.Unreachable("Invalid or empty DNS hostname")
@@ -83,7 +83,26 @@ object DnsFilteringValidator {
         try {
             Log.d(TAG, "Connecting to DoT host $cleanHost:$DOT_PORT...")
             val factory = SSLSocketFactory.getDefault() as SSLSocketFactory
-            val rawSocket = factory.createSocket() as SSLSocket
+            val rawSocket = if (network != null) {
+                val base = network.socketFactory.createSocket()
+                try {
+                    val resolved = try {
+                        network.getAllByName(cleanHost).firstOrNull { it is java.net.Inet4Address }
+                            ?: network.getByName(cleanHost)
+                    } catch (e: Exception) {
+                        java.net.InetAddress.getByName(cleanHost)
+                    }
+                    base.connect(InetSocketAddress(resolved, DOT_PORT), CONNECT_TIMEOUT_MS)
+                    factory.createSocket(base, cleanHost, DOT_PORT, true) as SSLSocket
+                } catch (e: Exception) {
+                    try { base.close() } catch (_: Exception) {}
+                    throw e
+                }
+            } else {
+                val s = factory.createSocket() as SSLSocket
+                s.connect(InetSocketAddress(cleanHost, DOT_PORT), CONNECT_TIMEOUT_MS)
+                s
+            }
             socket = rawSocket
             rawSocket.soTimeout = READ_TIMEOUT_MS
 
@@ -97,7 +116,6 @@ object DnsFilteringValidator {
                 Log.w(TAG, "Failed configuring SNI/endpoint identification for $cleanHost: ${e.message}")
             }
 
-            rawSocket.connect(InetSocketAddress(cleanHost, DOT_PORT), CONNECT_TIMEOUT_MS)
             rawSocket.startHandshake()
             if (!HttpsURLConnection.getDefaultHostnameVerifier().verify(cleanHost, rawSocket.session)) {
                 throw SSLPeerUnverifiedException("TLS certificate hostname mismatch for $cleanHost")

@@ -75,11 +75,23 @@ object SntpClient {
     /** Maximum allowed future drift without multi-server quorum (30 days). */
     const val MAX_HTTP_FUTURE_DRIFT_MS: Long = 30L * 24 * 3600 * 1000L
 
-    /** Maximum disagreement allowed between two independent time servers to form a large-advance quorum. */
-    const val QUORUM_TOLERANCE_MS: Long = 5L * 60 * 1000L
+    /** Maximum allowed backward drift tolerance without multi-server quorum (10 seconds). */
+    const val MAX_BACKWARD_DRIFT_TOLERANCE_MS: Long = 10_000L
+
+    /** Maximum allowed backward drift that can be self-healed via multi-server quorum (5 minutes). */
+    const val MAX_BACKWARD_QUORUM_RECOVERY_MS: Long = 5L * 60 * 1000L
+
+    /** Maximum disagreement allowed between two independent time servers to form a valid quorum (10 seconds). */
+    const val QUORUM_SERVER_AGREEMENT_MS: Long = 10_000L
+
+    /** Legacy alias for backwards compatibility. */
+    const val QUORUM_TOLERANCE_MS: Long = QUORUM_SERVER_AGREEMENT_MS
 
     /** Minimum plausible epoch boundary (2024-01-01 00:00:00 UTC) to reject corrupted packets. */
     const val MIN_PLAUSIBLE_EPOCH_MS: Long = 1704067200000L
+
+    @Volatile
+    var lastFailureSummary: String? = null
 
     /** High-availability NTP servers for client rotation. */
     private val NTP_SERVERS = listOf(
@@ -88,10 +100,11 @@ object SntpClient {
         "pool.ntp.org"
     )
 
-    /** Secure HTTPS endpoints providing standard RFC 1123 Date response headers. */
+    /** Secure HTTPS endpoints providing standard RFC 1123 Date response headers without redirects. */
     private val HTTP_FALLBACK_URLS = listOf(
-        "https://www.google.com",
-        "https://www.cloudflare.com"
+        "https://connectivitycheck.gstatic.com/generate_204",
+        "https://clients3.google.com/generate_204",
+        "https://www.gstatic.com/generate_204"
     )
 
     /** Thread-safe formatter for standard HTTP Date header (RFC 1123). */
@@ -111,11 +124,13 @@ object SntpClient {
      */
     fun requestTime(timeoutMs: Int = TIMEOUT_UDP_MS): SntpResult? {
         val largeAdvanceCandidates = mutableListOf<SntpResult>()
+        val failureReasons = mutableListOf<String>()
 
         for (server in NTP_SERVERS) {
-            val result = queryUdpServer(server, timeoutMs) ?: continue
+            val result = queryUdpServer(server, timeoutMs, failureReasons) ?: continue
             val evaluated = evaluateCandidate(result, largeAdvanceCandidates)
             if (evaluated != null) {
+                lastFailureSummary = null
                 Log.i(TAG, "SNTP query succeeded from ${evaluated.source}: timeMs=${evaluated.timeMs}, latency=${evaluated.roundTripLatencyMs}ms")
                 return evaluated
             }
@@ -123,14 +138,16 @@ object SntpClient {
 
         Log.w(TAG, "UDP NTP servers did not yield a single valid/quorum timestamp. Attempting HTTP Date fallback...")
         for (urlString in HTTP_FALLBACK_URLS) {
-            val result = queryHttpEndpoint(urlString, TIMEOUT_HTTP_MS) ?: continue
+            val result = queryHttpEndpoint(urlString, TIMEOUT_HTTP_MS, failureReasons) ?: continue
             val evaluated = evaluateCandidate(result, largeAdvanceCandidates)
             if (evaluated != null) {
+                lastFailureSummary = null
                 Log.i(TAG, "HTTP Date fallback succeeded from ${evaluated.source}: timeMs=${evaluated.timeMs}, latency=${evaluated.roundTripLatencyMs}ms")
                 return evaluated
             }
         }
 
+        lastFailureSummary = failureReasons.joinToString(", ").take(250)
         return null
     }
 
@@ -138,7 +155,7 @@ object SntpClient {
      * Checks whether a candidate timestamp requires multi-server quorum because it jumps
      * beyond [MAX_HTTP_FUTURE_DRIFT_MS] from [TrustedTimeProvider.getLastKnownTrueTime].
      * Never permanently locks out legitimate offline advances >30 days once two independent
-     * sources agree within [QUORUM_TOLERANCE_MS].
+     * sources agree within [QUORUM_SERVER_AGREEMENT_MS].
      */
     private fun evaluateCandidate(
         candidate: SntpResult,
@@ -146,8 +163,19 @@ object SntpClient {
     ): SntpResult? {
         if (!TrustedTimeProvider.hasEverSynced()) return candidate
         val lastKnown = TrustedTimeProvider.getLastKnownTrueTime()
-        if (lastKnown <= 0L || candidate.timeMs <= lastKnown + MAX_HTTP_FUTURE_DRIFT_MS) {
+        val isBackward = lastKnown > 0L && candidate.timeMs < (lastKnown - MAX_BACKWARD_DRIFT_TOLERANCE_MS)
+        val isForwardJump = lastKnown > 0L && candidate.timeMs > (lastKnown + MAX_HTTP_FUTURE_DRIFT_MS)
+
+        if (!isBackward && !isForwardJump) {
             return candidate
+        }
+
+        if (isBackward && candidate.timeMs < (lastKnown - MAX_BACKWARD_QUORUM_RECOVERY_MS)) {
+            Log.w(
+                TAG,
+                "Candidate from ${candidate.source} drifts backward beyond maximum recovery window ($MAX_BACKWARD_QUORUM_RECOVERY_MS ms); rejected"
+            )
+            return null
         }
 
         val matching = largeAdvanceCandidates.firstOrNull { prev ->
@@ -155,12 +183,12 @@ object SntpClient {
                 kotlin.math.abs(
                     (candidate.timeMs - candidate.elapsedRealtimeMs) -
                         (prev.timeMs - prev.elapsedRealtimeMs)
-                ) <= QUORUM_TOLERANCE_MS
+                ) <= QUORUM_SERVER_AGREEMENT_MS
         }
         if (matching != null) {
             Log.i(
                 TAG,
-                "Large forward time advance verified by multi-server quorum: " +
+                "Time jump (backward=$isBackward) verified by multi-server quorum (agreement within ${QUORUM_SERVER_AGREEMENT_MS}ms): " +
                     "${matching.source} & ${candidate.source}"
             )
             return candidate.copy(
@@ -171,7 +199,7 @@ object SntpClient {
 
         Log.w(
             TAG,
-            "Candidate from ${candidate.source} jumps >30 days beyond lastKnown=$lastKnown; awaiting quorum confirmation"
+            "Candidate from ${candidate.source} drifts beyond tolerance (isBackward=$isBackward, time=${candidate.timeMs}, lastKnown=$lastKnown); awaiting quorum confirmation"
         )
         largeAdvanceCandidates.add(candidate)
         return null
@@ -180,8 +208,8 @@ object SntpClient {
     private fun isBeforeVerifiedFloor(candidateTimeMs: Long, sourceLabel: String): Boolean {
         if (!TrustedTimeProvider.hasEverSynced()) return false
         val lastKnown = TrustedTimeProvider.getLastKnownTrueTime()
-        if (lastKnown > 0L && candidateTimeMs < lastKnown) {
-            Log.w(TAG, "Rejecting time from $sourceLabel: $candidateTimeMs is earlier than lastKnown $lastKnown")
+        if (lastKnown > 0L && candidateTimeMs < (lastKnown - MAX_BACKWARD_QUORUM_RECOVERY_MS)) {
+            Log.w(TAG, "Rejecting time from $sourceLabel: $candidateTimeMs is earlier than maximum quorum recovery boundary ${lastKnown - MAX_BACKWARD_QUORUM_RECOVERY_MS}")
             return true
         }
         return false
@@ -190,7 +218,11 @@ object SntpClient {
     /**
      * Queries a single SNTP server via UDP socket conforming to RFC 4330.
      */
-    private fun queryUdpServer(host: String, timeoutMs: Int): SntpResult? {
+    private fun queryUdpServer(
+        host: String,
+        timeoutMs: Int,
+        failureReasons: MutableList<String>? = null
+    ): SntpResult? {
         var socket: DatagramSocket? = null
         return try {
             val address = InetAddress.getByName(host)
@@ -289,6 +321,7 @@ object SntpClient {
             )
         } catch (e: Exception) {
             Log.w(TAG, "SNTP query failed for host: $host - ${e.message}")
+            failureReasons?.add("$host:${e.javaClass.simpleName}")
             null
         } finally {
             try {
@@ -316,10 +349,15 @@ object SntpClient {
         return null
     }
 
-    private fun queryHttpEndpoint(urlString: String, timeoutMs: Int): SntpResult? {
+    private fun queryHttpEndpoint(
+        urlString: String,
+        timeoutMs: Int,
+        failureReasons: MutableList<String>? = null
+    ): SntpResult? {
         var connection: HttpURLConnection? = null
         try {
             val url = URL(urlString)
+            val hostLabel = url.host
             val requestTicks = SystemClock.elapsedRealtime()
             connection = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "HEAD"
@@ -335,6 +373,7 @@ object SntpClient {
             val responseCode = connection.responseCode
             if (responseCode !in 200..299) {
                 Log.w(TAG, "Rejecting HTTP Date from $urlString: invalid response code $responseCode (captive portal / redirect / error)")
+                failureReasons?.add("$hostLabel:HTTP $responseCode")
                 return null
             }
 
@@ -356,9 +395,11 @@ object SntpClient {
                 val estimatedTrueTime = headerTimeMs + (latency / 2)
                 if (estimatedTrueTime < MIN_PLAUSIBLE_EPOCH_MS) {
                     Log.w(TAG, "Rejecting HTTP Date from $urlString: estimated timestamp $estimatedTrueTime is before 2024 boundary")
+                    failureReasons?.add("$hostLabel:Before2024")
                     return null
                 }
                 if (isBeforeVerifiedFloor(estimatedTrueTime, urlString)) {
+                    failureReasons?.add("$hostLabel:BeforeFloor")
                     return null
                 }
                 return SntpResult(
@@ -367,9 +408,13 @@ object SntpClient {
                     roundTripLatencyMs = latency,
                     source = "HTTP: ${url.host}"
                 )
+            } else {
+                failureReasons?.add("$hostLabel:NoDate")
             }
         } catch (e: Exception) {
+            val hostLabel = try { URL(urlString).host } catch (_: Exception) { urlString }
             Log.w(TAG, "HTTP Date query failed for $urlString: ${e.message}")
+            failureReasons?.add("$hostLabel:${e.javaClass.simpleName}")
         } finally {
             try {
                 connection?.disconnect()

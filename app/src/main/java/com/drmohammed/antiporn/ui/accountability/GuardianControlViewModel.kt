@@ -508,7 +508,14 @@ class GuardianControlViewModel(
                 val context = getApplication<Application>()
 
                 // 1. DNS Pre-flight probe
-                val validationResult = DnsFilteringValidator.validateDnsHost(trimmedDns)
+                val initialDns = _uiState.value.initialPolicySnapshot?.dnsHost ?: _uiState.value.currentPolicy.dnsHost
+                val isUnchanged = trimmedDns.equals(initialDns, ignoreCase = true)
+                val isKnownPreset = DnsFilteringValidator.isKnownFamilyPreset(trimmedDns)
+                val validationResult = if (isUnchanged || isKnownPreset) {
+                    DnsFilteringValidator.ValidationResult.Valid
+                } else {
+                    DnsFilteringValidator.validateDnsHost(trimmedDns)
+                }
                 when (validationResult) {
                     is DnsFilteringValidator.ValidationResult.Valid -> {
                         // Valid, continue

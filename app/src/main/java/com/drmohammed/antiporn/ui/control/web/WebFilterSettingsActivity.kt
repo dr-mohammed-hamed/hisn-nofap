@@ -691,7 +691,13 @@ class WebFilterSettingsActivity : AppCompatActivity() {
 
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val validationResult = DnsFilteringValidator.validateDnsHost(dnsToSave)
+                val isUnchanged = dnsToSave.equals(initialPolicy.dnsHost, ignoreCase = true)
+                val isKnownPreset = DnsFilteringValidator.isKnownFamilyPreset(dnsToSave)
+                val validationResult = if (isUnchanged || isKnownPreset) {
+                    DnsFilteringValidator.ValidationResult.Valid
+                } else {
+                    DnsFilteringValidator.validateDnsHost(dnsToSave)
+                }
                 val probeFailure: Pair<String?, String>? = when (validationResult) {
                     is DnsFilteringValidator.ValidationResult.Valid -> null
                     is DnsFilteringValidator.ValidationResult.UnfilteredPorn ->

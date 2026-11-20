@@ -143,7 +143,7 @@ internal class DotUpstreamClient(
         val cleanHost = sanitizeHost(host)
         if (cleanHost.isBlank()) return null
 
-        val bootstrapDeadlineMs = startMs + DotBootstrapResolver.MAX_BOOTSTRAP_WAIT_MS
+        val bootstrapDeadlineMs = startMs + minOf(timeoutMs.toLong(), DotBootstrapResolver.MAX_BOOTSTRAP_WAIT_MS)
         var targetIp: InetAddress? = null
         // Allow at most 1 retry if a network handoff bumped generation mid-bootstrap
         for (attempt in 0..1) {

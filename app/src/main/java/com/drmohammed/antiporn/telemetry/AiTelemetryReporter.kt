@@ -113,7 +113,9 @@ object AiTelemetryReporter {
             val rawVal = match.groupValues[2]
             val trailingComma = if (rawVal.endsWith(",")) "," else ""
             val value = rawVal.trimEnd(',')
-            val masked = if (key.equals("targets", ignoreCase = true) && value.contains(",")) {
+            val masked = if (key.equals("targets", ignoreCase = true) && value.all { it.isDigit() }) {
+                value
+            } else if (key.equals("targets", ignoreCase = true) && value.contains(",")) {
                 value.split(",").joinToString(",") { elem ->
                     val clean = elem.trim()
                     if (clean.isEmpty() || clean == "None" || clean.contains("***")) clean else maskIdentifier(clean)
@@ -289,7 +291,18 @@ object AiTelemetryReporter {
             sb.appendLine("| **VPN Blackhole Policy (Curfew)** | `${sanitizeMarkdownCell(vpnStatus.scheduledBlackholePolicyLabel)}` |")
             sb.appendLine("| **Instant Internet Kill Policy** | `${sanitizeMarkdownCell(vpnStatus.instantInternetKillPolicyLabel)}` |")
             sb.appendLine("| **Live VPN Service / Tunnel State** | `${sanitizeMarkdownCell(vpnStatus.liveTunnelStateLabel)}` |")
-            sb.appendLine("| **Active DNS Host** | `${sanitizeMarkdownCell(currentPolicy.dnsHost)}` |")
+            sb.appendLine("| **Full System Filtering** | `${if (currentPolicy.isFullSystemFilteringEnabled) "[YES]" else "[NO]"}` |")
+            sb.appendLine("| **Ad Blocking Active** | `${if (currentPolicy.isAdBlockingEnabled) "[YES]" else "[NO]"}` |")
+            sb.appendLine("| **Browser Filter Mode** | `${currentPolicy.browserFilterMode}` |")
+            sb.appendLine("| **Active DNS Host (Policy)** | `${sanitizeMarkdownCell(currentPolicy.dnsHost)}` |")
+            val runtimeDnsHost = com.drmohammed.antiporn.shields.DnsShield.getEffectiveDnsHost(appContext)
+            val resilienceMode = com.drmohammed.antiporn.core.network.dns.DnsResilienceManager.getActiveMode()
+            sb.appendLine("| **Effective Runtime DNS Host** | `${sanitizeMarkdownCell(runtimeDnsHost)} (ResilienceMode=$resilienceMode)` |")
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                val gMode = android.provider.Settings.Global.getString(appContext.contentResolver, "private_dns_mode")
+                val gHost = android.provider.Settings.Global.getString(appContext.contentResolver, "private_dns_specifier")
+                sb.appendLine("| **Settings.Global Private DNS** | `mode=$gMode, specifier=$gHost` |")
+            }
             sb.appendLine("| **Local Device UID** | `${sanitizeMarkdownCell(if (cachedUid == "READ_ERROR") "READ_ERROR" else maskIdentifier(cachedUid))}` |")
         } else {
             sb.appendLine("[WARN] *Unable to load current device policy from SQLite (READ_ERROR).*")

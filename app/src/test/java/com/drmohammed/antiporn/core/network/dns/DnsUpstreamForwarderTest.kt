@@ -238,6 +238,50 @@ class DnsUpstreamForwarderTest {
         return out
     }
 
+    @Test
+    fun testForwarder_whenInLocalVpnFallback_skipsDotAndQueriesDohDirectly() = runBlocking {
+        val calls = mutableListOf<String>()
+        val noErrorReply = buildDnsAnswerPayload(txId = 0x3001.toShort(), ttlSeconds = 60L)
+        val forwarder = DnsUpstreamForwarder(
+            vpnService = object : VpnService() {},
+            lruCache = DnsLruCache(16),
+            dotQueryExecutor = { host, _, _ ->
+                calls.add("dot:$host")
+                null
+            },
+            dohQueryExecutor = { _, _ ->
+                calls.add("doh:443")
+                noErrorReply
+            },
+            udpQueryExecutor = { ip, _, _ ->
+                calls.add("udp:$ip")
+                null
+            }
+        )
+
+        // Mock resilience state into FALLBACK_LOCAL_VPN_DOH
+        val stateLockField = DnsResilienceManager.javaClass.getDeclaredField("stateLock")
+        stateLockField.isAccessible = true
+        val lock = stateLockField.get(DnsResilienceManager)
+        val activeModeField = DnsResilienceManager.javaClass.getDeclaredField("activeMode")
+        activeModeField.isAccessible = true
+        synchronized(lock) {
+            activeModeField.set(DnsResilienceManager, DnsResilienceManager.DnsResilienceMode.FALLBACK_LOCAL_VPN_DOH)
+        }
+
+        try {
+            val query = buildMinimalQuery(0x3001.toShort())
+            val resolved = requireNotNull(forwarder.resolve("example.com", 1, 0x3001.toShort(), query))
+            assertEquals(0, resolved[3].toInt() and 0x0F)
+            // Dot must be completely SKIPPED! Doh must be called directly!
+            assertEquals(listOf("doh:443"), calls)
+        } finally {
+            synchronized(lock) {
+                activeModeField.set(DnsResilienceManager, DnsResilienceManager.DnsResilienceMode.PRIMARY_STRICT_DOT)
+            }
+        }
+    }
+
     private fun buildDnsAnswerPayload(
         txId: Short,
         ttlSeconds: Long,

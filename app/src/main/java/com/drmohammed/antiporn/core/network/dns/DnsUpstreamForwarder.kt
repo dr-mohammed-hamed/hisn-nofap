@@ -30,15 +30,17 @@ class DnsUpstreamForwarder(
     private val vpnService: VpnService,
     private val lruCache: DnsLruCache = DnsLruCache(512),
     private val udpQueryExecutor: ((ipAddress: String, rawPayload: ByteArray, timeoutMs: Int) -> ByteArray?)? = null,
-    private val dotQueryExecutor: ((host: String, rawPayload: ByteArray, timeoutMs: Int) -> ByteArray?)? = null
+    private val dotQueryExecutor: ((host: String, rawPayload: ByteArray, timeoutMs: Int) -> ByteArray?)? = null,
+    private val dohQueryExecutor: ((rawPayload: ByteArray, timeoutMs: Int) -> ByteArray?)? = null
 ) {
 
     companion object {
         private const val TAG = "AntiPorn_DnsForwarder"
-        private const val DOT_TIMEOUT_MS = 1_500
-        private const val TIER1_UDP_TIMEOUT_MS = 900
-        private const val TIER2_UDP_TIMEOUT_MS = 1_200
-        private const val TIER3_UDP_TIMEOUT_MS = 1_500
+        private const val DOT_TIMEOUT_MS = 1_000
+        private const val DOH_TIMEOUT_MS = 2_000
+        private const val TIER1_UDP_TIMEOUT_MS = 650
+        private const val TIER2_UDP_TIMEOUT_MS = 800
+        private const val TIER3_UDP_TIMEOUT_MS = 1_200
 
         // Tier 1: Cloudflare Family (Strict adult filtering with YouTube comments preserved)
         const val PRIMARY_SAFE_DNS_IPV4 = "1.1.1.3"
@@ -73,6 +75,7 @@ class DnsUpstreamForwarder(
     private val dotClient = DotUpstreamClient(vpnService, monotonicClockMs) { serverIp, query, timeoutMs ->
         sendUdpQuery(serverIp, query, timeoutMs)
     }
+    private val dohClient = DohUpstreamClient(vpnService, monotonicClockMs)
 
     @Volatile
     private var customDnsHost: String? = null
@@ -84,6 +87,7 @@ class DnsUpstreamForwarder(
             networkGeneration.incrementAndGet()
             lruCache.clear()
             dotClient.resetState()
+            dohClient.resetState()
         }
     }
 
@@ -96,6 +100,7 @@ class DnsUpstreamForwarder(
         networkGeneration.incrementAndGet()
         lruCache.clear()
         dotClient.clearAll()
+        dohClient.clearAll()
         closeAllActiveUdpSockets()
     }
 
@@ -103,6 +108,7 @@ class DnsUpstreamForwarder(
         networkGeneration.incrementAndGet()
         lruCache.clear()
         dotClient.onNetworkChanged()
+        dohClient.onNetworkChanged()
         closeAllActiveUdpSockets()
     }
 
@@ -127,7 +133,7 @@ class DnsUpstreamForwarder(
         transactionId: Short,
         rawDnsPayload: ByteArray,
         enqueuedAtMs: Long = 0L,
-        maxQueryAgeMs: Long = 3_500L,
+        maxQueryAgeMs: Long = 4_000L,
         maxResponsePayloadBytes: Int = DnsWireValidator.MAX_IPV4_UDP_DNS_PAYLOAD
     ): ByteArray? {
         val lookupGen = networkGeneration.get()
@@ -174,16 +180,17 @@ class DnsUpstreamForwarder(
             }
 
             // Leak Prevention: Allow Tier 3 (Physical Network DNS) ONLY for local intranet domains
-            // or known OS captive-portal probe domains when a physical network reports NET_CAPABILITY_CAPTIVE_PORTAL.
+            // or known OS captive-portal probe domains, or when a physical network reports NET_CAPABILITY_CAPTIVE_PORTAL.
             // Never leak general internet queries to unfiltered ISP/router DNS, and never cache Tier 3 replies.
             var usedTier3 = false
             if (reply == null && !isAborted()) {
                 val isLocalIntranet = DnsWireValidator.isLocalIntranetDomain(qName)
                 val isCaptiveProbe = !isLocalIntranet && DnsWireValidator.isKnownCaptivePortalProbeDomain(qName)
-                if (isLocalIntranet || isCaptiveProbe) {
-                    val targets = resolvePhysicalNetworkDns(captiveOnly = isCaptiveProbe)
+                val hasCaptive = !isLocalIntranet && !isCaptiveProbe && hasActiveCaptivePortalPhysicalNetwork()
+                if (isLocalIntranet || isCaptiveProbe || hasCaptive) {
+                    val targets = resolvePhysicalNetworkDns(captiveOnly = isCaptiveProbe || hasCaptive)
                     if (targets.isNotEmpty()) {
-                        Timber.tag(TAG).w("Tier 2 DNS failed for local/captive-probe domain, querying Tier 3")
+                        Timber.tag(TAG).w("Tier 2 DNS failed for local/captive domain, querying Tier 3")
                         reply = queryTier3(clampedPayload, targets, deadlineMs, startGen)
                         usedTier3 = reply != null
                     }
@@ -234,6 +241,13 @@ class DnsUpstreamForwarder(
             ?: dotClient.query(host, rawPayload, timeoutMs)
     }
 
+    private suspend fun executeDoh(rawPayload: ByteArray, timeoutMs: Int, preferredHost: String? = null): ByteArray? {
+        currentCoroutineContext().ensureActive()
+        if (timeoutMs <= 0) return null
+        return dohQueryExecutor?.invoke(rawPayload, timeoutMs)
+            ?: dohClient.query(rawPayload, timeoutMs, preferredHost)
+    }
+
     private fun remainingTimeout(deadlineMs: Long, startGen: Long, capMs: Int): Int {
         if (networkGeneration.get() != startGen) return 0
         val remaining = (deadlineMs - monotonicClockMs()).toInt()
@@ -251,6 +265,7 @@ class DnsUpstreamForwarder(
         val cloudflareHost = DevicePolicyBundle.CLOUDFLARE_FAMILY_DNS_HOST.lowercase()
         val isDefaultCloudflarePreset = cleanHost == null || cleanHost == cloudflareHost
         val isSelfBootstrapQuery = cleanHost != null && normalizedQName == cleanHost
+        val isLocalVpnFallback = DnsResilienceManager.isLocalVpnFallbackActive()
         var softFallback: ByteArray? = null
 
         fun acceptOrSaveSoft(candidate: ByteArray?): ByteArray? {
@@ -262,39 +277,49 @@ class DnsUpstreamForwarder(
             return candidate
         }
 
-        // 1. Custom numeric IPv4 (public only) or DoT hostname (ControlD, NextDNS, custom DoT)
-        if (cleanHost != null && !isDefaultCloudflarePreset && !isSelfBootstrapQuery) {
-            val parsedIp = DnsWireValidator.parseIpv4ToInetAddress(cleanHost)
-            if (parsedIp != null) {
-                val canonicalIp = parsedIp.hostAddress ?: ""
-                if (canonicalIp.isNotEmpty() && !DnsWireValidator.isNonPublicOrReservedIp(parsedIp)) {
-                    val t = remainingTimeout(deadlineMs, startGen, TIER1_UDP_TIMEOUT_MS)
-                    acceptOrSaveSoft(executeUdp(canonicalIp, rawPayload, timeoutMs = t))?.let { return it }
+        // Fast-path: When Level 3 DoH Fallback is active, skip Port 853 immediately to save latency!
+        if (isLocalVpnFallback) {
+            val tDoh = remainingTimeout(deadlineMs, startGen, DOH_TIMEOUT_MS)
+            acceptOrSaveSoft(executeDoh(rawPayload, timeoutMs = tDoh, preferredHost = cleanHost))?.let { return it }
+        } else {
+            // 1. Custom numeric IPv4 (public only) or DoT hostname (ControlD, NextDNS, custom DoT)
+            if (cleanHost != null && !isDefaultCloudflarePreset && !isSelfBootstrapQuery) {
+                val parsedIp = DnsWireValidator.parseIpv4ToInetAddress(cleanHost)
+                if (parsedIp != null) {
+                    val canonicalIp = parsedIp.hostAddress ?: ""
+                    if (canonicalIp.isNotEmpty() && !DnsWireValidator.isNonPublicOrReservedIp(parsedIp)) {
+                        val t = remainingTimeout(deadlineMs, startGen, TIER1_UDP_TIMEOUT_MS)
+                        acceptOrSaveSoft(executeUdp(canonicalIp, rawPayload, timeoutMs = t))?.let { return it }
+                    }
+                } else if (!DnsWireValidator.isExcludedDnsIp(cleanHost)) {
+                    val t = remainingTimeout(deadlineMs, startGen, DOT_TIMEOUT_MS)
+                    acceptOrSaveSoft(executeDot(cleanHost, rawPayload, timeoutMs = t))?.let { return it }
+                    Timber.tag(TAG).w("DoT query failed or circuit open; falling back to DoH/Safe Family")
                 }
-            } else if (!DnsWireValidator.isExcludedDnsIp(cleanHost)) {
-                val t = remainingTimeout(deadlineMs, startGen, DOT_TIMEOUT_MS)
-                acceptOrSaveSoft(executeDot(cleanHost, rawPayload, timeoutMs = t))?.let { return it }
-                Timber.tag(TAG).w("DoT query failed or circuit open; falling back to Safe Family UDP")
             }
-        }
 
-        // 2. Exact CleanBrowsing Family preset fallback
-        if (cleanHost == CLEANBROWSING_FAMILY_PRIMARY || cleanHost == CLEANBROWSING_FAMILY_HOST) {
-            val t = remainingTimeout(deadlineMs, startGen, TIER1_UDP_TIMEOUT_MS)
-            acceptOrSaveSoft(executeUdp(CLEANBROWSING_FAMILY_PRIMARY, rawPayload, timeoutMs = t))?.let { return it }
-        }
+            // 2. Exact CleanBrowsing Family preset fallback
+            if (cleanHost == CLEANBROWSING_FAMILY_PRIMARY || cleanHost == CLEANBROWSING_FAMILY_HOST) {
+                val t = remainingTimeout(deadlineMs, startGen, TIER1_UDP_TIMEOUT_MS)
+                acceptOrSaveSoft(executeUdp(CLEANBROWSING_FAMILY_PRIMARY, rawPayload, timeoutMs = t))?.let { return it }
+            }
 
-        // 3. Exact AdGuard Family preset fallback
-        if (cleanHost == ADGUARD_FAMILY_PRIMARY || cleanHost == DevicePolicyBundle.ADGUARD_FAMILY_DNS_HOST.lowercase()) {
-            val t = remainingTimeout(deadlineMs, startGen, TIER1_UDP_TIMEOUT_MS)
-            acceptOrSaveSoft(executeUdp(ADGUARD_FAMILY_PRIMARY, rawPayload, timeoutMs = t))?.let { return it }
-        }
+            // 3. Exact AdGuard Family preset fallback
+            if (cleanHost == ADGUARD_FAMILY_PRIMARY || cleanHost == DevicePolicyBundle.ADGUARD_FAMILY_DNS_HOST.lowercase()) {
+                val t = remainingTimeout(deadlineMs, startGen, TIER1_UDP_TIMEOUT_MS)
+                acceptOrSaveSoft(executeUdp(ADGUARD_FAMILY_PRIMARY, rawPayload, timeoutMs = t))?.let { return it }
+            }
 
-        // 4. Default: Cloudflare Family (encrypted DoT first when default preset, then UDP 1.1.1.3 & 1.0.0.3)
-        if (isDefaultCloudflarePreset && normalizedQName != cloudflareHost) {
-            val t = remainingTimeout(deadlineMs, startGen, DOT_TIMEOUT_MS)
-            acceptOrSaveSoft(executeDot(DevicePolicyBundle.CLOUDFLARE_FAMILY_DNS_HOST, rawPayload, timeoutMs = t))
-                ?.let { return it }
+            // 4. Default: Cloudflare Family (encrypted DoT first when default preset)
+            if (isDefaultCloudflarePreset && normalizedQName != cloudflareHost) {
+                val t = remainingTimeout(deadlineMs, startGen, DOT_TIMEOUT_MS)
+                acceptOrSaveSoft(executeDot(DevicePolicyBundle.CLOUDFLARE_FAMILY_DNS_HOST, rawPayload, timeoutMs = t))
+                    ?.let { return it }
+            }
+
+            // Tier 1B: DNS-over-HTTPS (Port 443) before plain UDP fallback
+            val tDoh = remainingTimeout(deadlineMs, startGen, DOH_TIMEOUT_MS)
+            acceptOrSaveSoft(executeDoh(rawPayload, timeoutMs = tDoh, preferredHost = cleanHost))?.let { return it }
         }
 
         val tPrimary = remainingTimeout(deadlineMs, startGen, TIER1_UDP_TIMEOUT_MS)
@@ -402,6 +427,20 @@ class DnsUpstreamForwarder(
                 }
             }
         }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun hasActiveCaptivePortalPhysicalNetwork(): Boolean {
+        try {
+            val cm = vpnService.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
+            val networks = cm.allNetworks
+            for (net in networks) {
+                val caps = cm.getNetworkCapabilities(net) ?: continue
+                if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue
+                if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)) return true
+            }
+        } catch (_: Exception) {}
+        return false
     }
 
     @Suppress("DEPRECATION")

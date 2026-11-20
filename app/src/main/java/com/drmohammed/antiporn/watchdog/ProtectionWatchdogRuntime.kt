@@ -420,7 +420,15 @@ object ProtectionWatchdogRuntime {
         if (isNetworkRegistered) return
         networkWatchdog.register(
             context = appContext,
-            onNetworkChanged = null
+            onNetworkChanged = null,
+            onDetailedNetworkTransition = { reason, network, transport ->
+                com.drmohammed.antiporn.core.network.dns.DnsResilienceManager.onNetworkChanged(
+                    appContext,
+                    reason,
+                    network,
+                    transport
+                )
+            }
         ) {
             Timber.tag(TAG).i("Network became available! Debouncing protection check...")
             scheduleCheck(1000L)

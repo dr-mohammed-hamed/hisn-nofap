@@ -14,6 +14,7 @@ import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.core.network.dns.BinaryDomainFilter
 import com.drmohammed.antiporn.core.network.dns.DnsPacketParser
+import com.drmohammed.antiporn.core.network.dns.DnsResilienceManager
 import com.drmohammed.antiporn.core.network.dns.DnsTunnelWorker
 import com.drmohammed.antiporn.core.network.dns.DnsUpstreamForwarder
 import com.drmohammed.antiporn.curfew.notification.ProtectionNotificationCoordinator
@@ -798,7 +799,8 @@ class CurfewBlackholeVpnService : VpnService() {
             val isDnsFilterRequired = try {
                 val policy = PolicyRepository.getInstance(context).getCurrentPolicy()
                 (policy.isFullSystemFilteringEnabled && policy.browserFilterMode != DevicePolicyBundle.BROWSER_FILTER_OFF) ||
-                    policy.isAdBlockingEnabled
+                    policy.isAdBlockingEnabled ||
+                    DnsResilienceManager.isLocalVpnFallbackActive()
             } catch (e: Exception) {
                 Timber.tag(TAG).w(e, "Failed reading policy for VPN mode evaluation; preserving safe fallback=$fallbackOnFailure")
                 return if (fallbackOnFailure != VpnMode.IDLE) fallbackOnFailure else VpnMode.IDLE
