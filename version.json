@@ -1,11 +1,11 @@
 {
-  "versionCode": 31,
-  "versionName": "1.92",
+  "versionCode": 32,
+  "versionName": "1.93",
   "minSupportedVersion": 1,
   "apkFileName": "antiporn-release.apk",
   "downloadUrl": "https://pub-e568dc85c0ec4f2fb3d1b90e310b4310.r2.dev/antiporn-release.apk",
-  "fileSizeBytes": 67545883,
+  "fileSizeBytes": 28899428,
   "sha256CertificateChecksum": "Cxi7DKn3ddcJXYIuDNXdlKN84EuKu8Bf0L0SkSPCOMk",
-  "releaseNotes": "إصدار 1.92 (كود البناء 31): إضافة شاشة إدارة وتجميد تطبيقات النظام المتقدمة، مع حزمة شاملة متوافقة مع جميع معالجات أندرويد.",
-  "releaseDate": "2026-11-20"
+  "releaseNotes": "إصدار 1.93 (كود البناء 32): حزمة شاملة وعالمية متوافقة وتعمل على جميع معالجات أندرويد (arm64-v8a, armeabi-v7a, x86, x86_64) مع سياسة Zero-Cloud الافتراضية وحماية الخصوصية القصوى.",
+  "releaseDate": "2026-11-21"
 }
