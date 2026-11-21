@@ -16,9 +16,9 @@
 -keep class org.tensorflow.lite.** { *; }
 -dontwarn org.tensorflow.lite.**
 
-# ONNX Runtime preservation for minified release
--keep class ai.onnxruntime.** { *; }
--dontwarn ai.onnxruntime.**
+# ONNX Runtime preservation (Archived in features_archive/nudenet/)
+# -keep class ai.onnxruntime.** { *; }
+# -dontwarn ai.onnxruntime.**
 
 
 # ====================================================================

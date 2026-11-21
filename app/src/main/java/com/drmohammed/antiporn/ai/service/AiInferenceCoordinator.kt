@@ -13,7 +13,6 @@ import android.os.SystemClock
 import android.util.Log
 import com.drmohammed.antiporn.accessibility.HisnAccessibilityService
 import com.drmohammed.antiporn.ai.core.inference.HalalifyGenderDetector
-import com.drmohammed.antiporn.ai.core.inference.NudeNetDetector
 import com.drmohammed.antiporn.ai.core.pipeline.ContextualGatingWatcher
 import com.drmohammed.antiporn.ai.core.tracking.KltMathHelper
 import com.drmohammed.antiporn.ai.core.tracking.KltOpticalFlowTracker
@@ -22,7 +21,7 @@ import com.drmohammed.antiporn.ai.overlay.ScreenBlurOverlayManager
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Coordinates AI inference models (Halalify + NudeNet), optical flow tracking (KLT),
+ * Coordinates AI inference models (Halalify), optical flow tracking (KLT),
  * contextual app gating, and blur overlay rendering.
  */
 class AiInferenceCoordinator(
@@ -36,8 +35,6 @@ class AiInferenceCoordinator(
     lateinit var kltTracker: KltOpticalFlowTracker
         private set
     lateinit var halalifyDetector: HalalifyGenderDetector
-        private set
-    lateinit var nudeNetDetector: NudeNetDetector
         private set
     lateinit var blurOverlayManager: ScreenBlurOverlayManager
         private set
@@ -117,7 +114,6 @@ class AiInferenceCoordinator(
         inferenceHandler = handler
 
         kltTracker = KltOpticalFlowTracker()
-        nudeNetDetector = NudeNetDetector()
         blurOverlayManager = ScreenBlurOverlayManager(context).apply {
             isKltTrackingActive = true
             onRegionsCleared = {
@@ -150,14 +146,13 @@ class AiInferenceCoordinator(
             try {
                 halalifyDetector = HalalifyGenderDetector(context)
                 val halalifyOk = halalifyDetector.isInitialized
-                val nudeOk = if (ENABLE_NUDENET) nudeNetDetector.initialize(context) else true
-                if (!halalifyOk || !nudeOk) {
-                    initError = if (!halalifyOk) "Halalify initialization failed" else "NudeNet initialization failed"
+                if (!halalifyOk) {
+                    initError = "Halalify initialization failed"
                     Log.e(TAG, "AI initialization failed: $initError")
                     mainHandler.post { onInitialized(false) }
                 } else {
                     initError = ""
-                    Log.i(TAG, "Halalify ready (NudeNet enabled=$ENABLE_NUDENET)")
+                    Log.i(TAG, "Halalify ready")
                     mainHandler.post { onInitialized(true) }
                 }
             } catch (e: Exception) {
@@ -1060,7 +1055,6 @@ class AiInferenceCoordinator(
             handler.removeCallbacksAndMessages(null)
             handler.post {
                 try { if (::halalifyDetector.isInitialized) halalifyDetector.close() } catch (e: Exception) { Log.e(TAG, "Error closing halalify", e) }
-                try { if (::nudeNetDetector.isInitialized) nudeNetDetector.close() } catch (e: Exception) { Log.e(TAG, "Error closing nudeNet", e) }
                 try { inferenceBitmap?.recycle() } catch (e: Exception) { Log.d(TAG, "Non-critical: ${e.message}") }
                 try { tileBitmap?.recycle() } catch (e: Exception) { Log.d(TAG, "Non-critical: ${e.message}") }
                 inferenceBitmap = null
@@ -1072,7 +1066,6 @@ class AiInferenceCoordinator(
             }
         } else {
             try { if (::halalifyDetector.isInitialized) halalifyDetector.close() } catch (e: Exception) { Log.e(TAG, "Error closing halalify", e) }
-            try { if (::nudeNetDetector.isInitialized) nudeNetDetector.close() } catch (e: Exception) { Log.e(TAG, "Error closing nudeNet", e) }
             try { inferenceBitmap?.recycle() } catch (e: Exception) { Log.d(TAG, "Non-critical: ${e.message}") }
             try { tileBitmap?.recycle() } catch (e: Exception) { Log.d(TAG, "Non-critical: ${e.message}") }
             inferenceBitmap = null
@@ -1101,7 +1094,6 @@ class AiInferenceCoordinator(
 
     companion object {
         private const val TAG = "AiInferenceCoord"
-        private const val ENABLE_NUDENET = false
         const val ANCHOR_INTERVAL_MS = 200L
         const val BASE_ADAPTIVE_INTERVAL_MS = 380L
         const val CONSTRAINED_ADAPTIVE_INTERVAL_MS = 550L

@@ -147,7 +147,6 @@ android {
 
     androidResources {
         noCompress += "tflite"
-        noCompress += "onnx"
         noCompress += "bin"
     }
 
@@ -175,7 +174,7 @@ dependencies {
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
     implementation(libs.tensorflow.lite)
-    implementation(libs.onnxruntime.android)
+    // implementation(libs.onnxruntime.android) // Archived in features_archive/nudenet/ (reduces APK by ~37MB)
 
     // Firebase BoM & Cloud Infrastructure
     implementation(platform(libs.firebase.bom))
