@@ -38,6 +38,15 @@ class EnterpriseProvisioningActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "AntiPorn_Provisioning"
+        const val ACTION_PROVISIONING_SUCCESSFUL = "android.app.action.PROVISIONING_SUCCESSFUL"
+
+        /**
+         * Global flag indicating active compliance flow.
+         * Used by [AdminReceiver] to avoid launching MainActivity over the OOBE provisioning screen.
+         */
+        @Volatile
+        var isComplianceFlowActive: Boolean = false
+            private set
     }
 
     private val isProvisioningCompleted = AtomicBoolean(false)
@@ -49,7 +58,9 @@ class EnterpriseProvisioningActivity : AppCompatActivity() {
             DevicePolicyManager.ACTION_GET_PROVISIONING_MODE -> {
                 handleGetProvisioningMode()
             }
-            DevicePolicyManager.ACTION_ADMIN_POLICY_COMPLIANCE -> {
+            DevicePolicyManager.ACTION_ADMIN_POLICY_COMPLIANCE,
+            ACTION_PROVISIONING_SUCCESSFUL -> {
+                isComplianceFlowActive = true
                 enableEdgeToEdge()
                 setContentView(R.layout.activity_enterprise_provisioning)
 
@@ -126,37 +137,67 @@ class EnterpriseProvisioningActivity : AppCompatActivity() {
                     Log.e(TAG, "Non-fatal error enabling core system apps in compliance", t)
                 }
             } finally {
-                // 3. Guarantees returning RESULT_OK to Setup Wizard on UI thread under ALL circumstances
+                // 3. Transition UI to completed state on UI thread (do NOT finish automatically)
                 runOnUiThread {
                     if (!isFinishing && !isDestroyed) {
-                        if (isProvisioningCompleted.compareAndSet(false, true)) {
-                            // ALWAYS signal RESULT_OK first so Setup Wizard transitions cleanly
-                            try {
-                                setResult(Activity.RESULT_OK)
-                                Log.i(TAG, "Signaled Activity.RESULT_OK to Setup Wizard.")
-                            } catch (t: Throwable) {
-                                Log.e(TAG, "Error setting Activity.RESULT_OK", t)
-                            }
-
-                            try {
-                                // Bootstrap MainActivity so it greets the user upon OOBE conclusion
-                                val launchIntent = appContext.packageManager?.getLaunchIntentForPackage(appContext.packageName)?.apply {
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                                } ?: Intent(appContext, MainActivity::class.java).apply {
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                                }
-                                appContext.startActivity(launchIntent)
-                                Log.i(TAG, "Dispatched MainActivity bootstrap intent successfully.")
-                            } catch (t: Throwable) {
-                                Log.e(TAG, "Non-fatal error launching MainActivity from compliance activity", t)
-                            } finally {
-                                finish()
-                            }
-                        }
+                        showSetupCompletedUi()
                     }
                 }
             }
         }
+    }
+
+    private fun showSetupCompletedUi() {
+        findViewById<View>(R.id.progressProvisioning)?.visibility = View.GONE
+        findViewById<android.widget.TextView>(R.id.tvProvisioningTitle)?.setText(R.string.provisioning_setup_completed_title)
+        findViewById<android.widget.TextView>(R.id.tvProvisioningSubtitle)?.setText(R.string.provisioning_setup_completed_subtitle)
+        findViewById<View>(R.id.tvProvisioningNotice)?.visibility = View.GONE
+
+        val layoutActions = findViewById<View>(R.id.layoutProvisioningActions)
+        layoutActions?.visibility = View.VISIBLE
+
+        findViewById<View>(R.id.btnCompleteProvisioning)?.setOnClickListener {
+            completeProvisioningAndExit()
+        }
+
+        findViewById<View>(R.id.btnManageSystemApps)?.setOnClickListener {
+            val intent = Intent(this, SystemAppsManagerActivity::class.java)
+            startActivity(intent)
+        }
+    }
+
+    private fun completeProvisioningAndExit() {
+        val appContext = applicationContext
+        if (isProvisioningCompleted.compareAndSet(false, true)) {
+            isComplianceFlowActive = false
+            // ALWAYS signal RESULT_OK first so Setup Wizard transitions cleanly
+            try {
+                setResult(Activity.RESULT_OK)
+                Log.i(TAG, "Signaled Activity.RESULT_OK to Setup Wizard.")
+            } catch (t: Throwable) {
+                Log.e(TAG, "Error setting Activity.RESULT_OK", t)
+            }
+
+            try {
+                // Bootstrap MainActivity so it greets the user upon OOBE conclusion
+                val launchIntent = appContext.packageManager?.getLaunchIntentForPackage(appContext.packageName)?.apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                } ?: Intent(appContext, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                }
+                appContext.startActivity(launchIntent)
+                Log.i(TAG, "Dispatched MainActivity bootstrap intent successfully.")
+            } catch (t: Throwable) {
+                Log.e(TAG, "Non-fatal error launching MainActivity from compliance activity", t)
+            } finally {
+                finish()
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        isComplianceFlowActive = false
+        super.onDestroy()
     }
 
     /**

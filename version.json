@@ -4,8 +4,8 @@
   "minSupportedVersion": 1,
   "apkFileName": "antiporn-release.apk",
   "downloadUrl": "https://pub-e568dc85c0ec4f2fb3d1b90e310b4310.r2.dev/antiporn-release.apk",
-  "fileSizeBytes": 35718408,
+  "fileSizeBytes": 67545883,
   "sha256CertificateChecksum": "Cxi7DKn3ddcJXYIuDNXdlKN84EuKu8Bf0L0SkSPCOMk",
-  "releaseNotes": "إصدار 1.92 (كود البناء 31): حماية استباقية لبيانات المساحة الخاصة والمجلد الآمن عبر نافذة تحذيرية معيارية تمنع الفقدان الدائم، مع فلترة ذكية للنطاقات التعليمية eTLD+1 واستثناء مشغلات البث التعليمي وDRM لضمان استقرار المنصات الدراسية.",
-  "releaseDate": "2026-11-19"
+  "releaseNotes": "إصدار 1.92 (كود البناء 31): إضافة شاشة إدارة وتجميد تطبيقات النظام المتقدمة، مع حزمة شاملة متوافقة مع جميع معالجات أندرويد.",
+  "releaseDate": "2026-11-20"
 }

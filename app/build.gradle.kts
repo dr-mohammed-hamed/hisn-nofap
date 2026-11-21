@@ -65,7 +65,7 @@ android {
         buildConfigField("String", "OTA_BASE_URL", "\"$otaBaseUrl\"")
         ndk {
             abiFilters.clear()
-            abiFilters.add("arm64-v8a")
+            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64"))
         }
     }
 

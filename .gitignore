@@ -51,3 +51,9 @@ app/src/main/assets_backup/
 *serviceAccountKey*.json
 .secrets/
 credentials/
+
+# AI Review & Changes Pack (Guaranteed Zero GitHub Leakage)
+AI_CHANGES_REVIEW*.md
+DNS_WIFI_FIX_REVIEW.md
+*.patch
+uncommitted_changes.patch

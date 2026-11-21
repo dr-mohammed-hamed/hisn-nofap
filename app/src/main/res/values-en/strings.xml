@@ -321,7 +321,36 @@
     <!-- Enterprise Provisioning (OOBE QR Code) -->
     <string name="provisioning_setup_title">Setting up Hisn Protection</string>
     <string name="provisioning_setup_subtitle">Enforcing enterprise security shields and securing the device&#8230;</string>
+    <string name="provisioning_setup_completed_title">Hisn Protection Setup Completed</string>
+    <string name="provisioning_setup_completed_subtitle">Enterprise security shields are active. You can now complete setup or manage frozen system apps.</string>
+    <string name="btn_complete_setup">Complete Setup</string>
+    <string name="btn_manage_system_apps">Manage System Apps (Advanced)</string>
     <string name="provisioning_setup_notice">Please wait, do not turn off the device during initial setup.</string>
+
+    <!-- System Apps Manager & Freezer (Device Owner) -->
+    <string name="title_system_apps_manager">System Apps Manager</string>
+    <string name="subtitle_system_apps_manager">Freeze or unfreeze system apps and bloatware with Device Owner permissions</string>
+    <string name="search_apps_hint">Search by app or package name&#8230;</string>
+    <string name="chip_filter_all">All (%1$d)</string>
+    <string name="chip_filter_system">System Apps (%1$d)</string>
+    <string name="chip_filter_frozen">Frozen (%1$d)</string>
+    <string name="badge_system_app">System</string>
+    <string name="badge_user_app">User</string>
+    <string name="switch_frozen_label">Freeze</string>
+    <string name="app_frozen_status">Frozen / Hidden</string>
+    <string name="app_active_status">Active</string>
+    <string name="self_app_protected_hint">Hisn App (Always Protected)</string>
+    <string name="critical_system_warning_title">Warning: Critical System Package!</string>
+    <string name="critical_system_warning_message">Package (%1$s) is a critical core system component. Freezing it may cause UI instability or system malfunctions. Are you sure you want to freeze it?</string>
+    <string name="btn_confirm_freeze">Freeze Anyway</string>
+    <string name="toast_freeze_protected_error">Unable to freeze this app because it is system-protected</string>
+    <string name="toast_freeze_success">%1$s frozen successfully</string>
+    <string name="toast_unfreeze_success">%1$s unfrozen successfully</string>
+    <string name="empty_apps_search">No apps match your search</string>
+    <string name="btn_done">Done</string>
+    <string name="settings_manage_system_apps_title">Manage Frozen System Apps</string>
+    <string name="settings_manage_system_apps_desc">Freeze or unfreeze system services and bloatware</string>
+    <string name="btn_open_system_apps_manager">Manage System Apps</string>
 
     <!-- OTA Auto-Update & Maintenance -->
     <string name="card_ota_title">System Updates</string>

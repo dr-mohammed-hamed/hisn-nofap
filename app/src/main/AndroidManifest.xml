@@ -76,7 +76,7 @@
             </intent-filter>
         </receiver>
 
-        <!-- Android Enterprise Provisioning Handlers (Android 12+ / API 31+) -->
+        <!-- Android Enterprise Provisioning Handlers (Android 10+ / API 29+) -->
         <activity
             android:name=".provisioning.ui.EnterpriseProvisioningActivity"
             android:exported="true"
@@ -92,7 +92,18 @@
                 <action android:name="android.app.action.ADMIN_POLICY_COMPLIANCE" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.app.action.PROVISIONING_SUCCESSFUL" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
+
+        <activity
+            android:name=".provisioning.ui.SystemAppsManagerActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Antiporn"
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize" />
 
         <activity
             android:name=".waqfa.ui.gate.WaqfaGateActivity"

@@ -822,7 +822,36 @@
     <!-- Enterprise Provisioning (OOBE QR Code) -->
     <string name="provisioning_setup_title">تهيئة حماية حِصن</string>
     <string name="provisioning_setup_subtitle">جاري تفعيل دروع الحماية المؤسسية وتأمين النظام&#8230;</string>
+    <string name="provisioning_setup_completed_title">اكتملت تهيئة حماية حِصن بنجاح</string>
+    <string name="provisioning_setup_completed_subtitle">تم تفعيل دروع الأمان المؤسسية وتأمين الهاتف. يمكنك استكمال الإعداد أو تجميد تطبيقات النظام غير المرغوبة.</string>
+    <string name="btn_complete_setup">إكمال الإعداد</string>
+    <string name="btn_manage_system_apps">إدارة تطبيقات النظام (متقدم)</string>
     <string name="provisioning_setup_notice">الرجاء الانتظار، لا تقم بإغلاق الهاتف أثناء التهيئة الأولية.</string>
+
+    <!-- System Apps Manager & Freezer (Device Owner) -->
+    <string name="title_system_apps_manager">إدارة تطبيقات النظام</string>
+    <string name="subtitle_system_apps_manager">تجميد وإلغاء تجميد تطبيقات وخدمات النظام بصلاحيات مسؤول الجهاز</string>
+    <string name="search_apps_hint">ابحث باسم التطبيق أو الحزمة&#8230;</string>
+    <string name="chip_filter_all">الكل (%1$d)</string>
+    <string name="chip_filter_system">تطبيقات النظام (%1$d)</string>
+    <string name="chip_filter_frozen">المجمّدة (%1$d)</string>
+    <string name="badge_system_app">نظام</string>
+    <string name="badge_user_app">مستخدم</string>
+    <string name="switch_frozen_label">تجميد</string>
+    <string name="app_frozen_status">مجمّد / مخفي</string>
+    <string name="app_active_status">نشط</string>
+    <string name="self_app_protected_hint">تطبيق الحصن (محمي دائماً)</string>
+    <string name="critical_system_warning_title">تحذير: حزمة نظام حرجة!</string>
+    <string name="critical_system_warning_message">الحزمة (%1$s) من مكونات النظام الأساسية الحساسة. قد يؤدي تجميدها إلى عدم استقرار واجهة الهاتف أو تعطل بعض الوظائف. هل أنت متأكد من رغبتك في تجميدها؟</string>
+    <string name="btn_confirm_freeze">تجميد على مسؤوليتي</string>
+    <string name="toast_freeze_protected_error">تعذر تجميد هذا التطبيق لأنه محمي من نواة النظام</string>
+    <string name="toast_freeze_success">تم تجميد %1$s بنجاح</string>
+    <string name="toast_unfreeze_success">تم فك تجميد %1$s بنجاح</string>
+    <string name="empty_apps_search">لم يتم العثور على تطبيقات مطابقة للبحث</string>
+    <string name="btn_done">تم</string>
+    <string name="settings_manage_system_apps_title">إدارة وتجميد تطبيقات النظام</string>
+    <string name="settings_manage_system_apps_desc">تجميد خدمات وتطبيقات النظام غير المرغوبة أو فك تجميدها</string>
+    <string name="btn_open_system_apps_manager">إدارة التطبيقات المجمّدة</string>
 
     <!-- OTA Auto-Update & Maintenance -->
     <string name="card_ota_title">تحديثات النظام</string>

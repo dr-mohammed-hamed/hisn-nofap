@@ -39,18 +39,23 @@ class AdminReceiver : DeviceAdminReceiver() {
         enforcePoliciesAsync(context)
 
         // Bootstrap MainActivity as a fallback strictly for legacy Android versions (Android 11 and below)
+        // ONLY if EnterpriseProvisioningActivity is not actively handling the OOBE compliance flow
         if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S) {
-            val appContext = context.applicationContext
-            try {
-                val launchIntent = appContext.packageManager?.getLaunchIntentForPackage(appContext.packageName)?.apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                } ?: Intent(appContext, MainActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            if (!com.drmohammed.antiporn.provisioning.ui.EnterpriseProvisioningActivity.isComplianceFlowActive) {
+                val appContext = context.applicationContext
+                try {
+                    val launchIntent = appContext.packageManager?.getLaunchIntentForPackage(appContext.packageName)?.apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    } ?: Intent(appContext, MainActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    }
+                    appContext.startActivity(launchIntent)
+                    Log.i(TAG, "Dispatched MainActivity launch intent from AdminReceiver fallback.")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to launch MainActivity in onProfileProvisioningComplete", e)
                 }
-                appContext.startActivity(launchIntent)
-                Log.i(TAG, "Dispatched MainActivity launch intent from AdminReceiver fallback.")
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to launch MainActivity in onProfileProvisioningComplete", e)
+            } else {
+                Log.i(TAG, "EnterpriseProvisioningActivity is actively running compliance flow; skipping redundant AdminReceiver launch.")
             }
         }
     }
