@@ -66,7 +66,7 @@ object ProtectionWatchdogRuntime {
     private const val DEBOUNCE_DELAY_MS = 500L
     private const val SCREEN_DEBOUNCE_DELAY_MS = 500L
     private const val HEARTBEAT_INTERVAL_MS = 15 * 60_000L // 15 minutes battery-friendly periodic safety net
-    private const val CLOUD_HEARTBEAT_INTERVAL_MS = 12 * 3600 * 1000L
+    private const val CLOUD_HEARTBEAT_INTERVAL_MS = 24 * 3600 * 1000L
     private const val OTA_UPDATE_CHECK_INTERVAL_MS = 12 * 3600 * 1000L
 
     enum class WatchdogHost {
@@ -617,17 +617,21 @@ object ProtectionWatchdogRuntime {
                 if (scope != null) {
                     val nowRealtime = SystemClock.elapsedRealtime()
                     val lastCloud = lastCloudHeartbeatElapsed.get()
-                    if (nowRealtime - lastCloud >= CLOUD_HEARTBEAT_INTERVAL_MS || lastCloud == 0L) {
-                        scope.launch {
-                            try {
-                                val res = AccountabilityRepository.getInstance(appContext).updateHeartbeat()
-                                if (res.isSuccess) {
-                                    lastCloudHeartbeatElapsed.set(nowRealtime)
+                    val isCloudEnabled = com.drmohammed.antiporn.cloud.CloudSyncManager.isCloudSyncEnabled(appContext)
+                    if (isCloudEnabled) {
+                        val isSupervised = com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(appContext).getCurrentPolicy().isSupervised
+                        if (isSupervised && (nowRealtime - lastCloud >= CLOUD_HEARTBEAT_INTERVAL_MS || lastCloud == 0L)) {
+                            scope.launch {
+                                try {
+                                    val res = AccountabilityRepository.getInstance(appContext).updateHeartbeat()
+                                    if (res.isSuccess) {
+                                        lastCloudHeartbeatElapsed.set(nowRealtime)
+                                    }
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    Timber.tag(TAG).w(e, "Watchdog cloud heartbeat update error")
                                 }
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (e: Exception) {
-                                Timber.tag(TAG).w(e, "Watchdog cloud heartbeat update error")
                             }
                         }
                     }

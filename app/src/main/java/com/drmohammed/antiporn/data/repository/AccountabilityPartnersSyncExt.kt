@@ -215,6 +215,7 @@ internal suspend fun AccountabilityRepository.deletePartnerInternal(partnerId: S
             .await()
         partnerDao.deletePartnerBlocking(partnerId)
         Log.i(TAG, "Successfully deleted partner $maskedPartner from cloud and local database")
+        com.drmohammed.antiporn.cloud.CloudSyncManager.checkAndAutoRollbackIfUnsupervised(appContext)
         Result.success(Unit)
     } catch (e: Exception) {
         if (e is CancellationException) throw e

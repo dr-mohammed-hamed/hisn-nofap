@@ -207,18 +207,24 @@ class CurfewTest {
         val nightTime = createCalendar(23, 0)
         assertTrue("23:00 is inside night curfew window", CurfewEnforcer.isCurfewActive(nightTime))
 
-        // Real fail-secure release guard must reject deactivation when PolicyRepository is unavailable
-        val isolatedContext = object : ContextWrapper(null) {
-            override fun getApplicationContext(): Context = this
+        // Ensure PolicyRepository singleton is cleared so isolatedContext is forced to instantiate and fail
+        com.drmohammed.antiporn.data.repository.PolicyRepository.setInstance(null)
+        try {
+            // Real fail-secure release guard must reject deactivation when PolicyRepository is unavailable
+            val isolatedContext = object : ContextWrapper(null) {
+                override fun getApplicationContext(): Context = this
+            }
+            assertFalse(
+                "Fail-open check returns false when repository is unavailable",
+                CurfewEnforcer.isCurfewActive(isolatedContext, nightTime, useFailSecureEnabled = false)
+            )
+            assertTrue(
+                "Fail-secure guard must return true during night curfew when repository lookup fails",
+                CurfewEnforcer.isCurfewActive(isolatedContext, nightTime, useFailSecureEnabled = true)
+            )
+        } finally {
+            com.drmohammed.antiporn.data.repository.PolicyRepository.setInstance(null)
         }
-        assertFalse(
-            "Fail-open check returns false when repository is unavailable",
-            CurfewEnforcer.isCurfewActive(isolatedContext, nightTime, useFailSecureEnabled = false)
-        )
-        assertTrue(
-            "Fail-secure guard must return true during night curfew when repository lookup fails",
-            CurfewEnforcer.isCurfewActive(isolatedContext, nightTime, useFailSecureEnabled = true)
-        )
     }
 
     @Test

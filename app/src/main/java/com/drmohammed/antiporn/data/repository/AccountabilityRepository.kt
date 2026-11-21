@@ -39,8 +39,8 @@ class AccountabilityRepository(
 ) {
 
     internal val appContext = context.applicationContext
-    internal val auth = FirebaseAuth.getInstance()
-    internal val firestore = FirebaseFirestore.getInstance()
+    internal val auth by lazy { FirebaseAuth.getInstance() }
+    internal val firestore by lazy { FirebaseFirestore.getInstance() }
 
     val partnersFlow: Flow<List<PartnerEntity>> = partnerDao.getAllPartnersFlow()
     val guardiansFlow: Flow<List<PartnerEntity>> = partnerDao.getPartnersByRoleFlow(PartnerEntity.ROLE_GUARDIAN)
@@ -183,16 +183,21 @@ class AccountabilityRepository(
                 }
 
                 val currentLocalPolicy = policyDao.getDevicePolicyBlocking()?.toBundle() ?: DevicePolicyBundle.defaultPolicy()
+                val now = TrustedTimeProvider.currentTimeMillis(appContext)
+                val expiresAt = now + 15 * 60 * 1000L
                 val pairingDoc = mapOf(
                     "pairingCode" to code,
                     "ownerUid" to uid,
                     "ownerName" to deviceName,
-                    "status" to "ACTIVE",
+                    "status" to "PENDING",
+                    "used" to false,
                     "policyVersion" to currentLocalPolicy.version,
-                    "createdAt" to (existingDoc.getLong("createdAt") ?: TrustedTimeProvider.currentTimeMillis(appContext))
+                    "createdAt" to now,
+                    "expiresAt" to expiresAt
                 )
                 firestore.collection("pairings").document(code).set(pairingDoc).await()
                 prefs.edit().putString(KEY_MY_PAIRING_CODE, code).apply()
+                com.drmohammed.antiporn.cloud.CloudSyncManager.startTemporaryPairingSession(appContext, code, expiresAt)
                 registered = true
                 val maskedCode = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(code)
                 val maskedUid = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(uid)
@@ -245,6 +250,18 @@ class AccountabilityRepository(
                 return@withContext Result.failure(IllegalArgumentException(appContext.getString(R.string.error_pairing_code_not_found)))
             }
 
+            val status = snapshot.getString("status") ?: ""
+            val used = snapshot.getBoolean("used") ?: false
+            val expiresAt = snapshot.getLong("expiresAt") ?: 0L
+            val now = TrustedTimeProvider.currentTimeMillis(appContext)
+
+            if (status == "LOCKED" || used) {
+                return@withContext Result.failure(IllegalStateException(appContext.getString(R.string.error_pairing_code_already_used)))
+            }
+            if (expiresAt > 0L && now > expiresAt) {
+                return@withContext Result.failure(IllegalStateException(appContext.getString(R.string.error_pairing_code_expired)))
+            }
+
             val targetUid = snapshot.getString("ownerUid")?.takeIf { it.isNotBlank() } ?: return@withContext Result.failure(
                 IllegalStateException(appContext.getString(R.string.error_pairing_code_incomplete))
             )
@@ -286,10 +303,12 @@ class AccountabilityRepository(
                 )
                 try {
                     firestore.collection("pairings").document(cleanCode).update(
-                        mapOf("status" to "LOCKED", "pairedGuardianUid" to myUid)
+                        mapOf("status" to "LOCKED", "used" to true, "pairedGuardianUid" to myUid)
                     ).await()
                 } catch (e: Exception) {
-                    Log.w(TAG, "Pairing code lock status warning: ${e.message}")
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    Log.e(TAG, "Failed locking pairing code in Firestore: ${e.message}", e)
+                    return@withContext Result.failure(IllegalStateException(appContext.getString(R.string.error_pairing_code_already_used)))
                 }
 
                 val policyMap = updatedPolicy.toMap().toMutableMap().apply {
@@ -326,6 +345,14 @@ class AccountabilityRepository(
                 firestore.collection("policies").document(myUid).set(updatedMyPolicy.toMap(), SetOptions.merge()).await()
                 policyDao.saveDevicePolicyBlocking(DevicePolicyEntity.fromBundle(updatedMyPolicy))
                 PolicyRepository.getInstance(appContext).updateLocalPolicyAndEnforce(updatedMyPolicy)
+                try {
+                    firestore.collection("pairings").document(cleanCode).update(
+                        mapOf("status" to "LOCKED", "used" to true, "pairedGuardianUid" to targetUid)
+                    ).await()
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    Log.w(TAG, "Pairing code lock warning for guardian role: ${e.message}")
+                }
             }
 
             val partner = PartnerEntity(
@@ -353,6 +380,9 @@ class AccountabilityRepository(
 
             // Save locally in SQLite
             partnerDao.savePartnerBlocking(partner)
+
+            // Confirm cloud sync permanently enabled upon successful pairing
+            com.drmohammed.antiporn.cloud.CloudSyncManager.confirmPairingSuccess(appContext)
 
             val maskedTargetUid = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(targetUid)
             Log.i(TAG, "Successfully paired with $targetName ($maskedTargetUid) as $role under strict single guardian lock")
@@ -444,6 +474,7 @@ class AccountabilityRepository(
                 isSuccess = true,
                 details = "targets=$maskedTargets"
             )
+            com.drmohammed.antiporn.cloud.CloudSyncManager.checkAndAutoRollbackIfUnsupervised(appContext)
             Result.success(Unit)
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
@@ -496,14 +527,10 @@ class AccountabilityRepository(
             }
 
             val oldCode = prefs.getString(KEY_MY_PAIRING_CODE, null)
+            prefs.edit().remove(KEY_MY_PAIRING_CODE).apply()
 
-            // 2. Generate a brand new cryptographically random 6-character code immediately
-            // to eliminate any race condition with UI collecting policy and seeing an empty or locked code
-            val newCode = generateRandomCode()
-            prefs.edit().putString(KEY_MY_PAIRING_CODE, newCode).apply()
-
-            // 3. Delete old pairing code from cloud in background non-blocking coroutine
-            if (!oldCode.isNullOrBlank() && oldCode != CODE_LOCKED && oldCode != newCode) {
+            // 2. Delete old pairing code from cloud in background non-blocking coroutine
+            if (!oldCode.isNullOrBlank() && oldCode != CODE_LOCKED) {
                 repositoryScope.launch(Dispatchers.IO) {
                     try {
                         firestore.collection("pairings").document(oldCode).delete().await()
@@ -514,26 +541,15 @@ class AccountabilityRepository(
                 }
             }
 
-            // 4. Publish new code to Firestore
-            val deviceName = getMyDisplayName()
-            val currentLocalPolicy = policyDao.getDevicePolicyBlocking()?.toBundle() ?: DevicePolicyBundle.defaultPolicy()
-            val pairingDoc = mapOf(
-                "pairingCode" to newCode,
-                "ownerUid" to uid,
-                "ownerName" to deviceName,
-                "status" to "ACTIVE",
-                "policyVersion" to currentLocalPolicy.version,
-                "createdAt" to TrustedTimeProvider.currentTimeMillis(appContext)
-            )
-            firestore.collection("pairings").document(newCode).set(pairingDoc).await()
-            val maskedNewCode = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(newCode)
+            // 3. Zero-Cloud by Default: Roll back to offline mode cleanly; do NOT publish an orphan code to Firestore!
+            com.drmohammed.antiporn.cloud.CloudSyncManager.checkAndAutoRollbackIfUnsupervised(appContext)
             val maskedUid = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(uid)
-            Log.i(TAG, "Successfully processed local revocation: generated and registered new pairing code $maskedNewCode (v${currentLocalPolicy.version})")
+            Log.i(TAG, "Successfully processed local revocation: cleared pairing code and rolled back to offline mode for UID $maskedUid")
             com.drmohammed.antiporn.telemetry.BlackBoxRecorder.recordPairing(
                 appContext,
-                "CODE_REGENERATED_REVOCATION",
+                "SUPERVISION_REVOKED_ZERO_CLOUD_ROLLBACK",
                 isSuccess = true,
-                details = "code=$maskedNewCode, uid=$maskedUid, version=${currentLocalPolicy.version}"
+                details = "uid=$maskedUid, rolledBackToOffline=true"
             )
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
@@ -637,6 +653,25 @@ class AccountabilityRepository(
     suspend fun setMyDisplayName(newName: String): Result<Unit> = setMyDisplayNameInternal(newName)
 
     suspend fun renamePartner(partnerId: String, newName: String): Result<Unit> = renamePartnerInternal(partnerId, newName)
+
+    suspend fun cancelMyPairingCode(): Result<Unit> = withContext(Dispatchers.IO) {
+        val code = prefs.getString(KEY_MY_PAIRING_CODE, null)
+        prefs.edit().remove(KEY_MY_PAIRING_CODE).apply()
+        if (!code.isNullOrBlank()) {
+            val maskedCode = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(code)
+            try {
+                firestore.collection("pairings").document(code).delete().await()
+                Log.i(TAG, "Deleted pairing code $maskedCode from Firestore on cancel")
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.w(TAG, "Failed deleting pairing code $maskedCode from Firestore: ${e.message}")
+            }
+            com.drmohammed.antiporn.cloud.CloudSyncManager.cancelTemporaryPairingSession(appContext, code)
+        } else {
+            com.drmohammed.antiporn.cloud.CloudSyncManager.cancelTemporaryPairingSession(appContext, "")
+        }
+        Result.success(Unit)
+    }
 
     private fun generateRandomCode(): String {
         val chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"

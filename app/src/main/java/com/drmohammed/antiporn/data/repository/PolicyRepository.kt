@@ -132,8 +132,16 @@ class PolicyRepository(
                 checkAndApplyRemoteSelfControlReset(reconciled)
             }
         }
-        // Observe local policy changes and trigger background sync
-        startFirestoreSync()
+        // Observe local policy changes and trigger background sync only if cloud sync is enabled
+        try {
+            if (com.drmohammed.antiporn.cloud.CloudSyncManager.isCloudSyncEnabled(appContext)) {
+                startFirestoreSync()
+            } else {
+                try {
+                    Log.i(TAG, "Cloud sync is disabled; skipping startup Firestore sync (pure offline mode)")
+                } catch (_: Throwable) {}
+            }
+        } catch (_: Throwable) {}
     }
 
     private fun loadFastPolicyFromCache(): DevicePolicyBundle? {
@@ -255,6 +263,10 @@ class PolicyRepository(
      * Starts listening to Firestore policy updates for this device.
      */
     fun startFirestoreSync() {
+        if (!com.drmohammed.antiporn.cloud.CloudSyncManager.isCloudSyncEnabled(appContext)) {
+            Log.i(TAG, "Cloud sync is disabled; aborting startFirestoreSync (pure offline mode)")
+            return
+        }
         try {
             val auth = FirebaseAuth.getInstance()
             val user = auth.currentUser
@@ -293,6 +305,21 @@ class PolicyRepository(
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error initiating Firestore sync; continuing with offline local SQLite policy", e)
+        }
+    }
+
+    /**
+     * Safely detaches and clears all active Firestore listeners on this device,
+     * placing the device in full offline mode without network consumption.
+     */
+    fun stopFirestoreSync() {
+        try {
+            firestoreListener?.remove()
+            firestoreListener = null
+            ApprovalRepository.getInstance(appContext).stopApprovalsSync()
+            Log.i(TAG, "Successfully stopped Firestore policy and approval sync listeners")
+        } catch (e: Exception) {
+            Log.w(TAG, "Error while stopping Firestore sync listeners: ${e.message}")
         }
     }
 
@@ -685,6 +712,10 @@ class PolicyRepository(
 
     private fun syncPolicyToCloudAsync(uid: String, bundle: DevicePolicyBundle) {
         if (uid.isBlank()) return
+        if (!com.drmohammed.antiporn.cloud.CloudSyncManager.isCloudSyncEnabled(appContext)) {
+            Log.d(TAG, "Cloud sync is disabled; skipping syncPolicyToCloudAsync (offline mode)")
+            return
+        }
         val maskedUid = AiTelemetryReporter.maskIdentifier(uid)
         repositoryScope.launch {
             firestoreSyncMutex.withLock {

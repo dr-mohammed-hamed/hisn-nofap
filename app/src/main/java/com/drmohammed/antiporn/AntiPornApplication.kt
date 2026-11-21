@@ -98,14 +98,19 @@ class AntiPornApplication : Application(), Configuration.Provider {
                 .syncWardCapabilitiesAsync(recordTamper)
         }
 
-        // Initialize PolicyRepository on cold boot so policy and approval sync listeners start reliably
+        // Execute safe, zero-disruption migration check for existing users and fresh installs
+        com.drmohammed.antiporn.cloud.CloudSyncManager.performSafeMigrationCheck(this, applicationScope)
+
+        // Initialize PolicyRepository on cold boot so local policies load into memory immediately
         PolicyRepository.getInstance(this)
 
         // Initialize central Notification Channels
         com.drmohammed.antiporn.notification.manager.AppNotificationManager.getInstance(this).createNotificationChannels()
 
-        // Start Guardian supervision coordinator to monitor ward approvals and alerts in real-time
-        com.drmohammed.antiporn.accountability.coordinator.GuardianSupervisionCoordinator.getInstance(this).startSupervising()
+        // Start Guardian supervision coordinator only if cloud sync is actively enabled
+        if (com.drmohammed.antiporn.cloud.CloudSyncManager.isCloudSyncEnabled(this)) {
+            com.drmohammed.antiporn.accountability.coordinator.GuardianSupervisionCoordinator.getInstance(this).startSupervising()
+        }
 
         // Register Page Shield Accessibility Hook
         com.drmohammed.antiporn.pageshield.engine.PageShieldAccessibilityHook.getInstance()

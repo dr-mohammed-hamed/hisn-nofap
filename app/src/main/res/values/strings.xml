@@ -435,6 +435,16 @@
     <string name="error_pairing_code_not_found">رمز الاقتران غير موجود أو غير صالح</string>
 
     <string name="error_pairing_code_incomplete">بيانات الرمز غير مكتملة</string>
+    <string name="error_pairing_code_expired">انتهت صلاحية رمز الاقتران (15 دقيقة). يرجى توليد رمز جديد.</string>
+    <string name="error_pairing_code_already_used">تم استخدام رمز الاقتران هذا مسبقاً.</string>
+    <string name="status_offline_full_title">وضع الحصن المحلي الكامل (أوفلاين 100%)</string>
+    <string name="status_offline_full_desc">يعمل التطبيق محلياً دون أي اتصال بالسحابة لحفظ الخصوصية وتصفير التكاليف، ولن يتصل بالسحابة إلا بموافقتك عند تفعيل الإشراف.</string>
+    <string name="btn_enable_supervision_ward">تفعيل الإشراف وتوليد رمز اقتران</string>
+    <string name="btn_enable_supervision_guardian">الدخول كمشرف (متابعة مكفول)</string>
+    <string name="btn_cancel_pairing_session">إلغاء وإغلاق الاتصال السحابي</string>
+    <string name="label_pairing_countdown">صالح لمدة: %s دقيقة</string>
+    <string name="pairing_session_cancelled">تم إلغاء جلسة الاقتران وإغلاق الاتصال السحابي بنجاح.</string>
+    <string name="pairing_session_expired">انتهت مهلة الـ 15 دقيقة لرمز الاقتران، وتم الرجوع للوضع المحلي.</string>
 
     <string name="partner_default_name">صديق المساءلة</string>
 

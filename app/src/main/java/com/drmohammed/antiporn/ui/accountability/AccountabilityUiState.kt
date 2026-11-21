@@ -19,6 +19,10 @@ data class AccountabilityUiState(
     val breakoutUnlockAt: Long? = null,
     val breakoutRemainingMs: Long = 0L,
     val pendingApprovalsCount: Int = 0,
+    val isCloudSyncEnabled: Boolean = false,
+    val isTemporaryPairingActive: Boolean = false,
+    val pairingExpiresAt: Long = 0L,
+    val pairingRemainingMs: Long = 0L,
     val isLoading: Boolean = false,
     val errorMessage: String? = null
 )

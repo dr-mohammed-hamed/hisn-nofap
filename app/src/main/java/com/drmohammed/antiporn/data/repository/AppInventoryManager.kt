@@ -137,6 +137,12 @@ class AppInventoryManager internal constructor(context: Context) {
      */
     suspend fun syncInventoryToCloud(force: Boolean = false) = withContext(Dispatchers.IO) {
         try {
+            if (!com.drmohammed.antiporn.cloud.CloudSyncManager.isCloudSyncEnabled(appContext) ||
+                !AccountabilityRepository.getInstance(appContext).isSupervised()) {
+                Log.d(TAG, "Skipping inventory sync: device is not an active supervised ward or cloud sync is disabled")
+                return@withContext
+            }
+
             val now = System.currentTimeMillis()
             val elapsedNow = SystemClock.elapsedRealtime()
             if (!force && (elapsedNow - lastSyncElapsedRealtime < MIN_SYNC_INTERVAL_MS)) {

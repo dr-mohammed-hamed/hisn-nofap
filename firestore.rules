@@ -30,14 +30,36 @@ service cloud.firestore {
       );
     }
 
-    // 1. Pairings: Exchange and resolve 6-character alphanumeric pairing codes
+    // 1. Pairings: Exchange and resolve 6-character alphanumeric pairing codes (with 15-min expiration & one-time use)
     match /pairings/{code} {
       allow get: if request.auth != null;
       allow list: if false;
-      allow create: if request.auth != null && request.resource.data.ownerUid == request.auth.uid;
+      allow create: if request.auth != null &&
+        request.resource.data.ownerUid == request.auth.uid &&
+        request.resource.data.get('used', false) == false &&
+        request.resource.data.get('status', '') in ['PENDING', 'ACTIVE'] &&
+        (
+          !('expiresAt' in request.resource.data) ||
+          (
+            request.resource.data.expiresAt > request.time.toMillis() &&
+            request.resource.data.expiresAt <= request.time.toMillis() + 960000
+          )
+        );
       allow update: if request.auth != null && (
-        resource.data.ownerUid == request.auth.uid ||
-        (request.resource.data.status == 'LOCKED' && request.resource.data.pairedGuardianUid == request.auth.uid)
+        (resource.data.ownerUid == request.auth.uid && request.resource.data.ownerUid == resource.data.ownerUid) ||
+        (
+          request.resource.data.ownerUid == resource.data.ownerUid &&
+          request.resource.data.status == 'LOCKED' &&
+          request.resource.data.used == true &&
+          request.resource.data.pairedGuardianUid == request.auth.uid &&
+          resource.data.get('used', false) == false &&
+          resource.data.get('status', '') in ['PENDING', 'ACTIVE'] &&
+          (
+            !('expiresAt' in resource.data) ||
+            resource.data.expiresAt >= request.time.toMillis()
+          ) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'used', 'pairedGuardianUid'])
+        )
       );
       allow delete: if request.auth != null && (resource.data.ownerUid == request.auth.uid || isGuardianOf(resource.data.ownerUid));
     }

@@ -53,6 +53,10 @@ internal fun collectWardCapabilityFields(
  * Lightweight operation invoked periodically or on app foreground.
  */
 internal suspend fun AccountabilityRepository.updateHeartbeatInternal(): Result<Unit> = withContext(Dispatchers.IO) {
+    if (!isSupervised() || !com.drmohammed.antiporn.cloud.CloudSyncManager.isCloudSyncEnabled(appContext)) {
+        Log.d(TAG, "Skipping heartbeat: device is not an active supervised ward or cloud sync is disabled")
+        return@withContext Result.success(Unit)
+    }
     capabilitiesSyncMutex.withLock {
         try {
             val myUid = getOrCreateCurrentUid()

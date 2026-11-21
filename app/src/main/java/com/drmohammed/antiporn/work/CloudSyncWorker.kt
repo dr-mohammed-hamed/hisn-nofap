@@ -34,14 +34,22 @@ class CloudSyncWorker(
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         if (isStopped) return@withContext Result.retry()
+        if (!com.drmohammed.antiporn.cloud.CloudSyncManager.isCloudSyncEnabled(applicationContext)) {
+            Timber.d("Cloud sync is disabled; skipping CloudSyncWorker (offline mode)")
+            return@withContext Result.success()
+        }
         val startTime = TrustedTimeProvider.currentTimeMillis(applicationContext)
         Timber.i("CloudSyncWorker started at $startTime (Run attempt: $runAttemptCount)")
 
         try {
             if (isStopped) return@withContext Result.retry()
 
-            // 1. Update cloud heartbeat
-            val heartbeatRes = accountabilityRepository.updateHeartbeat()
+            // 1. Update cloud heartbeat only for active supervised wards
+            val heartbeatRes = if (accountabilityRepository.isSupervised()) {
+                accountabilityRepository.updateHeartbeat()
+            } else {
+                kotlin.Result.success(Unit)
+            }
 
             if (isStopped) return@withContext Result.retry()
 
@@ -103,7 +111,7 @@ class CloudSyncWorker(
 
     companion object {
         const val WORK_NAME = "hisn_periodic_cloud_sync_work"
-        private const val REPEAT_INTERVAL_HOURS = 12L
+        private const val REPEAT_INTERVAL_HOURS = 24L
 
         /**
          * Schedules the periodic cloud sync worker with network constraints and KEEP policy.

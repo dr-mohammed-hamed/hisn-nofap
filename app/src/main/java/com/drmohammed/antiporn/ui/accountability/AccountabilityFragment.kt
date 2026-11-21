@@ -136,13 +136,36 @@ class AccountabilityFragment : Fragment() {
         // 2. Supervisors / Guardians Section
         renderGuardians(state.guardians, state)
 
-        // 3. Pairing Code (Shown only if NOT supervised)
+        // 3. Pairing Code / Offline Local Mode handling (Shown only if NOT supervised)
         if (state.isSupervised || state.isPairingCodeLocked || state.myPairingCode == AccountabilityRepository.CODE_LOCKED) {
             binding.cardMyPairingCode.visibility = View.GONE
+            binding.cardOfflineLocalMode.visibility = View.GONE
+        } else if (!state.isCloudSyncEnabled && !state.isTemporaryPairingActive) {
+            // Full Local Offline Mode: Cloud is 100% dormant
+            binding.cardOfflineLocalMode.visibility = View.VISIBLE
+            binding.cardMyPairingCode.visibility = View.GONE
+        } else if (state.wards.isNotEmpty() && !state.isTemporaryPairingActive) {
+            // Active Guardian with wards: do not show ward pairing card unless actively initiated
+            binding.cardOfflineLocalMode.visibility = View.GONE
+            binding.cardMyPairingCode.visibility = View.GONE
         } else {
+            // Cloud Sync Enabled or Temporary Pairing Session Active
+            binding.cardOfflineLocalMode.visibility = View.GONE
             binding.cardMyPairingCode.visibility = View.VISIBLE
             binding.tvMyPairingCode.text = state.myPairingCode.ifEmpty { "------" }
             binding.btnCopyCode.visibility = if (state.myPairingCode.isNotEmpty()) View.VISIBLE else View.GONE
+
+            if (state.isTemporaryPairingActive && state.pairingRemainingMs > 0L) {
+                binding.tvPairingCountdown.visibility = View.VISIBLE
+                val minutes = (state.pairingRemainingMs / 1000L) / 60L
+                val seconds = (state.pairingRemainingMs / 1000L) % 60L
+                val formattedTime = String.format(Locale.US, "%02d:%02d", minutes, seconds)
+                binding.tvPairingCountdown.text = getString(R.string.label_pairing_countdown, formattedTime)
+                binding.btnCancelPairingSession.visibility = View.VISIBLE
+            } else {
+                binding.tvPairingCountdown.visibility = View.GONE
+                binding.btnCancelPairingSession.visibility = View.GONE
+            }
         }
 
         // 4. Wards Section
@@ -192,7 +215,34 @@ class AccountabilityFragment : Fragment() {
             val now = SystemClock.elapsedRealtime()
             if (now - lastAddPartnerClickTime < 800L) return@setOnClickListener
             lastAddPartnerClickTime = now
+            viewModel.enableCloudAsGuardian()
             showAddPartnerDialog()
+        }
+
+        binding.btnEnableSupervisionWard.setOnClickListener {
+            binding.btnEnableSupervisionWard.isEnabled = false
+            viewModel.startTemporaryPairingSession { result ->
+                if (!isAdded || _binding == null) return@startTemporaryPairingSession
+                binding.btnEnableSupervisionWard.isEnabled = true
+                if (result.isFailure) {
+                    val msg = result.exceptionOrNull()?.message ?: getString(R.string.error_unknown)
+                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+
+        binding.btnEnableSupervisionGuardian.setOnClickListener {
+            viewModel.enableCloudAsGuardian()
+            showAddPartnerDialog()
+        }
+
+        binding.btnCancelPairingSession.setOnClickListener {
+            binding.btnCancelPairingSession.isEnabled = false
+            viewModel.cancelTemporaryPairingSession {
+                if (!isAdded || _binding == null) return@cancelTemporaryPairingSession
+                binding.btnCancelPairingSession.isEnabled = true
+                Toast.makeText(context, R.string.pairing_session_cancelled, Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -694,6 +744,13 @@ class AccountabilityFragment : Fragment() {
             .setNegativeButton(R.string.dialog_btn_cancel, null)
             .create()
 
+        dialog.setOnDismissListener {
+            if (!isPairingInProgress) {
+                val app = activity?.application ?: ctx.applicationContext
+                com.drmohammed.antiporn.cloud.CloudSyncManager.checkAndAutoRollbackIfUnsupervised(app)
+            }
+        }
+
         dialog.show()
 
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
@@ -732,6 +789,10 @@ class AccountabilityFragment : Fragment() {
                         getString(R.string.toast_partner_failed, err.localizedMessage ?: getString(R.string.error_unknown)),
                         Toast.LENGTH_LONG
                     ).show()
+                    val app = activity?.application ?: context?.applicationContext
+                    if (app != null) {
+                        com.drmohammed.antiporn.cloud.CloudSyncManager.checkAndAutoRollbackIfUnsupervised(app)
+                    }
                 }
             )
         }

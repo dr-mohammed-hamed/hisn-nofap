@@ -314,6 +314,16 @@
     <string name="dialog_btn_cancel">Cancel</string>
     <string name="toast_code_copied">Pairing code copied to clipboard</string>
     <string name="error_pairing_code_incomplete">Pairing code data is incomplete</string>
+    <string name="error_pairing_code_expired">Pairing code has expired (15 minutes limit). Please generate a new code.</string>
+    <string name="error_pairing_code_already_used">This pairing code has already been used.</string>
+    <string name="status_offline_full_title">Full Local Shield Mode (100% Offline)</string>
+    <string name="status_offline_full_desc">The app runs purely on-device with zero cloud connections to protect privacy and eliminate costs. Cloud connects only upon pairing approval.</string>
+    <string name="btn_enable_supervision_ward">Enable Supervision &amp; Generate Code</string>
+    <string name="btn_enable_supervision_guardian">Sign in as Guardian (Protect Someone)</string>
+    <string name="btn_cancel_pairing_session">Cancel &amp; Close Cloud Connection</string>
+    <string name="label_pairing_countdown">Expires in: %s min</string>
+    <string name="pairing_session_cancelled">Pairing session cancelled; cloud connection closed.</string>
+    <string name="pairing_session_expired">Pairing session expired (15 min limit); returned to local offline mode.</string>
     <string name="toast_partner_delete_failed">Failed to delete partner: %1$s</string>
     <string name="dialog_revoke_ward_title">Revoke Supervision &amp; Release Protection</string>
     <string name="error_ward_already_has_guardian">This device is already linked to another supervisor and cannot be paired!</string>
