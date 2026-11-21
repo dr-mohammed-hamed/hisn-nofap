@@ -556,12 +556,19 @@ internal object CurfewVpnDnsBridge {
             if (!isVpnConsentGranted(context) && SafeDpmGateway.isDeviceOwner(context)) {
                 val lockdown = requiredMode == CurfewBlackholeVpnService.VpnMode.CURFEW_BLACKHOLE
                 val bypassed = if (lockdown) CurfewConfig.getVpnBypassedPackages(context) else null
-                SafeDpmGateway.setAlwaysOnVpnPackageBlocking(
-                    context = context,
-                    vpnPackage = context.packageName,
-                    lockdown = lockdown,
-                    bypassedPackages = bypassed
-                )
+                val policy = try {
+                    com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(context).getCurrentPolicy()
+                } catch (_: Exception) { null }
+                val shouldBlockExternalVpn = policy?.isBlockExternalVpnEnabled ?: true
+
+                if (lockdown || shouldBlockExternalVpn) {
+                    SafeDpmGateway.setAlwaysOnVpnPackageBlocking(
+                        context = context,
+                        vpnPackage = context.packageName,
+                        lockdown = lockdown,
+                        bypassedPackages = bypassed
+                    )
+                }
             }
             val hasVpnConsent = isVpnConsentGranted(context)
             if (!hasVpnConsent) {
@@ -1001,13 +1008,19 @@ internal object CurfewVpnDnsBridge {
             var allOk = true
             lastAppliedBypassedPackages = null
             if (requiredMode == CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY) {
-                if (alwaysOnPkg != context.packageName || isLockdown) {
-                    val vpnRes = SafeDpmGateway.setAlwaysOnVpnPackageBlocking(context, context.packageName, false)
+                val policy = try {
+                    com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(context).getCurrentPolicy()
+                } catch (_: Exception) { null }
+                val shouldBlockExternalVpn = policy?.isBlockExternalVpnEnabled ?: true
+                val targetAlwaysOnPkg = if (shouldBlockExternalVpn) context.packageName else null
+
+                if (alwaysOnPkg != targetAlwaysOnPkg || isLockdown) {
+                    val vpnRes = SafeDpmGateway.setAlwaysOnVpnPackageBlocking(context, targetAlwaysOnPkg, false)
                     if (!vpnRes.isSuccess) {
-                        Log.e(TAG, "Failed resetting Always-on VPN lockdown=false for DNS filtering mode")
+                        Log.e(TAG, "Failed configuring Always-on VPN for DNS filtering mode (target=$targetAlwaysOnPkg)")
                         allOk = false
                     } else {
-                        Log.i(TAG, "Always-on VPN configured to DNS-only filtering mode (lockdown=false)")
+                        Log.i(TAG, "Always-on VPN configured to target=$targetAlwaysOnPkg (lockdown=false)")
                     }
                 }
                 if (!CurfewBlackholeVpnService.isServiceOrTunnelActive() ||

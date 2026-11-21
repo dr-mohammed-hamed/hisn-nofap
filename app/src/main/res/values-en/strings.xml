@@ -988,6 +988,10 @@
     <string name="switch_youtube_restricted">YouTube Restricted Mode</string>
     <string name="switch_full_system_filter">Filter Entire System (VPN)</string>
     <string name="switch_block_ads">Block Ads &amp; Trackers</string>
+    <string name="switch_block_external_vpn">Block external VPNs</string>
+    <string name="dialog_external_vpn_coexistence_title">External VPN Notice</string>
+    <string name="dialog_external_vpn_coexistence_msg">When allowing external VPN apps and starting one (such as for study or work), Android will temporarily suspend the app\'s internal full system filtering in favor of the external VPN. Encrypted DNS filtering will continue to protect your device unless overridden by the external VPN.</string>
+    <string name="shield_vpn_disabled_by_policy">External VPNs allowed (disabled by policy)</string>
     <string name="dialog_whitelist_full_system_warning_title">Warning: Whitelist Mode with System Filter</string>
     <string name="dialog_whitelist_full_system_warning_msg">Restricting traffic to allowed sites while full system filtering is active may block background apps and external CDNs. We recommend keeping system filtering disabled when using Whitelist mode for educational platforms, as browsers enforce website lockdown safely.</string>
     <string name="vpn_permission_denied_msg">Enabling local DNS filtering and ad blocking requires granting VPN permission.</string>

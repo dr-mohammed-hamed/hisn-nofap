@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.database.ContentObserver
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -735,22 +737,37 @@ object ProtectionWatchdogRuntime {
                 val isVpnActive = isVpnConsentGranted && requiredMode != CurfewBlackholeVpnService.VpnMode.IDLE
 
                 if (isVpnActive) {
-                    val isAppropriate = mode == "opportunistic" || mode == "off" || mode == null
-                    val isUnaffiliatedProtectedFallback = CurfewVpnDnsBridge.isPrivateDnsBlockedByUnaffiliatedUsers(appContext) &&
-                        mode == "hostname" &&
-                        !specifier.isNullOrBlank() &&
-                        com.drmohammed.antiporn.core.network.DnsFilteringValidator.isKnownFamilyPreset(specifier)
+                    val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                    val isExternalVpnRunning = cm?.allNetworks?.any { net ->
+                        val caps = cm.getNetworkCapabilities(net)
+                        caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                    } == true && !CurfewBlackholeVpnService.isServiceOrTunnelActive()
 
-                    if (!isAppropriate && !isUnaffiliatedProtectedFallback) {
-                        val reason = "Settings.Global DNS mismatch: VPN required, expected mode='opportunistic' but found mode='$mode', specifier='$specifier'"
-                        Timber.tag(TAG).w(reason)
-                        desyncReasons.add("[DNS_GLOBAL: $reason]")
-                    } else if (isUnaffiliatedProtectedFallback) {
-                        Timber.tag(TAG).i("Local VPN active with verified fallback DoT (%s) due to unaffiliated users. Suppressing desync.", specifier)
-                    }
-                    if (!CurfewBlackholeVpnService.isTunnelHealthy(requiredMode)) {
-                        Timber.tag(TAG).i("VPN service or DNS worker not healthy while required. Enqueuing silent sync.")
-                        CurfewBlackholeVpnService.syncPolicy(appContext)
+                    val policy = try {
+                        PolicyRepository.getInstance(appContext).getCurrentPolicy()
+                    } catch (_: Exception) { null }
+                    val allowExternalVpn = policy?.isBlockExternalVpnEnabled == false
+
+                    if (allowExternalVpn && isExternalVpnRunning) {
+                        Timber.tag(TAG).d("External VPN is active; yielding local VPN service and preserving DNS protection.")
+                    } else {
+                        val isAppropriate = mode == "opportunistic" || mode == "off" || mode == null
+                        val isUnaffiliatedProtectedFallback = CurfewVpnDnsBridge.isPrivateDnsBlockedByUnaffiliatedUsers(appContext) &&
+                            mode == "hostname" &&
+                            !specifier.isNullOrBlank() &&
+                            com.drmohammed.antiporn.core.network.DnsFilteringValidator.isKnownFamilyPreset(specifier)
+
+                        if (!isAppropriate && !isUnaffiliatedProtectedFallback) {
+                            val reason = "Settings.Global DNS mismatch: VPN required, expected mode='opportunistic' but found mode='$mode', specifier='$specifier'"
+                            Timber.tag(TAG).w(reason)
+                            desyncReasons.add("[DNS_GLOBAL: $reason]")
+                        } else if (isUnaffiliatedProtectedFallback) {
+                            Timber.tag(TAG).i("Local VPN active with verified fallback DoT (%s) due to unaffiliated users. Suppressing desync.", specifier)
+                        }
+                        if (!CurfewBlackholeVpnService.isTunnelHealthy(requiredMode)) {
+                            Timber.tag(TAG).i("VPN service or DNS worker not healthy while required. Enqueuing silent sync.")
+                            CurfewBlackholeVpnService.syncPolicy(appContext)
+                        }
                     }
                 } else {
                     val expectedHost = DnsShield.getEffectiveDnsHost(appContext)

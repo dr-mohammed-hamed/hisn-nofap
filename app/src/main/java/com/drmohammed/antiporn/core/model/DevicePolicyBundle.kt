@@ -36,6 +36,7 @@ data class DevicePolicyBundle(
     val isYouTubeRestrictedModeEnabled: Boolean = false,
     val isAdBlockingEnabled: Boolean = false,
     val isTelegramWebBlocked: Boolean = true,
+    val isBlockExternalVpnEnabled: Boolean = true,
     val guardianUid: String? = null,
     val guardianName: String? = null,
     val isSupervised: Boolean = false,
@@ -105,6 +106,7 @@ data class DevicePolicyBundle(
             "isYouTubeRestrictedModeEnabled" to isYouTubeRestrictedModeEnabled,
             "isAdBlockingEnabled" to isAdBlockingEnabled,
             "isTelegramWebBlocked" to isTelegramWebBlocked,
+            "isBlockExternalVpnEnabled" to isBlockExternalVpnEnabled,
             "isSupervised" to isSupervised,
             "isSelfControlAllowed" to isSelfControlAllowed,
             "selfControlCurfewAllowed" to selfControlCurfewAllowed,
@@ -183,6 +185,7 @@ data class DevicePolicyBundle(
         json.put("isYouTubeRestrictedModeEnabled", isYouTubeRestrictedModeEnabled)
         json.put("isAdBlockingEnabled", isAdBlockingEnabled)
         json.put("isTelegramWebBlocked", isTelegramWebBlocked)
+        json.put("isBlockExternalVpnEnabled", isBlockExternalVpnEnabled)
         if (guardianUid != null) json.put("guardianUid", guardianUid)
         if (guardianName != null) json.put("guardianName", guardianName)
         json.put("isSupervised", isSupervised)
@@ -256,6 +259,7 @@ data class DevicePolicyBundle(
             isYouTubeRestrictedModeEnabled = false,
             isAdBlockingEnabled = false,
             isTelegramWebBlocked = true,
+            isBlockExternalVpnEnabled = true,
             lockNewInstallsUntilApproved = false,
             guardianUid = null,
             guardianName = null,
@@ -323,6 +327,7 @@ data class DevicePolicyBundle(
             val ytRestricted = (map["isYouTubeRestrictedModeEnabled"] as? Boolean) ?: false
             val adBlocking = (map["isAdBlockingEnabled"] as? Boolean) ?: false
             val tgBlocked = (map["isTelegramWebBlocked"] as? Boolean) ?: true
+            val blockExternalVpn = (map["isBlockExternalVpnEnabled"] as? Boolean) ?: true
 
             val gUid = (map["guardianUid"] as? String)?.takeIf { it.isNotBlank() }
             val gName = (map["guardianName"] as? String)?.takeIf { it.isNotBlank() }
@@ -386,6 +391,7 @@ data class DevicePolicyBundle(
                 isYouTubeRestrictedModeEnabled = ytRestricted,
                 isAdBlockingEnabled = adBlocking,
                 isTelegramWebBlocked = tgBlocked,
+                isBlockExternalVpnEnabled = blockExternalVpn,
                 guardianUid = gUid, guardianName = gName,
                 isSupervised = supervised,
                 isSelfControlAllowed = isSelfControlAllowed,
@@ -470,6 +476,7 @@ data class DevicePolicyBundle(
                 val ytRestricted = json.optBoolean("isYouTubeRestrictedModeEnabled", false)
                 val adBlocking = json.optBoolean("isAdBlockingEnabled", false)
                 val tgBlocked = json.optBoolean("isTelegramWebBlocked", true)
+                val blockExternalVpn = json.optBoolean("isBlockExternalVpnEnabled", true)
                 val gUid = json.optNonBlankStringOrNull("guardianUid")
                 val gName = json.optNonBlankStringOrNull("guardianName")
                 val supervised = json.optBoolean("isSupervised", !gUid.isNullOrBlank())
@@ -550,6 +557,7 @@ data class DevicePolicyBundle(
                     isYouTubeRestrictedModeEnabled = ytRestricted,
                     isAdBlockingEnabled = adBlocking,
                     isTelegramWebBlocked = tgBlocked,
+                    isBlockExternalVpnEnabled = blockExternalVpn,
                     guardianUid = gUid, guardianName = gName,
                     isSupervised = supervised,
                     isSelfControlAllowed = isSelfControlAllowed,

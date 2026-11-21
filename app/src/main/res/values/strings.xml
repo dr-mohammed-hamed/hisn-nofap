@@ -1328,6 +1328,10 @@
     <string name="switch_youtube_restricted">وضع يوتيوب المقيد</string>
     <string name="switch_full_system_filter">تطبيق الفلترة على كامل النظام (VPN)</string>
     <string name="switch_block_ads">حجب الإعلانات والمتتبعات</string>
+    <string name="switch_block_external_vpn">حظر إنشاء VPN غير التطبيق</string>
+    <string name="dialog_external_vpn_coexistence_title">تنبيه بخصوص شبكات VPN الخارجية</string>
+    <string name="dialog_external_vpn_coexistence_msg">عند السماح بتطبيقات VPN الخارجية وتشغيل أحدها (مثل تطبيقات الدراسة أو العمل)، سيقوم نظام أندرويد بإيقاف الفلترة الشاملة الداخلية للتطبيق مؤقتاً لصالح التطبيق الآخر، بينما ستستمر حماية خادم DNS المشفر في العمل.</string>
+    <string name="shield_vpn_disabled_by_policy">مسموح بتطبيقات VPN الخارجية (معطل بطلب المستخدم أو المشرف)</string>
     <string name="dialog_whitelist_full_system_warning_title">تحذير: القائمة البيضاء مع فلترة النظام</string>
     <string name="dialog_whitelist_full_system_warning_msg">تفعيل حصر التصفح على المواقع المسموحة فقط بالتزامن مع فلترة النظام الشاملة قد يمنع اتصالات التطبيقات والـ CDNs الخارجية. يُنصح بإبقاء فلترة النظام مغلقة عند استخدام وضع المواقع المسموحة للمنصات التعليمية، حيث يتكفل المتصفح بحصر التصفح بأمان.</string>
     <string name="vpn_permission_denied_msg">يتطلب تفعيل فلترة DNS المحلية وحجب الإعلانات الموافقة على إذن الـ VPN.</string>

@@ -319,13 +319,19 @@ class CurfewBlackholeVpnService : VpnService() {
                     if (SafeDpmGateway.isDeviceOwner(appContext)) {
                         val alwaysOnPkg = SafeDpmGateway.getAlwaysOnVpnPackageBlocking(appContext, recordSuccess = false).getOrNull()
                         val isLockdown = SafeDpmGateway.isAlwaysOnVpnLockdownEnabledBlocking(appContext, recordSuccess = false).getOrNull() == true
-                        if (alwaysOnPkg != packageName || isLockdown) {
+                        val policy = try {
+                            com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(appContext).getCurrentPolicy()
+                        } catch (_: Exception) { null }
+                        val shouldBlockExternalVpn = policy?.isBlockExternalVpnEnabled ?: true
+                        val targetAlwaysOnPkg = if (shouldBlockExternalVpn) packageName else null
+
+                        if (alwaysOnPkg != targetAlwaysOnPkg || isLockdown) {
                             SafeDpmGateway.setAlwaysOnVpnPackageBlocking(
                                 context = appContext,
-                                vpnPackage = packageName,
+                                vpnPackage = targetAlwaysOnPkg,
                                 lockdown = false
                             )
-                            Timber.tag(TAG).i("Always-On VPN configured to $packageName with lockdown=false for daytime DNS mode")
+                            Timber.tag(TAG).i("Always-On VPN configured to target=$targetAlwaysOnPkg with lockdown=false for daytime DNS mode")
                         }
                     }
                 } catch (e: Exception) {

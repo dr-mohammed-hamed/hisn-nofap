@@ -10,6 +10,7 @@ import com.drmohammed.antiporn.core.contract.ProtectionShield
 import com.drmohammed.antiporn.core.engine.ProtectionEngine
 import com.drmohammed.antiporn.core.model.ShieldResult
 import com.drmohammed.antiporn.core.model.ShieldStatus
+import com.drmohammed.antiporn.data.repository.PolicyRepository
 
 /**
  * Isolated security shield that closes the VPN bypass loophole by enforcing DISALLOW_CONFIG_VPN.
@@ -31,20 +32,36 @@ object VpnShield : ProtectionShield {
         }
 
         return try {
+            val policy = PolicyRepository.getInstance(context).getCurrentPolicy()
+            val shouldBlockExternalVpn = policy.isBlockExternalVpnEnabled
             val restrictions = dpm.getUserRestrictions(admin)
             val alreadyBlocked = restrictions?.getBoolean(UserManager.DISALLOW_CONFIG_VPN, false) ?: false
-            if (!alreadyBlocked) {
-                dpm.addUserRestriction(admin, UserManager.DISALLOW_CONFIG_VPN)
-                Log.i(TAG, "Added restriction: DISALLOW_CONFIG_VPN")
-            } else {
-                Log.d(TAG, "DISALLOW_CONFIG_VPN already set, skipping write")
-            }
 
-            ShieldResult(
-                shieldId = id,
-                success = true,
-                message = context.getString(R.string.shield_vpn_success)
-            )
+            if (shouldBlockExternalVpn) {
+                if (!alreadyBlocked) {
+                    dpm.addUserRestriction(admin, UserManager.DISALLOW_CONFIG_VPN)
+                    Log.i(TAG, "Added restriction: DISALLOW_CONFIG_VPN")
+                } else {
+                    Log.d(TAG, "DISALLOW_CONFIG_VPN already set, skipping write")
+                }
+                ShieldResult(
+                    shieldId = id,
+                    success = true,
+                    message = context.getString(R.string.shield_vpn_success)
+                )
+            } else {
+                if (alreadyBlocked) {
+                    dpm.clearUserRestriction(admin, UserManager.DISALLOW_CONFIG_VPN)
+                    Log.i(TAG, "Cleared restriction: DISALLOW_CONFIG_VPN")
+                } else {
+                    Log.d(TAG, "DISALLOW_CONFIG_VPN already cleared, skipping write")
+                }
+                ShieldResult(
+                    shieldId = id,
+                    success = true,
+                    message = context.getString(R.string.shield_vpn_disabled_by_policy)
+                )
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error applying VPN restriction", e)
             ShieldResult(
@@ -60,13 +77,30 @@ object VpnShield : ProtectionShield {
             return ShieldStatus.Disabled(context.getString(R.string.card_device_owner_inactive))
         }
 
+        val policy = try {
+            PolicyRepository.getInstance(context).getCurrentPolicy()
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not load policy for VpnShield status check", e)
+            null
+        }
+
         return try {
             val restrictions = dpm.getUserRestrictions(admin)
             val isVpnBlocked = restrictions?.getBoolean(UserManager.DISALLOW_CONFIG_VPN, false) ?: false
-            if (isVpnBlocked) {
-                ShieldStatus.Active(context.getString(R.string.card_vpn_blocked))
+            val shouldBlockExternalVpn = policy?.isBlockExternalVpnEnabled ?: true
+
+            if (shouldBlockExternalVpn) {
+                if (isVpnBlocked) {
+                    ShieldStatus.Active(context.getString(R.string.card_vpn_blocked))
+                } else {
+                    ShieldStatus.NeedsEnforcement(context.getString(R.string.card_vpn_unblocked))
+                }
             } else {
-                ShieldStatus.NeedsEnforcement(context.getString(R.string.card_vpn_unblocked))
+                if (!isVpnBlocked) {
+                    ShieldStatus.Active(context.getString(R.string.shield_vpn_disabled_by_policy))
+                } else {
+                    ShieldStatus.NeedsEnforcement(context.getString(R.string.card_vpn_blocked))
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error checking VPN restriction status", e)

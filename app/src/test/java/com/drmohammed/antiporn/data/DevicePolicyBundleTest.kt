@@ -43,6 +43,7 @@ class DevicePolicyBundleTest {
         assertFalse(policy.isDateTimeLocked)
         assertTrue(policy.isClearAppDataAllowed)
         assertEquals(DevicePolicyBundle.CLOUDFLARE_FAMILY_DNS_HOST, policy.dnsHost)
+        assertTrue(policy.isBlockExternalVpnEnabled)
         assertEquals(com.drmohammed.antiporn.curfew.CurfewConfig.getDefaultFallbackTimeZone(), policy.timeZoneId)
         assertEquals(1L, policy.version)
     }
@@ -76,6 +77,7 @@ class DevicePolicyBundleTest {
             browserFilterMode = DevicePolicyBundle.BROWSER_FILTER_BLOCKLIST,
             isFullSystemFilteringEnabled = true,
             isAdBlockingEnabled = true,
+            isBlockExternalVpnEnabled = false,
             customBlockedUrls = setOf("badsite.com", "gambling.org"),
             customAllowedUrls = setOf("safe.org"),
             dnsHost = "custom.family-dns.com",
@@ -120,6 +122,7 @@ class DevicePolicyBundleTest {
         assertEquals(original.browserFilterMode, restored.browserFilterMode)
         assertEquals(original.isFullSystemFilteringEnabled, restored.isFullSystemFilteringEnabled)
         assertEquals(original.isAdBlockingEnabled, restored.isAdBlockingEnabled)
+        assertEquals(original.isBlockExternalVpnEnabled, restored.isBlockExternalVpnEnabled)
         assertEquals(original.customBlockedUrls, restored.customBlockedUrls)
         assertEquals(original.customAllowedUrls, restored.customAllowedUrls)
         assertEquals(original.dnsHost, restored.dnsHost)
@@ -164,6 +167,7 @@ class DevicePolicyBundleTest {
             browserFilterMode = DevicePolicyBundle.BROWSER_FILTER_WHITELIST_ONLY,
             isFullSystemFilteringEnabled = true,
             isAdBlockingEnabled = true,
+            isBlockExternalVpnEnabled = false,
             customBlockedUrls = setOf("blocked1.com", "blocked2.com"),
             customAllowedUrls = setOf("allowed1.com"),
             dnsHost = "custom.family-dns.com",
@@ -208,6 +212,7 @@ class DevicePolicyBundleTest {
         assertEquals(original.browserFilterMode, restored.browserFilterMode)
         assertEquals(original.isFullSystemFilteringEnabled, restored.isFullSystemFilteringEnabled)
         assertEquals(original.isAdBlockingEnabled, restored.isAdBlockingEnabled)
+        assertEquals(original.isBlockExternalVpnEnabled, restored.isBlockExternalVpnEnabled)
         assertEquals(original.customBlockedUrls, restored.customBlockedUrls)
         assertEquals(original.customAllowedUrls, restored.customAllowedUrls)
         assertEquals(original.dnsHost, restored.dnsHost)
@@ -661,5 +666,16 @@ class DevicePolicyBundleTest {
         val restoredFromJson = DevicePolicyBundle.fromJson(instantBundle.toJson())
         assertTrue(restoredFromJson.waqfaConfig.useInstantAccessibilityMode)
         assertEquals(setOf("com.instagram.android"), restoredFromJson.waqfaConfig.targetPackages)
+    }
+
+    @Test
+    fun testBlockExternalVpn_defaultsToTrue_whenMissingInMapOrJson() {
+        val map = mapOf<String, Any?>("version" to 1L)
+        val bundleFromMap = DevicePolicyBundle.fromMap(map)
+        assertTrue(bundleFromMap.isBlockExternalVpnEnabled)
+
+        val json = "{}"
+        val bundleFromJson = DevicePolicyBundle.fromJson(json)
+        assertTrue(bundleFromJson.isBlockExternalVpnEnabled)
     }
 }

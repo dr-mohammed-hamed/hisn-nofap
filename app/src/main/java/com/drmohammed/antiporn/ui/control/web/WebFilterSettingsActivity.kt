@@ -64,6 +64,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
     private var isYouTubeRestricted = false
     private var isFullSystemFiltering = false
     private var isAdBlocking = false
+    private var isBlockExternalVpn = true
     private var isWhitelistOnlyMode = false
     private val blockedUrls = mutableSetOf<String>()
     private val allowedUrls = mutableSetOf<String>()
@@ -85,6 +86,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
     private lateinit var switchYouTubeRestricted: MaterialSwitch
     private lateinit var switchFullSystemFilter: MaterialSwitch
     private lateinit var switchBlockAds: MaterialSwitch
+    private lateinit var switchBlockExternalVpn: MaterialSwitch
 
     private lateinit var toggleGroupUrlType: MaterialButtonToggleGroup
     private lateinit var btnTabBlocked: MaterialButton
@@ -207,6 +209,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         outState.putBoolean(STATE_YOUTUBE_RESTRICTED, isYouTubeRestricted)
         outState.putBoolean(STATE_FULL_SYSTEM_FILTERING, isFullSystemFiltering)
         outState.putBoolean(STATE_AD_BLOCKING, isAdBlocking)
+        outState.putBoolean(STATE_BLOCK_EXTERNAL_VPN, isBlockExternalVpn)
         outState.putBoolean(STATE_WHITELIST_ONLY, isWhitelistOnlyMode)
         outState.putStringArrayList(STATE_BLOCKED_URLS, ArrayList(blockedUrls))
         outState.putStringArrayList(STATE_ALLOWED_URLS, ArrayList(allowedUrls))
@@ -221,6 +224,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         isYouTubeRestricted = state.getBoolean(STATE_YOUTUBE_RESTRICTED, isYouTubeRestricted)
         isFullSystemFiltering = state.getBoolean(STATE_FULL_SYSTEM_FILTERING, isFullSystemFiltering)
         isAdBlocking = state.getBoolean(STATE_AD_BLOCKING, isAdBlocking)
+        isBlockExternalVpn = state.getBoolean(STATE_BLOCK_EXTERNAL_VPN, isBlockExternalVpn)
         isWhitelistOnlyMode = state.getBoolean(STATE_WHITELIST_ONLY, isWhitelistOnlyMode)
         if (state.containsKey(STATE_PENDING_VPN_CONSENT_SOURCE)) {
             val ord = state.getInt(STATE_PENDING_VPN_CONSENT_SOURCE, -1)
@@ -248,6 +252,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         switchYouTubeRestricted.isChecked = isYouTubeRestricted
         switchFullSystemFilter.isChecked = isFullSystemFiltering
         switchBlockAds.isChecked = isAdBlocking
+        switchBlockExternalVpn.isChecked = isBlockExternalVpn
         switchWhitelistOnly.isChecked = isWhitelistOnlyMode
         isProgrammaticSwitchChange = false
         toggleGroupUrlType.check(
@@ -297,6 +302,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         switchYouTubeRestricted = findViewById(R.id.switchYouTubeRestricted)
         switchFullSystemFilter = findViewById(R.id.switchFullSystemFilter)
         switchBlockAds = findViewById(R.id.switchBlockAds)
+        switchBlockExternalVpn = findViewById(R.id.switchBlockExternalVpn)
 
         toggleGroupUrlType = findViewById(R.id.toggleGroupUrlType)
         btnTabBlocked = findViewById(R.id.btnTabBlocked)
@@ -317,6 +323,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         isYouTubeRestricted = initialPolicy.isYouTubeRestrictedModeEnabled
         isFullSystemFiltering = initialPolicy.isFullSystemFilteringEnabled
         isAdBlocking = initialPolicy.isAdBlockingEnabled
+        isBlockExternalVpn = initialPolicy.isBlockExternalVpnEnabled
         isWhitelistOnlyMode = initialPolicy.browserFilterMode == DevicePolicyBundle.BROWSER_FILTER_WHITELIST_ONLY
 
         blockedUrls.clear()
@@ -334,6 +341,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         switchYouTubeRestricted.isChecked = isYouTubeRestricted
         switchFullSystemFilter.isChecked = isFullSystemFiltering
         switchBlockAds.isChecked = isAdBlocking
+        switchBlockExternalVpn.isChecked = isBlockExternalVpn
         switchWhitelistOnly.isChecked = isWhitelistOnlyMode
 
         if (isWhitelistOnlyMode && blockedUrls.isEmpty() && allowedUrls.isNotEmpty()) {
@@ -421,6 +429,8 @@ class WebFilterSettingsActivity : AppCompatActivity() {
             isFullSystemFiltering = isChecked
             if (isChecked && isWhitelistOnlyMode) {
                 showWhitelistFullSystemWarningDialog()
+            } else if (isChecked && !isBlockExternalVpn) {
+                showExternalVpnCoexistenceDialog()
             } else if (isChecked && com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge.isPrivateDnsBlockedByUnaffiliatedUsers(this)) {
                 showUnaffiliatedUsersFilterWarningDialog()
             }
@@ -437,6 +447,15 @@ class WebFilterSettingsActivity : AppCompatActivity() {
             isAdBlocking = isChecked
             if (isChecked && !isFullSystemFiltering && com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge.isPrivateDnsBlockedByUnaffiliatedUsers(this)) {
                 showUnaffiliatedUsersFilterWarningDialog()
+            }
+            updateSaveButtonState()
+        }
+
+        switchBlockExternalVpn.setOnCheckedChangeListener { _, isChecked ->
+            if (isProgrammaticSwitchChange) return@setOnCheckedChangeListener
+            isBlockExternalVpn = isChecked
+            if (!isChecked && isFullSystemFiltering) {
+                showExternalVpnCoexistenceDialog()
             }
             updateSaveButtonState()
         }
@@ -621,6 +640,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
                 isYouTubeRestricted != initialPolicy.isYouTubeRestrictedModeEnabled ||
                 isFullSystemFiltering != initialPolicy.isFullSystemFilteringEnabled ||
                 isAdBlocking != initialPolicy.isAdBlockingEnabled ||
+                isBlockExternalVpn != initialPolicy.isBlockExternalVpnEnabled ||
                 isWhitelistOnlyMode != initialWasWhitelist ||
                 blockedUrls != initialPolicy.customBlockedUrls ||
                 allowedUrls != initialPolicy.customAllowedUrls
@@ -644,6 +664,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         switchYouTubeRestricted.isEnabled = enabled
         switchFullSystemFilter.isEnabled = enabled
         switchBlockAds.isEnabled = enabled
+        switchBlockExternalVpn.isEnabled = enabled
         switchWhitelistOnly.isEnabled = enabled
         btnAddBlockedUrl.isEnabled = enabled
         btnTabBlocked.isEnabled = enabled
@@ -687,6 +708,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         val snapYouTubeRestricted = isYouTubeRestricted
         val snapFullSystem = isFullSystemFiltering
         val snapAdBlocking = isAdBlocking
+        val snapBlockExternalVpn = isBlockExternalVpn
         val snapWhitelistOnly = isWhitelistOnlyMode
         val snapBlockedUrls = blockedUrls.toSet()
         val snapAllowedUrls = allowedUrls.toSet()
@@ -764,6 +786,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
                                 isYouTubeRestrictedModeEnabled = snapYouTubeRestricted,
                                 isFullSystemFilteringEnabled = snapFullSystem,
                                 isAdBlockingEnabled = snapAdBlocking,
+                                isBlockExternalVpnEnabled = snapBlockExternalVpn,
                                 customBlockedUrls = snapBlockedUrls,
                                 customAllowedUrls = snapAllowedUrls,
                                 browserFilterMode = filterMode
@@ -777,6 +800,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
                             isYouTubeRestrictedModeEnabled = snapYouTubeRestricted,
                             isFullSystemFilteringEnabled = snapFullSystem,
                             isAdBlockingEnabled = snapAdBlocking,
+                            isBlockExternalVpnEnabled = snapBlockExternalVpn,
                             customBlockedUrls = snapBlockedUrls,
                             customAllowedUrls = snapAllowedUrls,
                             browserFilterMode = filterMode
@@ -878,6 +902,18 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         dialog.show()
     }
 
+    private fun showExternalVpnCoexistenceDialog() {
+        activeDialog?.dismiss()
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.dialog_external_vpn_coexistence_title)
+            .setMessage(R.string.dialog_external_vpn_coexistence_msg)
+            .setPositiveButton(android.R.string.ok, null)
+            .create()
+        dialog.setOnDismissListener { if (activeDialog === dialog) activeDialog = null }
+        activeDialog = dialog
+        dialog.show()
+    }
+
     private fun showDiscardConfirmationDialog() {
         activeDialog?.dismiss()
         val dialog = MaterialAlertDialogBuilder(this)
@@ -916,6 +952,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         private const val STATE_YOUTUBE_RESTRICTED = "state_youtube_restricted"
         private const val STATE_FULL_SYSTEM_FILTERING = "state_full_system_filtering"
         private const val STATE_AD_BLOCKING = "state_ad_blocking"
+        private const val STATE_BLOCK_EXTERNAL_VPN = "state_block_external_vpn"
         private const val STATE_PENDING_VPN_CONSENT_SOURCE = "state_pending_vpn_consent_source"
         private const val STATE_WHITELIST_ONLY = "state_whitelist_only"
         private const val STATE_BLOCKED_URLS = "state_blocked_urls"

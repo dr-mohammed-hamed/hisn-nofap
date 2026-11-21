@@ -33,6 +33,7 @@ import com.drmohammed.antiporn.data.local.db.entity.PendingApprovalEntity
 import com.drmohammed.antiporn.notification.registry.NotificationRegistry
 import com.drmohammed.antiporn.shields.BrowserShield
 import com.drmohammed.antiporn.shields.DnsShield
+import com.drmohammed.antiporn.shields.VpnShield
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import com.drmohammed.antiporn.telemetry.DpmExecutionResult
 import com.drmohammed.antiporn.telemetry.SafeDpmGateway
@@ -133,6 +134,7 @@ internal class PolicyEnforcementHandler(
                     ) { dpm, admin ->
                         BrowserShield.applyBrowserRestrictions(dpm, admin, bundle)
                         DnsShield.apply(appContext, dpm, admin)
+                        VpnShield.apply(appContext, dpm, admin)
                     }
 
                     enforceCustomBlacklistSuspension(bundle)
