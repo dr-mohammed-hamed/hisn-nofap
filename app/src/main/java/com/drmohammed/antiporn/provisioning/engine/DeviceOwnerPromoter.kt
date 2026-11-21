@@ -10,10 +10,15 @@ import com.drmohammed.antiporn.provisioning.service.AdbPairingNotificationServic
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import io.github.rhythmcache.adb.AdbClient
 import io.github.rhythmcache.adb.FileKeyProvider
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import timber.log.Timber
 import java.io.File
 
@@ -53,114 +58,129 @@ object DeviceOwnerPromoter {
         val appContext = context.applicationContext
         val startTime = SystemClock.elapsedRealtime()
         try {
-            val keyFile = File(appContext.filesDir, "antiporn_adb.key")
-            val keyProvider = FileKeyProvider(keyFile)
+            withTimeout(30_000L) {
+                val keyFile = File(appContext.filesDir, "antiporn_adb.key")
+                val keyProvider = FileKeyProvider(keyFile)
 
-            BlackBoxRecorder.recordPairing(
-                appContext,
-                "PAIR_TLS_START",
-                isSuccess = true,
-                details = "pairingPort=$pairingPort"
-            )
-
-            Timber.tag(TAG).i("Pairing via SPAKE2 TLS to $LOCALHOST:$pairingPort with code length ${pairingCode.length}...")
-            AdbClient.pairTls(LOCALHOST, pairingPort, pairingCode.trim(), keyProvider)
-            val pairDuration = SystemClock.elapsedRealtime() - startTime
-            Timber.tag(TAG).i("Pairing handshake successful in ${pairDuration}ms! Waiting 500ms for adbd key persistence...")
-            BlackBoxRecorder.recordPairing(
-                appContext,
-                "PAIR_TLS_SUCCESS",
-                isSuccess = true,
-                executionTimeMs = pairDuration
-            )
-            delay(500)
-
-            // Resolve connectPort if not yet discovered
-            var effectiveConnectPort = connectPort
-            if (effectiveConnectPort <= 0) {
-                effectiveConnectPort = AdbPairingNotificationService.capturedConnectPort
-            }
-            if (effectiveConnectPort <= 0) {
-                Timber.tag(TAG).i("Connect port is 0 after pairing, polling up to 8s for mDNS resolution...")
-                val pollStart = SystemClock.elapsedRealtime()
-                while (effectiveConnectPort <= 0 && SystemClock.elapsedRealtime() - pollStart < 8000) {
-                    delay(250)
-                    effectiveConnectPort = AdbPairingNotificationService.capturedConnectPort
-                }
-            }
-
-            if (effectiveConnectPort <= 0) {
-                val timeoutErr = "Connect port discovery timed out after successful pairing"
-                Timber.tag(TAG).e(timeoutErr)
                 BlackBoxRecorder.recordPairing(
                     appContext,
-                    "CONNECT_PORT_TIMEOUT",
-                    isSuccess = false,
-                    error = timeoutErr
+                    "PAIR_TLS_START",
+                    isSuccess = true,
+                    details = "pairingPort=$pairingPort"
                 )
-                return@withContext PromotionResult.Failure(timeoutErr)
-            }
 
-            Timber.tag(TAG).i("Connecting to main connectPort: $effectiveConnectPort...")
-            val adminComponent = ComponentName(appContext, AdminReceiver::class.java).flattenToShortString()
+                Timber.tag(TAG).i("Pairing via SPAKE2 TLS to $LOCALHOST:$pairingPort with code length ${pairingCode.length}...")
+                AdbClient.pairTls(LOCALHOST, pairingPort, pairingCode.trim(), keyProvider)
+                val pairDuration = SystemClock.elapsedRealtime() - startTime
+                Timber.tag(TAG).i("Pairing handshake successful in ${pairDuration}ms! Waiting 500ms for adbd key persistence...")
+                BlackBoxRecorder.recordPairing(
+                    appContext,
+                    "PAIR_TLS_SUCCESS",
+                    isSuccess = true,
+                    executionTimeMs = pairDuration
+                )
+                delay(500)
 
-            val targetHosts = listOfNotNull(
-                LOCALHOST,
-                AdbMdnsDiscovery.lastDiscoveredHost?.takeIf { it != LOCALHOST && it.isNotBlank() }
-            )
+                // Resolve connectPort if not yet discovered
+                var effectiveConnectPort = connectPort
+                if (effectiveConnectPort <= 0) {
+                    effectiveConnectPort = AdbPairingNotificationService.capturedConnectPort
+                }
+                if (effectiveConnectPort <= 0) {
+                    Timber.tag(TAG).i("Connect port is 0 after pairing, polling up to 8s for mDNS resolution...")
+                    val pollStart = SystemClock.elapsedRealtime()
+                    while (effectiveConnectPort <= 0 && SystemClock.elapsedRealtime() - pollStart < 8000) {
+                        delay(250)
+                        effectiveConnectPort = AdbPairingNotificationService.capturedConnectPort
+                    }
+                }
 
-            var lastException: Exception? = null
-            var result: PromotionResult? = null
+                if (effectiveConnectPort <= 0) {
+                    val timeoutErr = "Connect port discovery timed out after successful pairing"
+                    Timber.tag(TAG).e(timeoutErr)
+                    BlackBoxRecorder.recordPairing(
+                        appContext,
+                        "CONNECT_PORT_TIMEOUT",
+                        isSuccess = false,
+                        error = timeoutErr
+                    )
+                    return@withTimeout PromotionResult.Failure(timeoutErr)
+                }
 
-            hostLoop@ for (host in targetHosts) {
-                for (attempt in 1..2) {
-                    try {
-                        Timber.tag(TAG).i("Connecting to $host:$effectiveConnectPort (attempt $attempt)...")
-                        AdbClient.connectTls(host, effectiveConnectPort, keyProvider).use { client ->
-                            result = executeZeroAccountPromotion(appContext, client, adminComponent, 0)
-                        }
-                        if (result is PromotionResult.Success) {
-                            break@hostLoop
-                        }
-                    } catch (e: Exception) {
-                        lastException = e
-                        Timber.tag(TAG).w("Connect attempt $attempt to $host failed: ${e.message}")
-                        if (attempt < 2) {
-                            delay(500)
+                Timber.tag(TAG).i("Connecting to main connectPort: $effectiveConnectPort...")
+                val adminComponent = ComponentName(appContext, AdminReceiver::class.java).flattenToShortString()
+
+                val targetHosts = listOfNotNull(
+                    LOCALHOST,
+                    AdbMdnsDiscovery.lastDiscoveredHost?.takeIf { it != LOCALHOST && it.isNotBlank() }
+                )
+
+                var lastException: Throwable? = null
+                var result: PromotionResult? = null
+
+                hostLoop@ for (host in targetHosts) {
+                    for (attempt in 1..2) {
+                        try {
+                            Timber.tag(TAG).i("Connecting to $host:$effectiveConnectPort (attempt $attempt)...")
+                            AdbClient.connectTls(host, effectiveConnectPort, keyProvider).use { client ->
+                                result = executeZeroAccountPromotion(appContext, client, adminComponent, 0)
+                            }
+                            if (result is PromotionResult.Success) {
+                                break@hostLoop
+                            }
+                        } catch (t: Throwable) {
+                            if (t is CancellationException) throw t
+                            lastException = t
+                            Timber.tag(TAG).w("Connect attempt $attempt to $host failed: ${t.message}")
+                            if (attempt < 2) {
+                                delay(500)
+                            }
                         }
                     }
                 }
-            }
 
-            val finalResult = result ?: throw (lastException ?: IllegalStateException("Failed to connect over TLS"))
-            val totalDuration = SystemClock.elapsedRealtime() - startTime
-            if (finalResult is PromotionResult.Success) {
-                BlackBoxRecorder.recordPairing(
-                    appContext,
-                    "PROMOTION_SUCCESS",
-                    isSuccess = true,
-                    executionTimeMs = totalDuration
-                )
-            } else if (finalResult is PromotionResult.Failure) {
-                BlackBoxRecorder.recordPairing(
-                    appContext,
-                    "PROMOTION_FAILURE",
-                    isSuccess = false,
-                    executionTimeMs = totalDuration,
-                    error = finalResult.message
-                )
+                val finalResult = result ?: throw (lastException ?: IllegalStateException("Failed to connect over TLS"))
+                val totalDuration = SystemClock.elapsedRealtime() - startTime
+                if (finalResult is PromotionResult.Success) {
+                    BlackBoxRecorder.recordPairing(
+                        appContext,
+                        "PROMOTION_SUCCESS",
+                        isSuccess = true,
+                        executionTimeMs = totalDuration
+                    )
+                } else if (finalResult is PromotionResult.Failure) {
+                    BlackBoxRecorder.recordPairing(
+                        appContext,
+                        "PROMOTION_FAILURE",
+                        isSuccess = false,
+                        executionTimeMs = totalDuration,
+                        error = finalResult.message
+                    )
+                }
+                finalResult
             }
-            finalResult
-        } catch (e: Exception) {
-            Timber.tag(TAG).e(e, "Failed during pairAndPromote")
-            val errorMsg = e.message ?: "Unknown error during wireless promotion"
+        } catch (te: TimeoutCancellationException) {
+            val totalDuration = SystemClock.elapsedRealtime() - startTime
+            val errorMsg = "Promotion timed out after 30 seconds"
+            Timber.tag(TAG).e(te, errorMsg)
+            BlackBoxRecorder.recordPairing(
+                appContext,
+                "PROMOTION_TIMEOUT",
+                isSuccess = false,
+                executionTimeMs = totalDuration,
+                error = errorMsg
+            )
+            PromotionResult.Failure(errorMsg, te)
+        } catch (t: Throwable) {
+            Timber.tag(TAG).e(t, "Failed during pairAndPromote")
+            val errorMsg = "${t.javaClass.simpleName}: ${t.message ?: "Unknown error during wireless promotion"}"
             BlackBoxRecorder.recordPairing(
                 appContext,
                 "PAIR_AND_PROMOTE_EXCEPTION",
                 isSuccess = false,
                 error = errorMsg
             )
-            PromotionResult.Failure(errorMsg, e)
+            PromotionResult.Failure(errorMsg, t)
         } finally {
             promotionMutex.unlock()
         }
@@ -174,20 +194,42 @@ object DeviceOwnerPromoter {
             return@withContext PromotionResult.Failure("Promotion already in progress.")
         }
         val appContext = context.applicationContext
+        val startTime = SystemClock.elapsedRealtime()
         try {
-            val keyFile = File(appContext.filesDir, "antiporn_adb.key")
-            if (!keyFile.exists()) {
-                return@withContext PromotionResult.Failure("Device has not been paired yet.")
-            }
-            val keyProvider = FileKeyProvider(keyFile)
-            val adminComponent = ComponentName(appContext, AdminReceiver::class.java).flattenToShortString()
+            withTimeout(30_000L) {
+                val keyFile = File(appContext.filesDir, "antiporn_adb.key")
+                if (!keyFile.exists()) {
+                    return@withTimeout PromotionResult.Failure("Device has not been paired yet.")
+                }
+                val keyProvider = FileKeyProvider(keyFile)
+                val adminComponent = ComponentName(appContext, AdminReceiver::class.java).flattenToShortString()
 
-            AdbClient.connectTls(LOCALHOST, connectPort, keyProvider).use { client ->
-                executeZeroAccountPromotion(appContext, client, adminComponent, 0)
+                AdbClient.connectTls(LOCALHOST, connectPort, keyProvider).use { client ->
+                    executeZeroAccountPromotion(appContext, client, adminComponent, 0)
+                }
             }
-        } catch (e: Exception) {
-            Timber.tag(TAG).e(e, "Failed during promoteIfAlreadyPaired")
-            PromotionResult.Failure(e.message ?: "Failed connecting to already paired port", e)
+        } catch (te: TimeoutCancellationException) {
+            val totalDuration = SystemClock.elapsedRealtime() - startTime
+            val errorMsg = "Promotion timed out after 30 seconds"
+            Timber.tag(TAG).e(te, errorMsg)
+            BlackBoxRecorder.recordPairing(
+                appContext,
+                "PROMOTION_TIMEOUT",
+                isSuccess = false,
+                executionTimeMs = totalDuration,
+                error = errorMsg
+            )
+            PromotionResult.Failure(errorMsg, te)
+        } catch (t: Throwable) {
+            Timber.tag(TAG).e(t, "Failed during promoteIfAlreadyPaired")
+            val errorMsg = "${t.javaClass.simpleName}: ${t.message ?: "Failed connecting to already paired port"}"
+            BlackBoxRecorder.recordPairing(
+                appContext,
+                "PAIR_AND_PROMOTE_EXCEPTION",
+                isSuccess = false,
+                error = errorMsg
+            )
+            PromotionResult.Failure(errorMsg, t)
         } finally {
             promotionMutex.unlock()
         }
@@ -345,23 +387,27 @@ object DeviceOwnerPromoter {
                 PromotionResult.Failure(formatFriendlyError(context, output))
             }
         } finally {
-            // 4. Guaranteed Restoration in finally
-            if (isBypassed) {
-                try {
-                    client.shell("settings --user $userId put secure user_setup_complete 1")
-                } catch (e: Exception) {
-                    Timber.tag(TAG).e(e, "Failed to restore user_setup_complete in finally")
+            // 4. Guaranteed Restoration in finally (runs safely even if parent coroutine was cancelled/timed out)
+            withContext(NonCancellable) {
+                withTimeoutOrNull(5_000L) {
+                    if (isBypassed) {
+                        try {
+                            client.shell("settings --user $userId put secure user_setup_complete 1")
+                        } catch (e: Exception) {
+                            Timber.tag(TAG).e(e, "Failed to restore user_setup_complete in finally")
+                        }
+                        try {
+                            client.shell("CLASSPATH=$dexPath app_process /system/bin SetupStateHelper $userId")
+                        } catch (e: Exception) {
+                            Timber.tag(TAG).e(e, "Failed to refresh SetupStateHelper in finally")
+                        }
+                    }
+                    try {
+                        client.shell("rm -f $dexPath")
+                    } catch (e: Exception) {
+                        Timber.tag(TAG).w(e, "Failed to remove helper dex in finally")
+                    }
                 }
-                try {
-                    client.shell("CLASSPATH=$dexPath app_process /system/bin SetupStateHelper $userId")
-                } catch (e: Exception) {
-                    Timber.tag(TAG).e(e, "Failed to refresh SetupStateHelper in finally")
-                }
-            }
-            try {
-                client.shell("rm -f $dexPath")
-            } catch (e: Exception) {
-                Timber.tag(TAG).w(e, "Failed to remove helper dex in finally")
             }
         }
     }
@@ -433,17 +479,21 @@ object DeviceOwnerPromoter {
                 PromotionResult.Failure(formatFriendlyError(context, output))
             }
         } finally {
-            for (pkg in packagesToDisable) {
-                try {
-                    client.shell("pm enable --user $userId $pkg")
-                } catch (e: Exception) {
-                    Timber.tag(TAG).e(e, "Failed to re-enable package $pkg in finally")
+            withContext(NonCancellable) {
+                withTimeoutOrNull(5_000L) {
+                    for (pkg in packagesToDisable) {
+                        try {
+                            client.shell("pm enable --user $userId $pkg")
+                        } catch (e: Exception) {
+                            Timber.tag(TAG).e(e, "Failed to re-enable package $pkg in finally")
+                        }
+                    }
+                    try {
+                        client.shell("pm enable --user $userId com.google.android.gms")
+                    } catch (e: Exception) {
+                        Timber.tag(TAG).e(e, "Failed to re-enable com.google.android.gms in finally")
+                    }
                 }
-            }
-            try {
-                client.shell("pm enable --user $userId com.google.android.gms")
-            } catch (e: Exception) {
-                Timber.tag(TAG).e(e, "Failed to re-enable com.google.android.gms in finally")
             }
         }
     }

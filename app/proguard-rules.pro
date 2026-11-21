@@ -56,3 +56,10 @@
     public static int i(...);
 }
 
+# ====================================================================
+# Wireless ADB & SPAKE2 Cryptographic Engine Preservation
+# ====================================================================
+-keep class io.github.rhythmcache.adb.** { *; }
+-keep class io.github.rhythmache.spake2.** { *; }
+
+

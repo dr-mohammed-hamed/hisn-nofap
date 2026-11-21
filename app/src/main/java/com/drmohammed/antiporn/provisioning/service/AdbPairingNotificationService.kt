@@ -26,6 +26,7 @@ import com.drmohammed.antiporn.provisioning.engine.PromotionResult
 import com.drmohammed.antiporn.provisioning.receiver.PairingCodeReceiver
 import com.drmohammed.antiporn.provisioning.ui.FloatingPairingOverlay
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -223,10 +224,12 @@ class AdbPairingNotificationService : Service() {
                         nm?.notify(PAIRING_PROMPT_NOTIFICATION_ID, failureNotification)
                     }
                 }
-            } catch (e: Exception) {
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
                 isPromoting = false
-                Timber.tag(TAG).e(e, "Exception during handlePairingCodeSubmission")
-                floatingOverlay?.showError(e.message ?: "Unknown error")
+                Timber.tag(TAG).e(t, "Exception during handlePairingCodeSubmission")
+                val errorMsg = "${t.javaClass.simpleName}: ${t.message ?: "Unknown error"}"
+                floatingOverlay?.showError(errorMsg)
             }
         }
     }

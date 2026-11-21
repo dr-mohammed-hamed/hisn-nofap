@@ -41,6 +41,7 @@ import com.google.android.material.checkbox.MaterialCheckBox
 import com.google.android.material.color.MaterialColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.textfield.TextInputEditText
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -283,6 +284,16 @@ class ProvisioningWizardActivity : AppCompatActivity() {
                         onProvisioningSuccessful()
                     } else if (result is PromotionResult.Failure) {
                         Toast.makeText(this@ProvisioningWizardActivity, getString(R.string.toast_provisioning_failed, result.message), Toast.LENGTH_LONG).show()
+                        btnPairAndActivate.setText(R.string.provisioning_btn_pair_and_activate)
+                    }
+                }
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                Timber.tag(TAG).e(t, "Unexpected error in wizard activation")
+                withContext(Dispatchers.Main) {
+                    if (!isFinishing && !isDestroyed) {
+                        val errMsg = "${t.javaClass.simpleName}: ${t.message ?: "Unknown error"}"
+                        Toast.makeText(this@ProvisioningWizardActivity, getString(R.string.toast_provisioning_failed, errMsg), Toast.LENGTH_LONG).show()
                         btnPairAndActivate.setText(R.string.provisioning_btn_pair_and_activate)
                     }
                 }

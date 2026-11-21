@@ -189,8 +189,10 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.coroutines.play.services)
 
-    // Wireless ADB & Device Owner Provisioning
-    implementation(libs.adb.kt)
+    // Wireless ADB & Device Owner Provisioning (Exclude external spake2-kt to use in-tree hardened API 26+ shim)
+    implementation(libs.adb.kt) {
+        exclude(group = "com.github.rhythmcache", module = "spake2-kt")
+    }
 
     // QR Code Generation & Scanning (CameraX + ML Kit) & Printing
     implementation(libs.zxing.core)
