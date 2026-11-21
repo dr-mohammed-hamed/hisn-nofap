@@ -45,6 +45,7 @@ object ProtectionNotificationCoordinator {
         data class NapActive(val endWallMs: Long, val remainingMs: Long) : ProtectionState()
         data class CurfewActive(val endHour: Int, val endMinute: Int) : ProtectionState()
         data class AppsOnlyActive(val isNap: Boolean, val endHour: Int, val endMinute: Int, val endWallMs: Long) : ProtectionState()
+        object DnsFilteringActive : ProtectionState()
         object Inactive : ProtectionState()
     }
 
@@ -125,8 +126,15 @@ object ProtectionNotificationCoordinator {
                     )
                 }
             }
+            isLocalDnsVpnActive(context) -> ProtectionState.DnsFilteringActive
             else -> ProtectionState.Inactive
         }
+    }
+
+    private fun isLocalDnsVpnActive(context: Context): Boolean {
+        return CurfewBlackholeVpnService.evaluateRequiredMode(context) == CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY ||
+            (CurfewBlackholeVpnService.isServiceOrTunnelActive() &&
+             CurfewBlackholeVpnService.currentMode == CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY)
     }
 
     fun buildProtectionNotification(
@@ -244,6 +252,15 @@ object ProtectionNotificationCoordinator {
                         extendPendingIntent
                     )
                 }
+            }
+            is ProtectionState.DnsFilteringActive -> {
+                val title = context.getString(R.string.dns_vpn_notification_title)
+                val desc = context.getString(R.string.dns_vpn_notification_desc)
+                builder.setContentTitle(title)
+                    .setContentText(desc)
+                    .setStyle(NotificationCompat.BigTextStyle().bigText(desc))
+                    .setSmallIcon(R.drawable.ic_shield_dns)
+                    .setCategory(NotificationCompat.CATEGORY_SERVICE)
             }
             is ProtectionState.Inactive -> {
                 val title = context.getString(R.string.dns_vpn_notification_title)

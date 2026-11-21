@@ -27,6 +27,7 @@ import com.drmohammed.antiporn.curfew.CurfewConfig
 import com.drmohammed.antiporn.curfew.CurfewEnforcer
 import com.drmohammed.antiporn.curfew.CurfewForegroundWatcher
 import com.drmohammed.antiporn.curfew.CurfewScheduler
+import com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge
 import com.drmohammed.antiporn.curfew.ZeroTrustForegroundWatcher
 import com.drmohammed.antiporn.data.local.db.entity.PendingApprovalEntity
 import com.drmohammed.antiporn.notification.registry.NotificationRegistry
@@ -106,6 +107,21 @@ internal class PolicyEnforcementHandler(
                 CurfewEnforcer.syncBlockState(appContext)
                 if (bundle.dnsHost != effectivePreviousPolicy.dnsHost) {
                     com.drmohammed.antiporn.core.network.dns.DnsResilienceManager.resetStateSync()
+                }
+                if (isDeviceOwner) {
+                    val requiredVpnMode = CurfewBlackholeVpnService.evaluateRequiredMode(appContext)
+                    if (requiredVpnMode != CurfewBlackholeVpnService.VpnMode.IDLE &&
+                        !CurfewVpnDnsBridge.isVpnConsentGranted(appContext)
+                    ) {
+                        val lockdown = (requiredVpnMode == CurfewBlackholeVpnService.VpnMode.CURFEW_BLACKHOLE)
+                        val bypassed = if (lockdown) CurfewConfig.getVpnBypassedPackages(appContext) else null
+                        SafeDpmGateway.setAlwaysOnVpnPackageBlocking(
+                            context = appContext,
+                            vpnPackage = appContext.packageName,
+                            lockdown = lockdown,
+                            bypassedPackages = bypassed
+                        )
+                    }
                 }
                 CurfewBlackholeVpnService.syncPolicy(appContext)
 

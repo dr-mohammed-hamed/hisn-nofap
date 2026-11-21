@@ -65,6 +65,9 @@ object SystemTamperShield : ProtectionShield {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 try { dpm.addUserRestriction(admin, UserManager.DISALLOW_USER_SWITCH) } catch (e: Exception) { Log.w(TAG, "User switch block: ${e.message}") }
             }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+                try { dpm.addUserRestriction(admin, UserManager.DISALLOW_ADD_PRIVATE_PROFILE) } catch (e: Exception) { Log.w(TAG, "Add private profile block: ${e.message}") }
+            }
             // Supplementary direct user switcher deactivation via Settings.Global (Check-Before-Write)
             try {
                 if (Settings.Global.getInt(context.contentResolver, "user_switcher_enabled", 1) != 0) {

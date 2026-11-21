@@ -532,6 +532,29 @@ class TelemetryAndGatewayTest {
         }
     }
 
+    @Test
+    fun testSetAlwaysOnVpnPackage_lockdownFalse_stripsBypassedPackages() {
+        var passedBypassedPackages: Set<String>? = null
+        var passedLockdown: Boolean? = null
+
+        fun sanitizeAndCall(
+            lockdown: Boolean,
+            bypassedPackages: Set<String>?
+        ) {
+            val effectiveBypassed = if (lockdown) bypassedPackages else null
+            passedLockdown = lockdown
+            passedBypassedPackages = effectiveBypassed
+        }
+
+        sanitizeAndCall(lockdown = false, bypassedPackages = setOf("com.example.app"))
+        assertFalse(passedLockdown!!)
+        assertNull("bypassedPackages must be sanitized to null when lockdown is false", passedBypassedPackages)
+
+        sanitizeAndCall(lockdown = true, bypassedPackages = setOf("com.example.app"))
+        assertTrue(passedLockdown!!)
+        assertEquals(setOf("com.example.app"), passedBypassedPackages)
+    }
+
     private class InMemorySharedPreferences : SharedPreferences {
         private val values = mutableMapOf<String, Any?>()
 

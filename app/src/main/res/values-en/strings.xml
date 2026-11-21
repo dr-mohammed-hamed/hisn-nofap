@@ -24,8 +24,8 @@
     <string name="dns_vpn_notification_desc">Local DNS filtering and adult content blocking are active in the background</string>
 
     <!-- Unified Protection & Curfew Notification Strings -->
-    <string name="protection_vpn_channel_name">Protection Network Isolation</string>
-    <string name="protection_vpn_channel_desc">Notifications for night curfew, nap mode, and guardian internet block</string>
+    <string name="protection_vpn_channel_name">Hisn Protection &amp; Network Shield</string>
+    <string name="protection_vpn_channel_desc">Notifications for local DNS filtering, night curfew, and internet isolation</string>
     <string name="protection_events_channel_name">Protection &amp; Approval Alerts</string>
     <string name="protection_events_channel_desc">Alerts for guardian responses and timer completions</string>
     <string name="critical_alerts_channel_name">Critical Security Alerts</string>
@@ -538,6 +538,11 @@
     <string name="shield_system_tamper_success">System tamper restrictions enforced successfully.</string>
     <string name="shield_dns_unsupported">Private DNS not supported on this Android version.</string>
     <string name="shield_dns_local_filter_active">Local DNS filtering active (opportunistic Private DNS with encrypted DoT upstream)</string>
+    <string name="shield_dns_local_filter_unaffiliated_notice">Web &amp; DNS filtering active via (%1$s). Note: Customizing DNS servers or advanced filters requires temporarily disabling Dual apps or Secure Folder per Android policy.</string>
+    <string name="shield_dns_unaffiliated_users_notice">DNS Shield is actively protecting the device via (%1$s). To change system DNS to (%2$s), temporarily disable Dual Messenger or Secure Folder per Android policy.</string>
+    <string name="shield_dns_unaffiliated_users_error">Cannot enforce system Private DNS due to secondary profiles (such as Dual Messenger or Secure Folder). Please remove them to enable protection.</string>
+    <string name="dialog_web_filter_unaffiliated_warning_title">Dual Apps &amp; Secure Folder Notice</string>
+    <string name="dialog_web_filter_unaffiliated_warning_msg">Notice: Advanced ad-blocking and custom filters require a single-profile Android system without Dual Apps or Secure Folder. Core web protection remains active via encrypted family DNS.</string>
     <string name="default_dns_text">Default Family DNS</string>
     <string name="card_app_suspension_title">App Suspension Shield</string>
     <string name="card_app_suspension_active">Blacklisted applications are suspended.</string>

@@ -75,6 +75,12 @@ class ProtectionNotificationCoordinatorTest {
     }
 
     @Test
+    fun testStateHierarchy_DnsFilteringActive() {
+        val state = ProtectionNotificationCoordinator.ProtectionState.DnsFilteringActive
+        assertTrue(state is ProtectionNotificationCoordinator.ProtectionState)
+    }
+
+    @Test
     fun testNapNotificationReceiverAction_matchesActionName() {
         assertEquals("com.drmohammed.antiporn.curfew.ACTION_EXTEND_NAP", NapNotificationReceiver.ACTION_EXTEND_NAP)
     }

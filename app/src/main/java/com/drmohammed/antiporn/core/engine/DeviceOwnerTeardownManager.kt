@@ -168,6 +168,9 @@ object DeviceOwnerTeardownManager {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 restrictionsToClear.add(UserManager.DISALLOW_CONFIG_PRIVATE_DNS)
             }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+                restrictionsToClear.add(UserManager.DISALLOW_ADD_PRIVATE_PROFILE)
+            }
             restrictionsToClear.add(UserManager.DISALLOW_NETWORK_RESET)
             restrictionsToClear.add(UserManager.DISALLOW_CONFIG_VPN)
 

@@ -183,6 +183,7 @@ object CurfewConfig {
     const val KEY_CURFEW_SNOOZE_END_WALL = "key_curfew_snooze_end_wall"
     private const val KEY_LAST_BLOCK_ENFORCED = "last_block_enforced"
     private const val KEY_DNS_RESTORE_PENDING = "curfew_dns_restore_pending"
+    private const val KEY_PRIVATE_DNS_BLOCKED_UNAFFILIATED = "curfew_private_dns_blocked_unaffiliated"
     const val ACTION_CURFEW_SNOOZE = "com.drmohammed.antiporn.ACTION_CURFEW_SNOOZE"
     const val ACTION_CURFEW_SNOOZE_END = "com.drmohammed.antiporn.ACTION_CURFEW_SNOOZE_END"
 
@@ -204,6 +205,16 @@ object CurfewConfig {
     fun setDnsRestorePending(context: Context, pending: Boolean) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit().putBoolean(KEY_DNS_RESTORE_PENDING, pending).commit()
+    }
+
+    fun isPrivateDnsBlockedByUnaffiliatedUsers(context: Context): Boolean {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getBoolean(KEY_PRIVATE_DNS_BLOCKED_UNAFFILIATED, false)
+    }
+
+    fun setPrivateDnsBlockedByUnaffiliatedUsers(context: Context, blocked: Boolean) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putBoolean(KEY_PRIVATE_DNS_BLOCKED_UNAFFILIATED, blocked).commit()
     }
 
     fun getTrackedSuspendedPackages(context: Context): Set<String> {

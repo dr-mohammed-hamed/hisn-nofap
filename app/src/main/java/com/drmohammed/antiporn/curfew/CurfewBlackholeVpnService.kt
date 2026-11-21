@@ -253,6 +253,9 @@ class CurfewBlackholeVpnService : VpnService() {
             .setBlocking(true)
 
         if (targetMode == VpnMode.DNS_FILTERING_ONLY) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                builder.setMetered(false)
+            }
             builder.addDnsServer("10.255.255.2")
             builder.addRoute("10.255.255.2", 32)
             // Sinkhole hardcoded public IPv4 DNS/DoH resolvers (Hisn is excluded via addDisallowedApplication + protect())
@@ -269,8 +272,9 @@ class CurfewBlackholeVpnService : VpnService() {
             builder.addRoute("2001:4860:4860::8844", 128)
             builder.addRoute("2606:4700:4700::1111", 128)
             builder.addRoute("2606:4700:4700::1001", 128)
-            builder.addRoute("2606:4700:4700::1113", 128)
-            builder.addRoute("2606:4700:4700::1003", 128)
+            // Note: Cloudflare Family IPv6 (2606:4700:4700::1113 / 1003) is intentionally omitted
+            // from TUN sinkholing to allow Android's Private DNS probe to validate connectivity
+            // cleanly when Private DNS remains pointing to family.cloudflare-dns.com.
         } else {
             builder.addDnsServer("10.255.255.1")
             builder.addAddress("fd00::1", 126)

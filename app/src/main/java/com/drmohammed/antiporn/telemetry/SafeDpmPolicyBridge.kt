@@ -270,8 +270,9 @@ interface SafeDpmPolicyBridge : SafeDpmBaseGateway {
         actionName = "setAlwaysOnVpnPackage",
         metadata = "vpn=$vpnPackage, lockdown=$lockdown"
     ) { dpm, admin ->
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && bypassedPackages != null) {
-            dpm.setAlwaysOnVpnPackage(admin, vpnPackage, lockdown, bypassedPackages)
+        val effectiveBypassed = if (lockdown) bypassedPackages else null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && effectiveBypassed != null) {
+            dpm.setAlwaysOnVpnPackage(admin, vpnPackage, lockdown, effectiveBypassed)
         } else {
             dpm.setAlwaysOnVpnPackage(admin, vpnPackage, lockdown)
         }
@@ -289,8 +290,9 @@ interface SafeDpmPolicyBridge : SafeDpmBaseGateway {
         actionName = "setAlwaysOnVpnPackageBlocking",
         metadata = "vpn=$vpnPackage, lockdown=$lockdown"
     ) { dpm, admin ->
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && bypassedPackages != null) {
-            dpm.setAlwaysOnVpnPackage(admin, vpnPackage, lockdown, bypassedPackages)
+        val effectiveBypassed = if (lockdown) bypassedPackages else null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && effectiveBypassed != null) {
+            dpm.setAlwaysOnVpnPackage(admin, vpnPackage, lockdown, effectiveBypassed)
         } else {
             dpm.setAlwaysOnVpnPackage(admin, vpnPackage, lockdown)
         }

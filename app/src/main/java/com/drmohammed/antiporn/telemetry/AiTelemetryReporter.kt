@@ -329,7 +329,18 @@ object AiTelemetryReporter {
         }
         val watchdogHost = com.drmohammed.antiporn.watchdog.ProtectionWatchdogRuntime.activeHost.name
         val watchdogRunning = com.drmohammed.antiporn.watchdog.ProtectionWatchdogRuntime.isRunning
+        val userManager = appContext.getSystemService(Context.USER_SERVICE) as? android.os.UserManager
+        val profilesCount = try {
+            userManager?.userProfiles?.size ?: 1
+        } catch (_: Exception) {
+            1
+        }
+        val canWriteSecure = com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator.canWriteSecureSettings(appContext)
+        val isDnsBlockedUnaffiliated = com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge.isPrivateDnsBlockedByUnaffiliatedUsers
         sb.appendLine("| **Active Watchdog Host** | `${watchdogHost} (Running=${watchdogRunning}, Bound=${isDeviceAdminBound})` |")
+        sb.appendLine("| **User Profiles Count** | `$profilesCount (${if (profilesCount > 1) "Multi-Profile / Clone Detected" else "Single Profile"})` |")
+        sb.appendLine("| **WRITE_SECURE_SETTINGS** | `${if (canWriteSecure) "[GRANTED]" else "[DENIED]"}` |")
+        sb.appendLine("| **DNS Blocked by Unaffiliated Users** | `${if (isDnsBlockedUnaffiliated) "[YES]" else "[NO]"}` |")
         sb.appendLine("| **Total Logged Events in Black Box** | `${if (totalEventsCount >= 0) totalEventsCount else "READ_ERROR"}` |")
         sb.appendLine()
 

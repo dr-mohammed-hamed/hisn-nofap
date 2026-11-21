@@ -421,6 +421,8 @@ class WebFilterSettingsActivity : AppCompatActivity() {
             isFullSystemFiltering = isChecked
             if (isChecked && isWhitelistOnlyMode) {
                 showWhitelistFullSystemWarningDialog()
+            } else if (isChecked && com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge.isPrivateDnsBlockedByUnaffiliatedUsers(this)) {
+                showUnaffiliatedUsersFilterWarningDialog()
             }
             updateSaveButtonState()
         }
@@ -433,6 +435,9 @@ class WebFilterSettingsActivity : AppCompatActivity() {
                 }
             }
             isAdBlocking = isChecked
+            if (isChecked && !isFullSystemFiltering && com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge.isPrivateDnsBlockedByUnaffiliatedUsers(this)) {
+                showUnaffiliatedUsersFilterWarningDialog()
+            }
             updateSaveButtonState()
         }
 
@@ -813,6 +818,12 @@ class WebFilterSettingsActivity : AppCompatActivity() {
     }
 
     private fun ensureVpnConsentOrPrompt(source: VpnConsentSource, toggle: MaterialSwitch): Boolean {
+        if (com.drmohammed.antiporn.telemetry.SafeDpmGateway.isDeviceOwner(this)) {
+            // Device Owner authorizes Always-On VPN silently via setAlwaysOnVpnPackage()
+            // during policy enforcement, bypassing DISALLOW_CONFIG_VPN which would block
+            // the interactive VpnService.prepare() consent dialog.
+            return true
+        }
         if (pendingVpnConsentSource != null) {
             isProgrammaticSwitchChange = true
             toggle.isChecked = false
@@ -848,6 +859,18 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         val dialog = MaterialAlertDialogBuilder(this)
             .setTitle(R.string.dialog_whitelist_full_system_warning_title)
             .setMessage(R.string.dialog_whitelist_full_system_warning_msg)
+            .setPositiveButton(android.R.string.ok, null)
+            .create()
+        dialog.setOnDismissListener { if (activeDialog === dialog) activeDialog = null }
+        activeDialog = dialog
+        dialog.show()
+    }
+
+    private fun showUnaffiliatedUsersFilterWarningDialog() {
+        activeDialog?.dismiss()
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.dialog_web_filter_unaffiliated_warning_title)
+            .setMessage(R.string.dialog_web_filter_unaffiliated_warning_msg)
             .setPositiveButton(android.R.string.ok, null)
             .create()
         dialog.setOnDismissListener { if (activeDialog === dialog) activeDialog = null }

@@ -145,6 +145,11 @@
 
     <string name="shield_dns_unsupported">ميزة Private DNS تتطلب أندرويد 10 (API 29) أو أحدث</string>
     <string name="shield_dns_local_filter_active">فلترة DNS المحلية نشطة (Private DNS تلقائي مع تشفير DoT)</string>
+    <string name="shield_dns_local_filter_unaffiliated_notice">درع فلترة المواقع وحماية DNS نشط عبر (%1$s). ملاحظة: لتخصيص خادم DNS أو فلاتر إضافية، يتطلب نظام أندرويد إيقاف التطبيقات المزدوجة أو المجلد الآمن مؤقتاً.</string>
+    <string name="shield_dns_unaffiliated_users_notice">درع DNS نشط ومحمي عبر (%1$s). لتغيير الخادم النظامي إلى (%2$s)، يرجى إيقاف المرسل المزدوج أو المجلد الآمن مؤقتاً لتوافق نظام أندرويد.</string>
+    <string name="shield_dns_unaffiliated_users_error">تعذر تفعيل درع DNS النظامي لوجود ملفات شخصية ثانوية (مثل المرسل المزدوج أو المجلد الآمن). يرجى إزالتها لتفعيل الحماية.</string>
+    <string name="dialog_web_filter_unaffiliated_warning_title">تنبيه بشأن التطبيقات المزدوجة والمجلد الآمن</string>
+    <string name="dialog_web_filter_unaffiliated_warning_msg">تنبيه: ميزة حجب الإعلانات والفلاتر المتقدمة تتطلب نظام أندرويد موحداً بدون تطبيقات مزدوجة أو مجلد آمن. الحماية الأساسية ضد المواقع غير اللائقة تعمل بكفاءة عبر الخادم العائلي المشفر.</string>
 
     <string name="default_dns_text">تلقائي</string>
 
@@ -245,8 +250,8 @@
     <string name="curfew_vpn_dns_filter_session">فلترة حماية شبكة DNS المحلية</string>
 
     <!-- Unified Protection & Curfew Notification Strings -->
-    <string name="protection_vpn_channel_name">عزل وحماية شبكة الحظر</string>
-    <string name="protection_vpn_channel_desc">إشعارات أوضاع الحظر الليلي، وضع القيلولة، وعزل الإنترنت</string>
+    <string name="protection_vpn_channel_name">درع الحماية وفلترة الشبكة (حِصْن)</string>
+    <string name="protection_vpn_channel_desc">إشعارات فلترة DNS المحلية، أوضاع الحظر الليلي، وعزل الإنترنت</string>
     <string name="protection_events_channel_name">تنبيهات وأحداث الحماية</string>
     <string name="protection_events_channel_desc">تنبيهات استجابات المشرف وانتهاء فترات الحظر</string>
     <string name="critical_alerts_channel_name">تنبيهات الأمان الحرجة</string>

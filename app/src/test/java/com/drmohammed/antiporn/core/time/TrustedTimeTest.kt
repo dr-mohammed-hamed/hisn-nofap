@@ -1,5 +1,6 @@
 package com.drmohammed.antiporn.core.time
 
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -19,6 +20,11 @@ class TrustedTimeTest {
         fakeWall = 1_700_000_000_000L
         TrustedTimeProvider.elapsedRealtimeProvider = { fakeElapsed }
         TrustedTimeProvider.wallTimeProvider = { fakeWall }
+        TrustedTimeProvider.resetForTesting()
+    }
+
+    @After
+    fun tearDown() {
         TrustedTimeProvider.resetForTesting()
     }
 
@@ -404,6 +410,8 @@ class TrustedTimeTest {
         val initialSyncTime = 1_720_000_000_000L
         fakeElapsed = 50_000L
         fakeWall = initialSyncTime
+        TrustedTimeProvider.elapsedRealtimeProvider = { fakeElapsed }
+        TrustedTimeProvider.wallTimeProvider = { fakeWall }
 
         TrustedTimeProvider.resetForTesting()
         TrustedTimeProvider.sntpRequester = {

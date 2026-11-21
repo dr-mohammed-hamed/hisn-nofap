@@ -732,10 +732,17 @@ object ProtectionWatchdogRuntime {
 
                 if (isVpnActive) {
                     val isAppropriate = mode == "opportunistic" || mode == "off" || mode == null
-                    if (!isAppropriate) {
+                    val isUnaffiliatedProtectedFallback = CurfewVpnDnsBridge.isPrivateDnsBlockedByUnaffiliatedUsers(appContext) &&
+                        mode == "hostname" &&
+                        !specifier.isNullOrBlank() &&
+                        com.drmohammed.antiporn.core.network.DnsFilteringValidator.isKnownFamilyPreset(specifier)
+
+                    if (!isAppropriate && !isUnaffiliatedProtectedFallback) {
                         val reason = "Settings.Global DNS mismatch: VPN required, expected mode='opportunistic' but found mode='$mode', specifier='$specifier'"
                         Timber.tag(TAG).w(reason)
                         desyncReasons.add("[DNS_GLOBAL: $reason]")
+                    } else if (isUnaffiliatedProtectedFallback) {
+                        Timber.tag(TAG).i("Local VPN active with verified fallback DoT (%s) due to unaffiliated users. Suppressing desync.", specifier)
                     }
                     if (!CurfewBlackholeVpnService.isTunnelHealthy(requiredMode)) {
                         Timber.tag(TAG).i("VPN service or DNS worker not healthy while required. Enqueuing silent sync.")
@@ -745,11 +752,18 @@ object ProtectionWatchdogRuntime {
                     val expectedHost = DnsShield.getEffectiveDnsHost(appContext)
                     val isHostMatching = specifier?.equals(expectedHost, ignoreCase = true) == true
                     if (mode != "hostname" || !isHostMatching) {
+                        val isUnaffiliatedProtectedFallback = CurfewVpnDnsBridge.isPrivateDnsBlockedByUnaffiliatedUsers(appContext) &&
+                            mode == "hostname" &&
+                            !specifier.isNullOrBlank() &&
+                            com.drmohammed.antiporn.core.network.DnsFilteringValidator.isKnownFamilyPreset(specifier)
+
                         val isPendingCurfewRelease = (mode == "opportunistic" || mode.isNullOrEmpty()) &&
                             specifier.isNullOrEmpty() &&
                             CurfewConfig.isDnsRestorePending(appContext)
 
-                        if (isPendingCurfewRelease) {
+                        if (isUnaffiliatedProtectedFallback) {
+                            Timber.tag(TAG).i("Settings.Global DNS running verified fallback (%s) due to unaffiliated users. Skipping desync.", specifier)
+                        } else if (isPendingCurfewRelease) {
                             val reason = "Settings.Global DNS pending post-curfew restoration (mode=$mode, expected=$expectedHost)"
                             Timber.tag(TAG).i(reason)
                             desyncReasons.add("[DNS_PENDING_RESTORE: $reason]")

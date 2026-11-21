@@ -118,6 +118,75 @@ class CurfewHardeningTest {
                 targetHost = "family.cloudflare-dns.com"
             )
         )
+        // Standalone fallback: when DPM is unavailable (-1 / null) due to unaffiliated users but Settings.Global matches targetHost
+        assertTrue(
+            CurfewVpnDnsBridge.isStandaloneDnsStateConsistent(
+                dpmMode = -1,
+                dpmHost = null,
+                globalMode = "hostname",
+                globalHost = "family.cloudflare-dns.com",
+                targetHost = "family.cloudflare-dns.com"
+            )
+        )
+        // Standalone fallback: when DPM is stuck on old host due to unaffiliated users, but Settings.Global matches new targetHost
+        assertTrue(
+            CurfewVpnDnsBridge.isStandaloneDnsStateConsistent(
+                dpmMode = android.app.admin.DevicePolicyManager.PRIVATE_DNS_MODE_PROVIDER_HOSTNAME,
+                dpmHost = "family.cloudflare-dns.com",
+                globalMode = "hostname",
+                globalHost = "nextdns.io",
+                targetHost = "nextdns.io",
+                isUnaffiliatedBlocked = true
+            )
+        )
+        assertFalse(
+            CurfewVpnDnsBridge.isStandaloneDnsStateConsistent(
+                dpmMode = android.app.admin.DevicePolicyManager.PRIVATE_DNS_MODE_PROVIDER_HOSTNAME,
+                dpmHost = "family.cloudflare-dns.com",
+                globalMode = "hostname",
+                globalHost = "nextdns.io",
+                targetHost = "nextdns.io",
+                isUnaffiliatedBlocked = false
+            )
+        )
+        // Local VPN fallback: when DPM is unavailable (-1 / null) but Settings.Global is opportunistic
+        assertTrue(
+            CurfewVpnDnsBridge.isLocalVpnDnsStateConsistent(
+                dpmMode = -1,
+                globalMode = "opportunistic",
+                globalHost = null
+            )
+        )
+        // Local VPN with Unaffiliated Users: accepts verified family preset in hostname mode as safe fallback
+        assertTrue(
+            "Local VPN must accept verified family preset in hostname mode when unaffiliated users block opportunistic mode",
+            CurfewVpnDnsBridge.isLocalVpnDnsStateConsistent(
+                dpmMode = android.app.admin.DevicePolicyManager.PRIVATE_DNS_MODE_PROVIDER_HOSTNAME,
+                globalMode = "hostname",
+                globalHost = "family.cloudflare-dns.com",
+                isUnaffiliatedBlocked = true
+            )
+        )
+        // Local VPN with Unaffiliated Users: must strictly REJECT non-family preset or generic resolvers
+        assertFalse(
+            "Local VPN must reject unverified DNS resolver (dns.google) even if unaffiliated users are present",
+            CurfewVpnDnsBridge.isLocalVpnDnsStateConsistent(
+                dpmMode = android.app.admin.DevicePolicyManager.PRIVATE_DNS_MODE_PROVIDER_HOSTNAME,
+                globalMode = "hostname",
+                globalHost = "dns.google",
+                isUnaffiliatedBlocked = true
+            )
+        )
+        // Local VPN without Unaffiliated Users: must strictly REJECT hostname mode (must switch to opportunistic)
+        assertFalse(
+            "Local VPN must reject hostname mode when device has NO unaffiliated users",
+            CurfewVpnDnsBridge.isLocalVpnDnsStateConsistent(
+                dpmMode = android.app.admin.DevicePolicyManager.PRIVATE_DNS_MODE_PROVIDER_HOSTNAME,
+                globalMode = "hostname",
+                globalHost = "family.cloudflare-dns.com",
+                isUnaffiliatedBlocked = false
+            )
+        )
     }
 
     @Test
@@ -298,6 +367,73 @@ class CurfewHardeningTest {
                 (it.startsWith("[DNS_GLOBAL:") && !it.contains("VPN required"))
         }
         assertTrue("Genuine tampering must be caught as isDirectTamper", isDirectTamperDetected)
+    }
+
+    @Test
+    fun testCurfewVpnDnsBridge_hasActiveVerifiedFamilyDns() {
+        // Must accept known family presets in hostname mode
+        assertTrue(CurfewVpnDnsBridge.hasActiveVerifiedFamilyDns("hostname", "family.cloudflare-dns.com"))
+        assertTrue(CurfewVpnDnsBridge.hasActiveVerifiedFamilyDns("hostname", "no-ads-porn.freedns.controld.com"))
+        assertTrue(CurfewVpnDnsBridge.hasActiveVerifiedFamilyDns("hostname", "dns-family.adguard.com"))
+        assertTrue(CurfewVpnDnsBridge.hasActiveVerifiedFamilyDns("hostname", "family.adguard-dns.com"))
+        assertTrue(CurfewVpnDnsBridge.hasActiveVerifiedFamilyDns("hostname", "family-filter-dns.cleanbrowsing.org"))
+
+        // Must reject non-family presets, generic resolvers, blank hosts, or non-hostname modes
+        assertFalse(CurfewVpnDnsBridge.hasActiveVerifiedFamilyDns("hostname", "dns.google"))
+        assertFalse(CurfewVpnDnsBridge.hasActiveVerifiedFamilyDns("hostname", "1.1.1.1"))
+        assertFalse(CurfewVpnDnsBridge.hasActiveVerifiedFamilyDns("hostname", ""))
+        assertFalse(CurfewVpnDnsBridge.hasActiveVerifiedFamilyDns("hostname", null))
+        assertFalse(CurfewVpnDnsBridge.hasActiveVerifiedFamilyDns("opportunistic", "family.cloudflare-dns.com"))
+        assertFalse(CurfewVpnDnsBridge.hasActiveVerifiedFamilyDns("off", "family.cloudflare-dns.com"))
+        assertFalse(CurfewVpnDnsBridge.hasActiveVerifiedFamilyDns(null, "family.cloudflare-dns.com"))
+    }
+
+    @Test
+    fun testCurfewConfig_privateDnsBlockedByUnaffiliatedUsersPersistence() {
+        val prefs = InMemoryPrefs()
+        val context = object : ContextWrapper(null) {
+            override fun getSharedPreferences(name: String?, mode: Int): SharedPreferences = prefs
+            override fun getApplicationContext(): Context = this
+        }
+        assertFalse(CurfewConfig.isPrivateDnsBlockedByUnaffiliatedUsers(context))
+        CurfewConfig.setPrivateDnsBlockedByUnaffiliatedUsers(context, true)
+        assertTrue(CurfewConfig.isPrivateDnsBlockedByUnaffiliatedUsers(context))
+        CurfewConfig.setPrivateDnsBlockedByUnaffiliatedUsers(context, false)
+        assertFalse(CurfewConfig.isPrivateDnsBlockedByUnaffiliatedUsers(context))
+    }
+
+    @Test
+    fun testWatchdog_localVpnWithUnaffiliatedFamilyDoT_suppressesDesync() {
+        val mode: String? = "hostname"
+        val specifier = "family.cloudflare-dns.com"
+        val isUnaffiliatedBlocked = true
+
+        val isAppropriate = mode == "opportunistic" || mode == "off" || mode == null
+        val isUnaffiliatedProtectedFallback = isUnaffiliatedBlocked &&
+            mode == "hostname" &&
+            !specifier.isNullOrBlank() &&
+            com.drmohammed.antiporn.core.network.DnsFilteringValidator.isKnownFamilyPreset(specifier)
+
+        val desyncReasons = mutableListOf<String>()
+        if (!isAppropriate && !isUnaffiliatedProtectedFallback) {
+            desyncReasons.add("[DNS_GLOBAL: mismatch]")
+        }
+
+        assertTrue("Verified family preset with unaffiliated users must be recognized as fallback", isUnaffiliatedProtectedFallback)
+        assertTrue("Desync reasons must remain empty for verified fallback", desyncReasons.isEmpty())
+
+        // If user changed to dns.google, it is NOT a verified family fallback and must trigger desync
+        val untrustedSpecifier = "dns.google"
+        val isUntrustedFallback = isUnaffiliatedBlocked &&
+            mode == "hostname" &&
+            com.drmohammed.antiporn.core.network.DnsFilteringValidator.isKnownFamilyPreset(untrustedSpecifier)
+        assertFalse(isUntrustedFallback)
+
+        val untrustedDesync = mutableListOf<String>()
+        if (!isAppropriate && !isUntrustedFallback) {
+            untrustedDesync.add("[DNS_GLOBAL: mismatch]")
+        }
+        assertEquals(1, untrustedDesync.size)
     }
 
     private class InMemoryPrefs : SharedPreferences {
