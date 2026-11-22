@@ -810,7 +810,8 @@ class CurfewBlackholeVpnService : VpnService() {
                 val policy = PolicyRepository.getInstance(context).getCurrentPolicy()
                 (policy.isFullSystemFilteringEnabled && policy.browserFilterMode != DevicePolicyBundle.BROWSER_FILTER_OFF) ||
                     policy.isAdBlockingEnabled ||
-                    DnsResilienceManager.isLocalVpnFallbackActive()
+                    DnsResilienceManager.isLocalVpnFallbackActive() ||
+                    CurfewVpnDnsBridge.isDoTLeakingAndUnaffiliatedBlocked(context)
             } catch (e: Exception) {
                 Timber.tag(TAG).w(e, "Failed reading policy for VPN mode evaluation; preserving safe fallback=$fallbackOnFailure")
                 return if (fallbackOnFailure != VpnMode.IDLE) fallbackOnFailure else VpnMode.IDLE

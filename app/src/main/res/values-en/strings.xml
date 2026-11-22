@@ -554,6 +554,17 @@
     <string name="shield_dns_local_filter_unaffiliated_notice">Web &amp; DNS filtering active via (%1$s). Note: Customizing DNS servers or advanced filters requires temporarily disabling Dual apps or Secure Folder per Android policy.</string>
     <string name="shield_dns_unaffiliated_users_notice">DNS Shield is actively protecting the device via (%1$s). To change system DNS to (%2$s), temporarily disable Dual Messenger or Secure Folder per Android policy.</string>
     <string name="shield_dns_unaffiliated_users_error">Cannot enforce system Private DNS due to secondary profiles (such as Dual Messenger or Secure Folder). Please remove them to enable protection.</string>
+    <string name="shield_dns_unaffiliated_users_error_with_app">Cannot enforce DoT shield due to cloned app (%1$s). Please remove it to enable direct protection.</string>
+    <string name="shield_dns_emergency_vpn_active_notice">Internal protection shield (VPN) is active to block adult sites due to cloned app (%1$s). Tap for resolution options to restore native DoT.</string>
+    <string name="shield_dns_cloned_app_default">Cloned App</string>
+    <string name="dialog_cloned_app_resolution_title">Resolve Dual Apps Conflict with DoT Shield</string>
+    <string name="dialog_cloned_app_resolution_msg">A cloned app was detected on your device: (%1$s).\n\nAndroid policy restricts enforcing encrypted DoT DNS when cloned profiles exist. Protection is currently maintained via the internal emergency shield (VPN).\n\nChoose your preferred resolution:</string>
+    <string name="btn_open_cloned_app_settings">Manual Removal in Settings</string>
+    <string name="btn_remove_cloned_profile_dpm">Automatic Removal (Device Owner)</string>
+    <string name="dialog_confirm_remove_clone_title">Confirm Cloned App Removal</string>
+    <string name="dialog_confirm_remove_clone_msg">Warning: The cloned profile and (%1$s) will be permanently deleted along with all its data and chat history, and the primary DoT shield will be activated immediately.\n\nAre you sure you want to proceed?</string>
+    <string name="msg_cloned_app_removed_success">Cloned app removed successfully. Enforcing native DoT shield.</string>
+    <string name="msg_cloned_app_remove_failed">Failed to automatically remove cloned app. Please disable it manually in phone settings.</string>
     <string name="dialog_web_filter_unaffiliated_warning_title">Dual Apps &amp; Secure Folder Notice</string>
     <string name="dialog_web_filter_unaffiliated_warning_msg">Notice: Advanced ad-blocking and custom filters require a single-profile Android system without Dual Apps or Secure Folder. Core web protection remains active via encrypted family DNS.</string>
     <string name="default_dns_text">Default Family DNS</string>

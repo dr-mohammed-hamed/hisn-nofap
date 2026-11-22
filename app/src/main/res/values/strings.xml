@@ -148,6 +148,17 @@
     <string name="shield_dns_local_filter_unaffiliated_notice">درع فلترة المواقع وحماية DNS نشط عبر (%1$s). ملاحظة: لتخصيص خادم DNS أو فلاتر إضافية، يتطلب نظام أندرويد إيقاف التطبيقات المزدوجة أو المجلد الآمن مؤقتاً.</string>
     <string name="shield_dns_unaffiliated_users_notice">درع DNS نشط ومحمي عبر (%1$s). لتغيير الخادم النظامي إلى (%2$s)، يرجى إيقاف المرسل المزدوج أو المجلد الآمن مؤقتاً لتوافق نظام أندرويد.</string>
     <string name="shield_dns_unaffiliated_users_error">تعذر تفعيل درع DNS النظامي لوجود ملفات شخصية ثانوية (مثل المرسل المزدوج أو المجلد الآمن). يرجى إزالتها لتفعيل الحماية.</string>
+    <string name="shield_dns_unaffiliated_users_error_with_app">تعذر تفعيل درع DoT لوجود تطبيق منسوخ (%1$s). يرجى إزالته لتفعيل الحماية المباشرة.</string>
+    <string name="shield_dns_emergency_vpn_active_notice">درع الحماية الداخلي (VPN) مفعل لحجب المواقع لوجود تطبيق منسوخ (%1$s). انقر لخيارات الحل وإعادة DoT.</string>
+    <string name="shield_dns_cloned_app_default">تطبيق مستنسخ</string>
+    <string name="dialog_cloned_app_resolution_title">حل تعارض التطبيقات المزدوجة مع درع DoT</string>
+    <string name="dialog_cloned_app_resolution_msg">تم اكتشاف تطبيق منسوخ على جهازك: (%1$s).\n\nنظام أندرويد يمنع تفعيل خادم DoT المشفر بوجود بروفايلات مستنسخة، وتعمل الحماية حالياً عبر درع الطوارئ الداخلي (VPN).\n\nاختر طريقة الحل المفضلة:</string>
+    <string name="btn_open_cloned_app_settings">إلغاء يدوي من إعدادات الهاتف</string>
+    <string name="btn_remove_cloned_profile_dpm">إزالة فورية تلقائية (Device Owner)</string>
+    <string name="dialog_confirm_remove_clone_title">تأكيد إزالة التطبيق المنسوخ</string>
+    <string name="dialog_confirm_remove_clone_msg">تحذير: سيتم حذف البروفايل المستنسخ وتطبيق (%1$s) نهائياً مع كافة بياناته ومحادثاته، وسيتم تفعيل درع DoT الأصلي فوراً.\n\nهل أنت متأكد من المتابعة؟</string>
+    <string name="msg_cloned_app_removed_success">تمت إزالة التطبيق المنسوخ بنجاح، وجارٍ تفعيل درع DoT الأصلي.</string>
+    <string name="msg_cloned_app_remove_failed">تعذر إزالة التطبيق المنسوخ تلقائياً. يرجى إيقافه يدوياً من إعدادات الهاتف.</string>
     <string name="dialog_web_filter_unaffiliated_warning_title">تنبيه بشأن التطبيقات المزدوجة والمجلد الآمن</string>
     <string name="dialog_web_filter_unaffiliated_warning_msg">تنبيه: ميزة حجب الإعلانات والفلاتر المتقدمة تتطلب نظام أندرويد موحداً بدون تطبيقات مزدوجة أو مجلد آمن. الحماية الأساسية ضد المواقع غير اللائقة تعمل بكفاءة عبر الخادم العائلي المشفر.</string>
 

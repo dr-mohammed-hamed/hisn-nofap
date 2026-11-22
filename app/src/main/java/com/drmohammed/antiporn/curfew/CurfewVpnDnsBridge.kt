@@ -66,6 +66,38 @@ internal object CurfewVpnDnsBridge {
             com.drmohammed.antiporn.core.network.DnsFilteringValidator.isKnownFamilyPreset(globalHost)
     }
 
+    fun hasActiveVerifiedFamilyDns(context: Context): Boolean {
+        val globalMode = readGlobalSetting(context, "private_dns_mode")
+        val globalHost = readGlobalSetting(context, "private_dns_specifier")
+        return hasActiveVerifiedFamilyDns(globalMode, globalHost)
+    }
+
+    /**
+     * Evaluates whether system DoT is leaking pornography while the app is blocked
+     * from enforcing DoT due to unaffiliated user profiles (e.g. cloned apps).
+     *
+     * Invariant:
+     * - If active verified family DoT is already set on the system: returns false (DoT protects natively).
+     * - If the app has WRITE_SECURE_SETTINGS: returns false (app can enforce DoT via Settings.Global).
+     * - If unaffiliated profiles block DPM AND system DoT is unverified/leaking: returns true (Emergency VPN required).
+     */
+    fun isDoTLeakingAndUnaffiliatedBlocked(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
+        val isBlocked = isPrivateDnsBlockedByUnaffiliatedUsers(context)
+        if (!isBlocked) return false
+
+        if (hasActiveVerifiedFamilyDns(context)) {
+            return false
+        }
+
+        val canWriteSecure = com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator.canWriteSecureSettings(context)
+        if (canWriteSecure) {
+            return false
+        }
+
+        return true
+    }
+
     @VisibleForTesting
     internal fun resetFastHealCircuitBreakerForTest() {
         directGlobalWriteDenied = false
@@ -82,6 +114,12 @@ internal object CurfewVpnDnsBridge {
      * Prevents SettingsProvider SecurityException when unaffiliated users block standard DPM API.
      */
     internal fun writeGlobalSettingWithAtomicUnlock(context: Context, key: String, value: String): Boolean {
+        val canWriteSecure = com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator.canWriteSecureSettings(context)
+        if (!canWriteSecure) {
+            directGlobalWriteDenied = true
+            safeLogD("writeGlobalSettingWithAtomicUnlock: skipped, WRITE_SECURE_SETTINGS is denied")
+            return false
+        }
         val isDnsKey = key == "private_dns_mode" || key == "private_dns_specifier"
         if (!isDnsKey || !SafeDpmGateway.isDeviceOwner(context) || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             return Settings.Global.putString(context.contentResolver, key, value)
@@ -158,19 +196,26 @@ internal object CurfewVpnDnsBridge {
         }
 
     fun isPrivateDnsBlockedByUnaffiliatedUsers(context: Context): Boolean {
+        val userManager = context.getSystemService(Context.USER_SERVICE) as? UserManager
+        val profilesCount = try {
+            userManager?.userProfiles?.size ?: 1
+        } catch (e: Exception) {
+            safeLogW("Failed querying userProfiles count in isPrivateDnsBlockedByUnaffiliatedUsers", e)
+            1
+        }
+        if (profilesCount <= 1) {
+            if (inMemoryPrivateDnsBlockedByUnaffiliatedUsers == true) {
+                updatePrivateDnsBlockedByUnaffiliatedUsers(context, false)
+            }
+            return false
+        }
         inMemoryPrivateDnsBlockedByUnaffiliatedUsers?.let { return it }
         val persisted = CurfewConfig.isPrivateDnsBlockedByUnaffiliatedUsers(context)
         if (persisted) {
             inMemoryPrivateDnsBlockedByUnaffiliatedUsers = true
             return true
         }
-        val userManager = context.getSystemService(Context.USER_SERVICE) as? UserManager
-        val hasMultiUsers = try {
-            (userManager?.userProfiles?.size ?: 1) > 1
-        } catch (_: Exception) {
-            false
-        }
-        return hasMultiUsers
+        return true
     }
 
     internal fun updatePrivateDnsBlockedByUnaffiliatedUsers(context: Context, blocked: Boolean) {
@@ -718,6 +763,10 @@ internal object CurfewVpnDnsBridge {
                 val message = if (isUnaffiliatedFallback) {
                     val currentHost = globalSpecifier ?: DnsShield.DEFAULT_DNS_HOST
                     context.getString(R.string.shield_dns_local_filter_unaffiliated_notice, currentHost)
+                } else if (unaffiliatedBlocked) {
+                    val cloneSummary = com.drmohammed.antiporn.core.engine.SecondaryProfileDetector.formatClonedAppsSummary(context)
+                        ?: context.getString(R.string.shield_dns_cloned_app_default)
+                    context.getString(R.string.shield_dns_emergency_vpn_active_notice, cloneSummary)
                 } else {
                     context.getString(R.string.shield_dns_local_filter_active)
                 }
@@ -754,7 +803,9 @@ internal object CurfewVpnDnsBridge {
                 val explanation = context.getString(R.string.shield_dns_unaffiliated_users_notice, currentActiveHost, targetHost)
                 ShieldStatus.Active(explanation)
             } else {
-                ShieldStatus.NeedsEnforcement(context.getString(R.string.shield_dns_unaffiliated_users_error))
+                val cloneSummary = com.drmohammed.antiporn.core.engine.SecondaryProfileDetector.formatClonedAppsSummary(context)
+                    ?: context.getString(R.string.shield_dns_cloned_app_default)
+                ShieldStatus.NeedsEnforcement(context.getString(R.string.shield_dns_unaffiliated_users_error_with_app, cloneSummary))
             }
         } else {
             val currentHostDisplay = globalSpecifier?.takeIf { it.isNotBlank() }
@@ -788,27 +839,33 @@ internal object CurfewVpnDnsBridge {
             markInternalMutation = { ProtectionTransitionGuard.markInternalDnsMutation() },
             writeGlobal = { key, value -> writeGlobalSettingWithAtomicUnlock(context, key, value) },
             setDpmPrivateDns = { host ->
-                val dpmRes = SafeDpmGateway.setGlobalPrivateDnsBlocking(
-                    context = context,
-                    host = host,
-                    tag = BlackBoxRecorder.TAG_SHIELD
-                )
-                if (isUnaffiliatedUsersException(dpmRes)) {
-                    updatePrivateDnsBlockedByUnaffiliatedUsers(context, true)
-                    BlackBoxRecorder.recordShield(
+                val unaffiliatedAlreadyBlocked = isPrivateDnsBlockedByUnaffiliatedUsers(context)
+                if (unaffiliatedAlreadyBlocked) {
+                    safeLogD("Skipping redundant DPM call in applyStandaloneDot: unaffiliated users present")
+                    false to COMPAT_PRIVATE_DNS_SET_ERROR_FAILURE_SETTING
+                } else {
+                    val dpmRes = SafeDpmGateway.setGlobalPrivateDnsBlocking(
                         context = context,
-                        shieldId = DnsShield.id,
-                        isSuccess = false,
-                        details = "setGlobalPrivateDnsBlocking blocked: unaffiliated users host=$host"
+                        host = host,
+                        tag = BlackBoxRecorder.TAG_SHIELD
                     )
-                } else if (dpmRes.isSuccess) {
-                    updatePrivateDnsBlockedByUnaffiliatedUsers(context, false)
+                    if (isUnaffiliatedUsersException(dpmRes)) {
+                        updatePrivateDnsBlockedByUnaffiliatedUsers(context, true)
+                        BlackBoxRecorder.recordShield(
+                            context = context,
+                            shieldId = DnsShield.id,
+                            isSuccess = false,
+                            details = "setGlobalPrivateDnsBlocking blocked: unaffiliated users host=$host"
+                        )
+                    } else if (dpmRes.isSuccess) {
+                        updatePrivateDnsBlockedByUnaffiliatedUsers(context, false)
+                    }
+                    val resultCode = when (dpmRes) {
+                        is DpmExecutionResult.Success -> dpmRes.data
+                        is DpmExecutionResult.Failure -> COMPAT_PRIVATE_DNS_SET_ERROR_FAILURE_SETTING
+                    }
+                    dpmRes.isSuccess to resultCode
                 }
-                val resultCode = when (dpmRes) {
-                    is DpmExecutionResult.Success -> dpmRes.data
-                    is DpmExecutionResult.Failure -> COMPAT_PRIVATE_DNS_SET_ERROR_FAILURE_SETTING
-                }
-                dpmRes.isSuccess to resultCode
             },
             clearDnsRestorePending = {
                 if (CurfewConfig.isDnsRestorePending(context)) {
@@ -817,7 +874,7 @@ internal object CurfewVpnDnsBridge {
             }
         )
 
-        if (dnsSetResult != COMPAT_PRIVATE_DNS_SET_NO_ERROR) {
+        if (dnsSetResult != COMPAT_PRIVATE_DNS_SET_NO_ERROR && !isPrivateDnsBlockedByUnaffiliatedUsers(context)) {
             BlackBoxRecorder.recordShield(
                 context = context,
                 shieldId = DnsShield.id,
