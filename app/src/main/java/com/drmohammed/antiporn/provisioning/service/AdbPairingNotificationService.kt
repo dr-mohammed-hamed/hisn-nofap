@@ -24,7 +24,6 @@ import com.drmohammed.antiporn.provisioning.engine.AdbMdnsDiscovery
 import com.drmohammed.antiporn.provisioning.engine.DeviceOwnerPromoter
 import com.drmohammed.antiporn.provisioning.engine.PromotionResult
 import com.drmohammed.antiporn.provisioning.receiver.PairingCodeReceiver
-import com.drmohammed.antiporn.provisioning.ui.FloatingPairingOverlay
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -48,23 +47,12 @@ class AdbPairingNotificationService : Service() {
     @Volatile private var capturedConnectPort = 0
     private var adbWifiObserver: ContentObserver? = null
     private var lastPromptedPairingPort = 0
-    private var floatingOverlay: FloatingPairingOverlay? = null
     private var isPromoting = false
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels()
         registerAdbWifiObserver()
-
-        floatingOverlay = FloatingPairingOverlay(
-            context = this,
-            onSubmitCode = { code ->
-                handlePairingCodeSubmission(code, capturedPairingPort)
-            },
-            onDismissed = {
-                Timber.tag(TAG).d("Floating keypad dismissed by user")
-            }
-        )
 
         try {
             val initialNotification = buildGuideNotification(isWirelessAdbEnabled())
@@ -88,13 +76,6 @@ class AdbPairingNotificationService : Service() {
                 stopForegroundAndSelf()
                 return START_NOT_STICKY
             }
-            ACTION_SHOW_FLOATING_OVERLAY -> {
-                val port = intent.getIntExtra(EXTRA_PAIRING_PORT, 0).takeIf { it > 0 } ?: capturedPairingPort
-                if (port > 0) {
-                    floatingOverlay?.show(port)
-                }
-                return START_STICKY
-            }
             ACTION_SUBMIT_PAIRING_CODE -> {
                 val remoteInput = RemoteInput.getResultsFromIntent(intent)
                 val rawCode = remoteInput?.getCharSequence(PairingCodeReceiver.EXTRA_PAIRING_CODE)?.toString()
@@ -112,12 +93,8 @@ class AdbPairingNotificationService : Service() {
                         details = "rawCodeNull=${rawCode == null}, port=$port"
                     )
                     // CRITICAL: Do NOT cancel notification 9902!
-                    if (floatingOverlay?.canShow() == true && port > 0) {
-                        floatingOverlay?.show(port)
-                    } else {
-                        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-                        notificationManager?.notify(PAIRING_PROMPT_NOTIFICATION_ID, buildPairingPromptNotification())
-                    }
+                    val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                    notificationManager?.notify(PAIRING_PROMPT_NOTIFICATION_ID, buildPairingPromptNotification())
                 }
                 return START_STICKY
             }
@@ -133,7 +110,6 @@ class AdbPairingNotificationService : Service() {
             return
         }
         isPromoting = true
-        floatingOverlay?.showSubmittingState()
 
         val inProgressNotification = NotificationCompat.Builder(this, CHANNEL_ID_HEADS_UP)
             .setSmallIcon(R.drawable.ic_shield_device_owner)
@@ -156,7 +132,6 @@ class AdbPairingNotificationService : Service() {
                 when (result) {
                     is PromotionResult.Success -> {
                         Timber.tag(TAG).i("Promotion succeeded via service submission")
-                        floatingOverlay?.dismiss()
 
                         val mainIntent = Intent(this@AdbPairingNotificationService, MainActivity::class.java).apply {
                             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -204,7 +179,6 @@ class AdbPairingNotificationService : Service() {
                     is PromotionResult.Failure -> {
                         isPromoting = false
                         Timber.tag(TAG).e("Promotion failed: ${result.message}")
-                        floatingOverlay?.showError(result.message)
 
                         val failIntent = Intent(PairingCodeReceiver.ACTION_PROVISIONING_RESULT).apply {
                             setPackage(packageName)
@@ -228,8 +202,6 @@ class AdbPairingNotificationService : Service() {
                 if (t is CancellationException) throw t
                 isPromoting = false
                 Timber.tag(TAG).e(t, "Exception during handlePairingCodeSubmission")
-                val errorMsg = "${t.javaClass.simpleName}: ${t.message ?: "Unknown error"}"
-                floatingOverlay?.showError(errorMsg)
             }
         }
     }
@@ -281,7 +253,6 @@ class AdbPairingNotificationService : Service() {
                     capturedPairingPort = 0
                     Companion.capturedPairingPort = 0
                     lastPromptedPairingPort = 0
-                    floatingOverlay?.dismiss()
                     val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
                     notificationManager?.cancel(PAIRING_PROMPT_NOTIFICATION_ID)
                 }
@@ -303,7 +274,7 @@ class AdbPairingNotificationService : Service() {
         }
         sendBroadcast(broadcastIntent)
 
-        // Surface Heads-Up Prompt and Floating Overlay when a new active pairingPort is captured
+        // Surface Heads-Up Prompt when a new active pairingPort is captured
         if (capturedPairingPort > 0 && capturedPairingPort != lastPromptedPairingPort) {
             lastPromptedPairingPort = capturedPairingPort
 
@@ -316,16 +287,6 @@ class AdbPairingNotificationService : Service() {
 
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
             notificationManager?.notify(PAIRING_PROMPT_NOTIFICATION_ID, buildPairingPromptNotification())
-
-            if (floatingOverlay?.canShow() == true) {
-                floatingOverlay?.show(capturedPairingPort)
-                BlackBoxRecorder.recordPairing(
-                    this,
-                    "FLOATING_OVERLAY_SHOWN",
-                    isSuccess = true,
-                    details = "port=$capturedPairingPort"
-                )
-            }
         }
     }
 
@@ -385,32 +346,6 @@ class AdbPairingNotificationService : Service() {
             .setAllowGeneratedReplies(false)
             .build()
 
-        val overlayIntent = Intent(this, AdbPairingNotificationService::class.java).apply {
-            action = ACTION_SHOW_FLOATING_OVERLAY
-            putExtra(EXTRA_PAIRING_PORT, capturedPairingPort)
-        }
-        val overlayPendingIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            PendingIntent.getForegroundService(
-                this,
-                102,
-                overlayIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-        } else {
-            PendingIntent.getService(
-                this,
-                102,
-                overlayIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-        }
-
-        val overlayAction = NotificationCompat.Action.Builder(
-            R.drawable.ic_shield_device_owner,
-            getString(R.string.provisioning_action_floating_overlay),
-            overlayPendingIntent
-        ).build()
-
         val promptDesc = getString(R.string.provisioning_prompt_desc, capturedPairingPort)
 
         return NotificationCompat.Builder(this, CHANNEL_ID_HEADS_UP)
@@ -422,7 +357,6 @@ class AdbPairingNotificationService : Service() {
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setVibrate(VIBRATION_PATTERN)
             .addAction(submitAction)
-            .addAction(overlayAction)
             .setOngoing(true)
             .setAutoCancel(false)
             .build()
@@ -459,7 +393,6 @@ class AdbPairingNotificationService : Service() {
 
     private fun stopForegroundAndSelf() {
         try {
-            floatingOverlay?.dismiss()
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
             notificationManager?.cancel(PAIRING_PROMPT_NOTIFICATION_ID)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -471,17 +404,19 @@ class AdbPairingNotificationService : Service() {
         } catch (e: Exception) {
             Timber.tag(TAG).w(e, "Error stopping foreground on ACTION_STOP_SERVICE")
         }
+        mdnsDiscovery?.stopDiscovery()
+        mdnsDiscovery = null
         stopSelf()
     }
 
     override fun onDestroy() {
         serviceJob.cancel()
-        floatingOverlay?.dismiss()
-        floatingOverlay = null
         adbWifiObserver?.let {
             try {
                 contentResolver.unregisterContentObserver(it)
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Timber.tag(TAG).w(e, "Error unregistering adbWifiObserver on destroy")
+            }
             adbWifiObserver = null
         }
         mdnsDiscovery?.stopDiscovery()
@@ -513,7 +448,6 @@ class AdbPairingNotificationService : Service() {
         const val ACTION_START_SERVICE = "com.drmohammed.antiporn.START_PAIRING_SERVICE"
         const val ACTION_STOP_SERVICE = "com.drmohammed.antiporn.STOP_PAIRING_SERVICE"
         const val ACTION_SUBMIT_PAIRING_CODE = "com.drmohammed.antiporn.ACTION_SUBMIT_PAIRING_CODE"
-        const val ACTION_SHOW_FLOATING_OVERLAY = "com.drmohammed.antiporn.ACTION_SHOW_FLOATING_OVERLAY"
 
         const val ACTION_PORTS_DISCOVERED = "com.drmohammed.antiporn.PORTS_DISCOVERED"
         const val EXTRA_PAIRING_PORT = "extra_pairing_port"

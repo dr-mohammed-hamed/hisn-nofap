@@ -22,8 +22,27 @@ object OemProvisioningHelper {
     val manufacturer: String
         get() = Build.MANUFACTURER?.lowercase(Locale.ROOT) ?: ""
 
-    fun isXiaomi(): Boolean =
-        manufacturer.contains("xiaomi") || manufacturer.contains("redmi") || manufacturer.contains("poco")
+    val brand: String
+        get() = Build.BRAND?.lowercase(Locale.ROOT) ?: ""
+
+    fun isXiaomi(): Boolean {
+        val m = manufacturer
+        val b = brand
+        if (m.contains("xiaomi") || m.contains("redmi") || m.contains("poco") ||
+            b.contains("xiaomi") || b.contains("redmi") || b.contains("poco")
+        ) {
+            return true
+        }
+        return try {
+            val propClass = Class.forName("android.os.SystemProperties")
+            val getMethod = propClass.getMethod("get", String::class.java)
+            val miuiVersion = getMethod.invoke(null, "ro.miui.ui.version.name") as? String
+            miuiVersion?.isNotBlank() == true
+        } catch (e: Exception) {
+            Timber.tag(TAG).d(e, "MIUI SystemProperties property check skipped or unavailable")
+            false
+        }
+    }
 
     fun isSamsung(): Boolean =
         manufacturer.contains("samsung")

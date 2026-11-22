@@ -197,17 +197,11 @@
     <string name="provisioning_tap_to_retry">Tap here to retry in the wizard</string>
     <string name="provisioning_error_xiaomi_security_settings">Notice for Xiaomi/Redmi devices:\nPlease go to Developer Options and enable \'USB debugging (Security settings)\', then retry.</string>
     <string name="provisioning_error_realme_permission_monitoring">Notice for Realme/Oppo devices:\nPlease go to Developer options and enable \'Disable permission monitoring\', then retry.</string>
-    <string name="provisioning_overlay_permission_title">Convenient Floating Keypad (Recommended)</string>
-    <string name="provisioning_overlay_permission_desc">Allows you to type the pairing code directly over Settings without leaving or needing split-screen.</string>
-    <string name="provisioning_overlay_permission_btn">Grant Draw Over Apps Permission</string>
-    <string name="provisioning_restricted_settings_hint">Android 13+ note: If option is disabled, open \'App info\' > tap ⋮ in top corner > choose \'Allow restricted settings\'.</string>
-    <string name="provisioning_action_floating_overlay">Floating Keypad</string>
     <string name="provisioning_webadb_title">Alternative Activation via Another Phone or PC (WebADB)</string>
     <string name="provisioning_webadb_desc">If you face any issues with wireless pairing, you can activate protection in 1-click via USB cable from our web tool:</string>
     <string name="provisioning_webadb_url">https://puresite.app/install</string>
     <string name="provisioning_webadb_copy_link">Copy Website Link</string>
     <string name="provisioning_webadb_link_copied">Website link copied successfully</string>
-    <string name="provisioning_overlay_clear">Clear</string>
     <string name="provisioning_error_samsung_secure_folder">Please disable Samsung \'Secure Folder\' or \'Dual Messenger\' temporarily during activation.</string>
     <string name="provisioning_error_realme_precondition">For Realme and Oppo devices: Please sign out of HeyTap/Realme account in Settings and enable \'Disable permission monitoring\' in Developer options.</string>
     <string name="provisioning_error_already_device_owner">A Device Owner is already registered on this device, or protection was previously activated.</string>
@@ -216,6 +210,18 @@
     <string name="provisioning_failed_accounts_action">Tap here to open Settings and remove them temporarily.</string>
     <string name="toast_provisioning_success">Congratulations! Device Owner permission activated successfully</string>
     <string name="toast_provisioning_failed">Pairing failed: %1$s</string>
+
+    <!-- Split-Screen Auto-Pilot & Smart OEM Strings -->
+    <string name="provisioning_split_mode_title">Split-Screen Pairing Mode</string>
+    <string name="provisioning_split_mode_subtitle">Settings is open in the adjacent pane. Enter the 6 digits and tap Pair:</string>
+    <string name="provisioning_split_reopen_settings">Reopen Settings in Adjacent Pane</string>
+    <string name="provisioning_xiaomi_split_title">Recommended Pairing for Xiaomi / POCO</string>
+    <string name="provisioning_xiaomi_split_cue">Open Recent Apps and tap Split-Screen on Hisn; we will automatically launch Settings in the adjacent half!</string>
+    <string name="provisioning_xiaomi_security_reminder">Important for Xiaomi: Ensure \'USB debugging (Security settings)\' is turned ON in Developer options.</string>
+    <string name="provisioning_btn_start_split">Start Split-Screen Mode</string>
+    <string name="provisioning_btn_try_split_screen">Didn\'t get notification? Use Split-Screen</string>
+    <string name="provisioning_cable_quick_hint">Fast 1-click install via cable at hisn.uk (from PC or another phone)</string>
+    <string name="provisioning_cable_quick_url">https://hisn.uk</string>
 
     <!-- Provisioning Wi-Fi & Live Guide & OEM Strings -->
     <string name="provisioning_wifi_required_title">Wi-Fi Connection Required</string>

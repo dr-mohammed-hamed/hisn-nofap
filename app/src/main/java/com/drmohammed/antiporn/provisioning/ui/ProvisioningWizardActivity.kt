@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -72,10 +73,23 @@ class ProvisioningWizardActivity : AppCompatActivity() {
     private lateinit var tvOemWarningTitle: TextView
     private lateinit var tvOemWarningDesc: TextView
 
-    // Overlay & WebADB Cards
-    private lateinit var cardOverlayPermission: MaterialCardView
-    private lateinit var btnGrantOverlayPermission: MaterialButton
-    private lateinit var tvRestrictedSettingsHint: TextView
+    // Split-Screen Auto-Pilot Views
+    private lateinit var layoutStandardWizard: View
+    private lateinit var layoutSplitScreenMode: View
+    private lateinit var tvSplitRadarStatus: TextView
+    private lateinit var ivSplitRadarIcon: ImageView
+    private lateinit var etSplitPairingCode: TextInputEditText
+    private lateinit var btnSplitPairAndActivate: MaterialButton
+    private lateinit var btnSplitReopenSettings: MaterialButton
+
+    // OEM Smart Routing Views
+    private lateinit var cardNotificationTip: View
+    private lateinit var btnTrySplitScreen: MaterialButton
+    private lateinit var cardXiaomiSplitHint: View
+    private lateinit var btnStartXiaomiSplit: MaterialButton
+    private lateinit var tvCableQuickHint: TextView
+
+    // Fallback WebADB Cards
     private lateinit var cardWebAdbFallback: MaterialCardView
     private lateinit var btnCopyWebAdbLink: MaterialButton
     private lateinit var btnOpenWebAdb: MaterialButton
@@ -95,6 +109,7 @@ class ProvisioningWizardActivity : AppCompatActivity() {
     private var isPromoting = false
     private var isWifiValid = false
     private var dangerDialog: AlertDialog? = null
+    private var hasAutoLaunchedAdjacent = false
 
     private val wifiWatcher by lazy {
         ProvisioningWifiWatcher(this) { isConnected -> onWifiStateChanged(isConnected) }
@@ -147,7 +162,9 @@ class ProvisioningWizardActivity : AppCompatActivity() {
         setupListeners()
         setupOemGuidance()
         setupLegacyPureSite()
-        updateOverlayPermissionUi()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInMultiWindowMode) {
+            updateMultiWindowUi(true)
+        }
     }
 
     private fun bindViews() {
@@ -167,6 +184,22 @@ class ProvisioningWizardActivity : AppCompatActivity() {
         tvOemWarningTitle = findViewById(R.id.tvOemWarningTitle)
         tvOemWarningDesc = findViewById(R.id.tvOemWarningDesc)
 
+        // Split-Screen Auto-Pilot Views
+        layoutStandardWizard = findViewById(R.id.layoutStandardWizard)
+        layoutSplitScreenMode = findViewById(R.id.layoutSplitScreenMode)
+        tvSplitRadarStatus = findViewById(R.id.tvSplitRadarStatus)
+        ivSplitRadarIcon = findViewById(R.id.ivSplitRadarIcon)
+        etSplitPairingCode = findViewById(R.id.etSplitPairingCode)
+        btnSplitPairAndActivate = findViewById(R.id.btnSplitPairAndActivate)
+        btnSplitReopenSettings = findViewById(R.id.btnSplitReopenSettings)
+
+        // OEM Smart Routing Views
+        cardNotificationTip = findViewById(R.id.cardNotificationTip)
+        btnTrySplitScreen = findViewById(R.id.btnTrySplitScreen)
+        cardXiaomiSplitHint = findViewById(R.id.cardXiaomiSplitHint)
+        btnStartXiaomiSplit = findViewById(R.id.btnStartXiaomiSplit)
+        tvCableQuickHint = findViewById(R.id.tvCableQuickHint)
+
         cardStep2 = findViewById(R.id.cardStep2)
         tvStep2Desc = findViewById(R.id.tvStep2Desc)
         btnOpenDevOptions = findViewById(R.id.btnOpenDevOptions)
@@ -176,14 +209,26 @@ class ProvisioningWizardActivity : AppCompatActivity() {
         etPairingCode = findViewById(R.id.etPairingCode)
         btnPairAndActivate = findViewById(R.id.btnPairAndActivate)
 
-        cardOverlayPermission = findViewById(R.id.cardOverlayPermission)
-        btnGrantOverlayPermission = findViewById(R.id.btnGrantOverlayPermission)
-        tvRestrictedSettingsHint = findViewById(R.id.tvRestrictedSettingsHint)
         cardWebAdbFallback = findViewById(R.id.cardWebAdbFallback)
         btnCopyWebAdbLink = findViewById(R.id.btnCopyWebAdbLink)
         btnOpenWebAdb = findViewById(R.id.btnOpenWebAdb)
 
-        etPairingCode.doAfterTextChanged { validateInputs() }
+        etPairingCode.doAfterTextChanged {
+            val s = it?.toString() ?: ""
+            if (etSplitPairingCode.text?.toString() != s) {
+                etSplitPairingCode.setText(s)
+                etSplitPairingCode.setSelection(s.length)
+            }
+            validateInputs()
+        }
+        etSplitPairingCode.doAfterTextChanged {
+            val s = it?.toString() ?: ""
+            if (etPairingCode.text?.toString() != s) {
+                etPairingCode.setText(s)
+                etPairingCode.setSelection(s.length)
+            }
+            validateInputs()
+        }
     }
 
     private fun setupListeners() {
@@ -216,19 +261,25 @@ class ProvisioningWizardActivity : AppCompatActivity() {
             launchWirelessDebuggingScreen()
         }
 
-        btnGrantOverlayPermission.setOnClickListener {
+        btnTrySplitScreen.setOnClickListener {
+            launchAdjacentDevSettings()
+        }
+
+        btnStartXiaomiSplit.setOnClickListener {
+            launchAdjacentDevSettings()
+        }
+
+        btnSplitReopenSettings.setOnClickListener {
+            launchAdjacentDevSettings()
+        }
+
+        tvCableQuickHint.setOnClickListener {
             try {
-                val intent = Intent(
-                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:$packageName")
-                )
-                startActivity(intent)
-            } catch (_: Exception) {
-                try {
-                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION))
-                } catch (_: Exception) {
-                    Toast.makeText(this, R.string.toast_open_settings_failed, Toast.LENGTH_SHORT).show()
-                }
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(getString(R.string.provisioning_cable_quick_url))).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                })
+            } catch (e: Exception) {
+                Timber.tag(TAG).e(e, "Failed opening cable quick URL")
             }
         }
 
@@ -265,13 +316,19 @@ class ProvisioningWizardActivity : AppCompatActivity() {
             }
             executePairingAndPromotion(code)
         }
+
+        btnSplitPairAndActivate.setOnClickListener {
+            btnPairAndActivate.performClick()
+        }
     }
 
     private fun executePairingAndPromotion(code: String) {
         if (isPromoting) return
         isPromoting = true
         btnPairAndActivate.isEnabled = false
+        btnSplitPairAndActivate.isEnabled = false
         btnPairAndActivate.setText(R.string.provisioning_in_progress_title)
+        btnSplitPairAndActivate.setText(R.string.provisioning_in_progress_title)
 
         lifecycleScope.launch(Dispatchers.IO) {
             try {
@@ -285,6 +342,7 @@ class ProvisioningWizardActivity : AppCompatActivity() {
                     } else if (result is PromotionResult.Failure) {
                         Toast.makeText(this@ProvisioningWizardActivity, getString(R.string.toast_provisioning_failed, result.message), Toast.LENGTH_LONG).show()
                         btnPairAndActivate.setText(R.string.provisioning_btn_pair_and_activate)
+                        btnSplitPairAndActivate.setText(R.string.provisioning_btn_pair_and_activate)
                     }
                 }
             } catch (t: Throwable) {
@@ -295,6 +353,7 @@ class ProvisioningWizardActivity : AppCompatActivity() {
                         val errMsg = "${t.javaClass.simpleName}: ${t.message ?: "Unknown error"}"
                         Toast.makeText(this@ProvisioningWizardActivity, getString(R.string.toast_provisioning_failed, errMsg), Toast.LENGTH_LONG).show()
                         btnPairAndActivate.setText(R.string.provisioning_btn_pair_and_activate)
+                        btnSplitPairAndActivate.setText(R.string.provisioning_btn_pair_and_activate)
                     }
                 }
             } finally {
@@ -393,6 +452,15 @@ class ProvisioningWizardActivity : AppCompatActivity() {
     }
 
     private fun setupOemGuidance() {
+        val isXiaomi = OemProvisioningHelper.isXiaomi()
+        if (isXiaomi) {
+            cardXiaomiSplitHint.visibility = View.VISIBLE
+            cardNotificationTip.visibility = View.GONE
+        } else {
+            cardXiaomiSplitHint.visibility = View.GONE
+            cardNotificationTip.visibility = View.VISIBLE
+        }
+
         val warning = OemProvisioningHelper.getOemWarning(this)
         if (warning != null) {
             cardOemWarning.visibility = View.VISIBLE
@@ -454,20 +522,67 @@ class ProvisioningWizardActivity : AppCompatActivity() {
         }
         setupOemGuidance()
         checkDevOptionsStatus()
-        updateOverlayPermissionUi()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInMultiWindowMode) {
+            updateMultiWindowUi(true)
+        }
         validateInputs()
     }
 
-    private fun updateOverlayPermissionUi() {
-        val hasOverlay = Settings.canDrawOverlays(this)
-        if (hasOverlay) {
-            cardOverlayPermission.visibility = View.GONE
+    override fun onMultiWindowModeChanged(isInMultiWindowMode: Boolean, newConfig: Configuration) {
+        super.onMultiWindowModeChanged(isInMultiWindowMode, newConfig)
+        updateMultiWindowUi(isInMultiWindowMode)
+    }
+
+    private fun updateMultiWindowUi(isInMultiWindow: Boolean) {
+        layoutSplitScreenMode.visibility = if (isInMultiWindow) View.VISIBLE else View.GONE
+        layoutStandardWizard.visibility = if (isInMultiWindow) View.GONE else View.VISIBLE
+        if (isInMultiWindow) {
+            val currentCode = etPairingCode.text?.toString() ?: ""
+            if (etSplitPairingCode.text?.toString() != currentCode) {
+                etSplitPairingCode.setText(currentCode)
+                etSplitPairingCode.setSelection(currentCode.length)
+            }
+            updateRadarUi()
+            if (!hasAutoLaunchedAdjacent) {
+                hasAutoLaunchedAdjacent = true
+                launchAdjacentDevSettings()
+            }
         } else {
-            cardOverlayPermission.visibility = View.VISIBLE
-            tvRestrictedSettingsHint.visibility = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                View.VISIBLE
-            } else {
-                View.GONE
+            hasAutoLaunchedAdjacent = false
+            val currentCode = etSplitPairingCode.text?.toString() ?: ""
+            if (etPairingCode.text?.toString() != currentCode) {
+                etPairingCode.setText(currentCode)
+                etPairingCode.setSelection(currentCode.length)
+            }
+            updateRadarUi()
+        }
+    }
+
+    private fun launchAdjacentDevSettings() {
+        val intent = Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).apply {
+            flags = Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or Intent.FLAG_ACTIVITY_NEW_TASK
+            val args = Bundle().apply {
+                putString(":settings:fragment_args_key", "toggle_adb_wireless")
+            }
+            putExtra(":settings:fragment_args_key", "toggle_adb_wireless")
+            putExtra(":settings:show_fragment_args", args)
+        }
+        try {
+            startActivity(intent)
+        } catch (e: Exception) {
+            Timber.tag(TAG).w(e, "Adjacent launch with highlight extras failed, trying plain")
+            try {
+                startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).apply {
+                    flags = Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or Intent.FLAG_ACTIVITY_NEW_TASK
+                })
+            } catch (_: Exception) {
+                try {
+                    startActivity(Intent(Settings.ACTION_SETTINGS).apply {
+                        flags = Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or Intent.FLAG_ACTIVITY_NEW_TASK
+                    })
+                } catch (_: Exception) {
+                    Toast.makeText(this, R.string.toast_open_settings_failed, Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
@@ -548,14 +663,26 @@ class ProvisioningWizardActivity : AppCompatActivity() {
     }
 
     private fun updateRadarUi() {
+        val colorGreen = ContextCompat.getColor(this, R.color.status_green)
+        val colorOrange = ContextCompat.getColor(this, R.color.status_orange)
+
         if (discoveredPairingPort > 0) {
-            tvRadarStatus.text = getString(R.string.provisioning_radar_port_found, discoveredPairingPort)
-            tvRadarStatus.setTextColor(ContextCompat.getColor(this, R.color.status_green))
-            ivRadarIcon.setColorFilter(ContextCompat.getColor(this, R.color.status_green))
+            val foundText = getString(R.string.provisioning_radar_port_found, discoveredPairingPort)
+            tvRadarStatus.text = foundText
+            tvRadarStatus.setTextColor(colorGreen)
+            ivRadarIcon.setColorFilter(colorGreen)
+
+            tvSplitRadarStatus.text = foundText
+            tvSplitRadarStatus.setTextColor(colorGreen)
+            ivSplitRadarIcon.setColorFilter(colorGreen)
         } else {
             tvRadarStatus.setText(R.string.provisioning_radar_waiting)
-            tvRadarStatus.setTextColor(ContextCompat.getColor(this, R.color.status_orange))
-            ivRadarIcon.setColorFilter(ContextCompat.getColor(this, R.color.status_orange))
+            tvRadarStatus.setTextColor(colorOrange)
+            ivRadarIcon.setColorFilter(colorOrange)
+
+            tvSplitRadarStatus.setText(R.string.provisioning_radar_waiting)
+            tvSplitRadarStatus.setTextColor(colorOrange)
+            ivSplitRadarIcon.setColorFilter(colorOrange)
         }
         updateStepperUi(isDevOptionsEnabled(), discoveredPairingPort > 0)
         validateInputs()
@@ -564,11 +691,14 @@ class ProvisioningWizardActivity : AppCompatActivity() {
     private fun validateInputs() {
         if (isPromoting) {
             btnPairAndActivate.isEnabled = false
+            btnSplitPairAndActivate.isEnabled = false
             return
         }
         val sanitizedCode = PairingCodeReceiver.sanitizePairingCode(etPairingCode.text?.toString())
         val codeLength = sanitizedCode.length
-        btnPairAndActivate.isEnabled = (codeLength == 6) && (discoveredPairingPort > 0 && discoveredConnectPort > 0) && isWifiValid
+        val isValid = (codeLength == 6) && (discoveredPairingPort > 0 && discoveredConnectPort > 0) && isWifiValid
+        btnPairAndActivate.isEnabled = isValid
+        btnSplitPairAndActivate.isEnabled = isValid
     }
 
     private fun onProvisioningSuccessful() {

@@ -3,8 +3,10 @@ package com.drmohammed.antiporn.provisioning.engine
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.util.Log
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
 /**
@@ -26,6 +28,9 @@ class AdbMdnsDiscovery(
 
     private val appContext = context.applicationContext
     private val nsdManager = appContext.getSystemService(Context.NSD_SERVICE) as? NsdManager
+    private val wifiManager = appContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+    private var multicastLock: WifiManager.MulticastLock? = null
+
     private var isPairingDiscoveryActive = false
     private var isConnectDiscoveryActive = false
     private var pendingStopPairing = false
@@ -33,7 +38,8 @@ class AdbMdnsDiscovery(
 
     private val resolveQueue = ArrayDeque<Pair<NsdServiceInfo, (Int, String?) -> Unit>>()
     private var isResolving = false
-    private var probeExecutor = Executors.newSingleThreadExecutor()
+    private val probeExecutor = Executors.newSingleThreadExecutor()
+    private val serviceInfoCallbacks = ConcurrentHashMap<String, NsdManager.ServiceInfoCallback>()
 
     private val pairingDiscoveryListener = object : NsdManager.DiscoveryListener {
         override fun onDiscoveryStarted(regType: String) {
@@ -52,19 +58,11 @@ class AdbMdnsDiscovery(
         override fun onServiceFound(serviceInfo: NsdServiceInfo) {
             Log.d(TAG, "mDNS Service found: ${serviceInfo.serviceName} (${serviceInfo.serviceType})")
             if (serviceInfo.serviceType.contains(SERVICE_TYPE_PAIRING)) {
-                resolveService(serviceInfo) { port, host ->
-                    try {
-                        probeExecutor.execute {
-                            if (isPortActuallyListening(port)) {
-                                Log.i(TAG, "Captured verified active Pairing Port: $port (host=$host)")
-                                lastDiscoveredHost = host
-                                onPairingPortDiscovered(port)
-                            } else {
-                                Log.w(TAG, "Discarded stale cached Pairing Port: $port (nothing listening)")
-                            }
-                        }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Failed submitting port probe task", e)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    registerModernServiceInfoCallback(serviceInfo, isPairing = true)
+                } else {
+                    resolveService(serviceInfo) { port, host ->
+                        handleDiscoveredPairingPort(port, host)
                     }
                 }
             }
@@ -72,6 +70,16 @@ class AdbMdnsDiscovery(
 
         override fun onServiceLost(serviceInfo: NsdServiceInfo) {
             Log.d(TAG, "mDNS Pairing service lost: ${serviceInfo.serviceName}")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                val serviceKey = "${serviceInfo.serviceName}_${serviceInfo.serviceType}"
+                serviceInfoCallbacks.remove(serviceKey)?.let { cb ->
+                    try {
+                        nsdManager?.unregisterServiceInfoCallback(cb)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed unregistering ServiceInfoCallback on service lost: $serviceKey", e)
+                    }
+                }
+            }
             lastDiscoveredHost = null
             onPairingServiceLost()
         }
@@ -111,15 +119,30 @@ class AdbMdnsDiscovery(
 
         override fun onServiceFound(serviceInfo: NsdServiceInfo) {
             if (serviceInfo.serviceType.contains(SERVICE_TYPE_CONNECT)) {
-                resolveService(serviceInfo) { port, host ->
-                    Log.i(TAG, "Captured dynamic Connect Port: $port (host=$host)")
-                    lastDiscoveredHost = host
-                    onConnectPortDiscovered(port)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    registerModernServiceInfoCallback(serviceInfo, isPairing = false)
+                } else {
+                    resolveService(serviceInfo) { port, host ->
+                        Log.i(TAG, "Captured dynamic Connect Port: $port (host=$host)")
+                        lastDiscoveredHost = host
+                        onConnectPortDiscovered(port)
+                    }
                 }
             }
         }
 
-        override fun onServiceLost(serviceInfo: NsdServiceInfo) {}
+        override fun onServiceLost(serviceInfo: NsdServiceInfo) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                val serviceKey = "${serviceInfo.serviceName}_${serviceInfo.serviceType}"
+                serviceInfoCallbacks.remove(serviceKey)?.let { cb ->
+                    try {
+                        nsdManager?.unregisterServiceInfoCallback(cb)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed unregistering ServiceInfoCallback on service lost: $serviceKey", e)
+                    }
+                }
+            }
+        }
 
         override fun onDiscoveryStopped(serviceType: String) {
             isConnectDiscoveryActive = false
@@ -139,6 +162,74 @@ class AdbMdnsDiscovery(
         }
     }
 
+    private fun handleDiscoveredPairingPort(port: Int, host: String?) {
+        try {
+            probeExecutor.execute {
+                if (isPortActuallyListening(port)) {
+                    Log.i(TAG, "Captured verified active Pairing Port: $port (host=$host)")
+                    lastDiscoveredHost = host
+                    onPairingPortDiscovered(port)
+                } else {
+                    Log.w(TAG, "Discarded stale cached Pairing Port: $port (nothing listening)")
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed submitting port probe task", e)
+        }
+    }
+
+    private fun registerModernServiceInfoCallback(serviceInfo: NsdServiceInfo, isPairing: Boolean) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return
+        val serviceKey = "${serviceInfo.serviceName}_${serviceInfo.serviceType}"
+        serviceInfoCallbacks.remove(serviceKey)?.let { oldCallback ->
+            try {
+                nsdManager?.unregisterServiceInfoCallback(oldCallback)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed unregistering superseded ServiceInfoCallback for $serviceKey", e)
+            }
+        }
+
+        val callback = object : NsdManager.ServiceInfoCallback {
+            override fun onServiceUpdated(updatedInfo: NsdServiceInfo) {
+                val port = updatedInfo.port
+                val host = updatedInfo.hostAddresses.firstOrNull()?.hostAddress ?: updatedInfo.host?.hostAddress
+                if (port > 0) {
+                    if (isPairing) {
+                        handleDiscoveredPairingPort(port, host)
+                    } else {
+                        Log.i(TAG, "Captured dynamic Connect Port (API 34+): $port (host=$host)")
+                        lastDiscoveredHost = host
+                        onConnectPortDiscovered(port)
+                    }
+                }
+            }
+
+            override fun onServiceLost() {
+                if (isPairing) {
+                    Log.d(TAG, "mDNS Pairing service lost (API 34+ callback): ${serviceInfo.serviceName}")
+                    lastDiscoveredHost = null
+                    onPairingServiceLost()
+                }
+            }
+
+            override fun onServiceInfoCallbackRegistrationFailed(errorCode: Int) {
+                Log.w(TAG, "registerServiceInfoCallback failed for ${serviceInfo.serviceName}: error $errorCode")
+            }
+
+            override fun onServiceInfoCallbackUnregistered() {
+                Log.d(TAG, "registerServiceInfoCallback unregistered for ${serviceInfo.serviceName}")
+            }
+        }
+
+        serviceInfoCallbacks[serviceKey] = callback
+        try {
+            nsdManager?.registerServiceInfoCallback(serviceInfo, probeExecutor, callback)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error registering ServiceInfoCallback for ${serviceInfo.serviceName}", e)
+            serviceInfoCallbacks.remove(serviceKey)
+        }
+    }
+
     /**
      * Starts monitoring for both pairing and connect mDNS services.
      */
@@ -147,6 +238,24 @@ class AdbMdnsDiscovery(
             Log.e(TAG, "NsdManager is not available on this device")
             return
         }
+
+        // Acquire MulticastLock to prevent kernel/Wi-Fi chip mDNS packet dropping
+        try {
+            if (multicastLock == null) {
+                multicastLock = wifiManager?.createMulticastLock("Hisn_AdbMdnsLock")?.apply {
+                    setReferenceCounted(false)
+                }
+            }
+            multicastLock?.let {
+                if (!it.isHeld) {
+                    it.acquire()
+                    Log.d(TAG, "Acquired WifiManager.MulticastLock for mDNS discovery")
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed acquiring WifiManager.MulticastLock", e)
+        }
+
         pendingStopPairing = false
         pendingStopConnect = false
         try {
@@ -178,6 +287,16 @@ class AdbMdnsDiscovery(
      * Stops all active mDNS discovery listeners.
      */
     fun stopDiscovery() {
+        // Safely release MulticastLock
+        try {
+            if (multicastLock?.isHeld == true) {
+                multicastLock?.release()
+                Log.d(TAG, "Released WifiManager.MulticastLock")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed releasing WifiManager.MulticastLock", e)
+        }
+
         if (nsdManager == null) return
         if (isPairingDiscoveryActive) {
             try {
@@ -201,15 +320,22 @@ class AdbMdnsDiscovery(
             pendingStopConnect = true
         }
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            serviceInfoCallbacks.values.forEach { cb ->
+                try {
+                    nsdManager.unregisterServiceInfoCallback(cb)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed unregistering ServiceInfoCallback on stopDiscovery", e)
+                }
+            }
+            serviceInfoCallbacks.clear()
+        }
+
         synchronized(this) {
             resolveQueue.clear()
             isResolving = false
             lastDiscoveredHost = null
         }
-        try {
-            probeExecutor.shutdownNow()
-            probeExecutor = Executors.newSingleThreadExecutor()
-        } catch (_: Exception) {}
     }
 
     @Synchronized

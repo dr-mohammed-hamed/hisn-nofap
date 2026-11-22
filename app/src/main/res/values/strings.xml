@@ -716,17 +716,23 @@
     <string name="provisioning_tap_to_retry">اضغط هنا لإعادة المحاولة من داخل المعالج</string>
     <string name="provisioning_error_xiaomi_security_settings">تنبيه لأجهزة شاومي / ريدمي:\nيرجى الدخول إلى خيارات المطور وتفعيل خيار \'تصحيح أخطاء USB (إعدادات الأمان)\'، ثم إعادة المحاولة.</string>
     <string name="provisioning_error_realme_permission_monitoring">تنبيه لأجهزة ريلمي / أوبو:\nيرجى الدخول إلى خيارات المطور وتفعيل خيار \'تعطيل مراقبة الأذونات\' (Disable permission monitoring)، ثم إعادة المحاولة.</string>
-    <string name="provisioning_overlay_permission_title">لوحة إدخال عائمة مريحة (موصى به)</string>
-    <string name="provisioning_overlay_permission_desc">تتيح لك كتابة رمز الاقتران مباشرة فوق شاشة الإعدادات دون مغادرتها أو الحاجة لتقسيم الشاشة.</string>
-    <string name="provisioning_overlay_permission_btn">منح إذن الظهور فوق التطبيقات</string>
-    <string name="provisioning_restricted_settings_hint">تنبيه أندرويد 13+: إذا كان الخيار معطلاً، افتح \'معلومات التطبيق\' > اضغط ⋮ في الزاوية > اختر \'السماح بالإعدادات المقيدة\'.</string>
-    <string name="provisioning_action_floating_overlay">لوحة عائمة</string>
+
+    <!-- Split-Screen Auto-Pilot & Smart OEM Strings -->
+    <string name="provisioning_split_mode_title">وضع تقسيم الشاشة للاقتران</string>
+    <string name="provisioning_split_mode_subtitle">الإعدادات مفتوحة في النصف الآخر. أدخل رمز الـ 6 أرقام واضغط اقتران:</string>
+    <string name="provisioning_split_reopen_settings">إعادة فتح الإعدادات في النصف الثاني</string>
+    <string name="provisioning_xiaomi_split_title">الاقتران الذكي عبر تقسيم الشاشة (لهواتف شاومي)</string>
+    <string name="provisioning_xiaomi_split_cue">افتح التطبيقات المفتوحة (Recent Apps) واضغط تقسيم الشاشة لحصن، وسأفتح لك الإعدادات تلقائياً في النصف الآخر.</string>
+    <string name="provisioning_xiaomi_security_reminder">تنبيه هام لشاومي: تأكد من تفعيل خيار \'تصحيح أخطاء USB (إعدادات الأمان)\' في خيارات المطور.</string>
+    <string name="provisioning_btn_start_split">بدء وضع تقسيم الشاشة</string>
+    <string name="provisioning_btn_try_split_screen">لم يظهر الإشعار؟ استخدم وضع تقسيم الشاشة</string>
+    <string name="provisioning_cable_quick_hint">التثبيت السريع بكابل عبر hisn.uk (من كمبيوتر أو موبايل آخر)</string>
+    <string name="provisioning_cable_quick_url">https://hisn.uk</string>
     <string name="provisioning_webadb_title">التفعيل البديل عبر هاتف آخر أو كمبيوتر (WebADB)</string>
     <string name="provisioning_webadb_desc">إذا واجهت أي صعوبة في الإقران اللاسلكي، يمكنك تفعيل الحماية فوراً وبنقرة واحدة عبر كابل USB من موقع التثبيت:</string>
     <string name="provisioning_webadb_url">https://puresite.app/install</string>
     <string name="provisioning_webadb_copy_link">نسخ رابط الموقع</string>
     <string name="provisioning_webadb_link_copied">تم نسخ رابط الموقع بنجاح</string>
-    <string name="provisioning_overlay_clear">مسح</string>
     <string name="provisioning_error_samsung_secure_folder">يرجى تعطيل \'المجلد الآمن\' (Secure Folder) في سامسونج أو إيقاف ميزة \'التطبيقات المزدوجة\' مؤقتاً أثناء التفعيل.</string>
     <string name="provisioning_error_realme_precondition">لهواتف ريلمي وأوبو: يرجى تسجيل الخروج من حساب HeyTap/Realme في الإعدادات وتفعيل \'تعطيل مراقبة الأذونات\' بخيارات المطور.</string>
     <string name="provisioning_error_already_device_owner">يوجد بالفعل تطبيق مالك مسجل على الجهاز، أو تم تفعيل الحماية مسبقاً.</string>
