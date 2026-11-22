@@ -201,6 +201,9 @@ object DeviceOwnerTeardownManager {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 restrictionsToClear.add(UserManager.DISALLOW_CONFIG_PRIVATE_DNS)
             }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                restrictionsToClear.add(com.drmohammed.antiporn.shields.SystemTamperShield.DISALLOW_ADD_CLONE_PROFILE)
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
                 restrictionsToClear.add(UserManager.DISALLOW_ADD_PRIVATE_PROFILE)
             }

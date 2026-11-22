@@ -458,4 +458,83 @@ class PrivateDnsFastPathTest {
         assertFalse(usedFallback)
         assertEquals(1, clearPendingCalls)
     }
+
+    @Test
+    fun testApplyStandaloneDot_successfulFallback_resetsCircuitBreaker() {
+        val executionLog = mutableListOf<String>()
+        var clearPendingCalls = 0
+
+        // Simulate circuit breaker previously tripped
+        CurfewVpnDnsBridge.applyStandaloneDotInternal(
+            targetHost = expectedHost,
+            currentDpmMode = DevicePolicyManager.PRIVATE_DNS_MODE_OFF,
+            currentDpmHost = null,
+            globalMode = "off",
+            globalHost = null,
+            isDeviceOwner = false, // non-DO tripping
+            markInternalMutation = {},
+            writeGlobal = { _, _ -> throw SecurityException("Denied") },
+            setDpmPrivateDns = { false to DevicePolicyManager.PRIVATE_DNS_SET_ERROR_FAILURE_SETTING },
+            clearDnsRestorePending = {}
+        )
+        assertTrue("Circuit breaker should be tripped", CurfewVpnDnsBridge.isDirectGlobalWriteDeniedForTest())
+
+        // Now run Device Owner fallback write which succeeds (atomic unlock in real life)
+        val (resCode, usedFallback) = CurfewVpnDnsBridge.applyStandaloneDotInternal(
+            targetHost = expectedHost,
+            currentDpmMode = DevicePolicyManager.PRIVATE_DNS_MODE_OFF,
+            currentDpmHost = null,
+            globalMode = "off",
+            globalHost = null,
+            isDeviceOwner = true,
+            markInternalMutation = { executionLog.add("markInternalMutation") },
+            writeGlobal = { key, value ->
+                executionLog.add("writeGlobal:$key=$value")
+                true
+            },
+            setDpmPrivateDns = { host ->
+                executionLog.add("setDpm:$host")
+                false to DevicePolicyManager.PRIVATE_DNS_SET_ERROR_FAILURE_SETTING
+            },
+            clearDnsRestorePending = { clearPendingCalls++ }
+        )
+
+        assertEquals(DevicePolicyManager.PRIVATE_DNS_SET_ERROR_FAILURE_SETTING, resCode)
+        assertTrue("Successful Settings.Global fallback must report usedFallback=true", usedFallback)
+        assertFalse("Successful Settings.Global fallback write must reset circuit breaker", CurfewVpnDnsBridge.isDirectGlobalWriteDeniedForTest())
+        assertEquals(1, clearPendingCalls)
+        assertEquals(
+            listOf(
+                "markInternalMutation",
+                "setDpm:$expectedHost",
+                "writeGlobal:private_dns_mode=hostname",
+                "writeGlobal:private_dns_specifier=$expectedHost"
+            ),
+            executionLog
+        )
+    }
+
+    @Test
+    fun testApplyStandaloneDot_fallbackPreservesUnaffiliatedUsersBlockedState() {
+        CurfewVpnDnsBridge.setPrivateDnsBlockedByUnaffiliatedUsersForTest(true)
+
+        val (_, usedFallback) = CurfewVpnDnsBridge.applyStandaloneDotInternal(
+            targetHost = expectedHost,
+            currentDpmMode = DevicePolicyManager.PRIVATE_DNS_MODE_OFF,
+            currentDpmHost = null,
+            globalMode = "off",
+            globalHost = null,
+            isDeviceOwner = true,
+            markInternalMutation = {},
+            writeGlobal = { _, _ -> true },
+            setDpmPrivateDns = { false to DevicePolicyManager.PRIVATE_DNS_SET_ERROR_FAILURE_SETTING },
+            clearDnsRestorePending = {}
+        )
+
+        assertTrue(usedFallback)
+        assertTrue(
+            "Fallback write must NEVER reset isPrivateDnsBlockedByUnaffiliatedUsers to false",
+            CurfewVpnDnsBridge.isPrivateDnsBlockedByUnaffiliatedUsers
+        )
+    }
 }

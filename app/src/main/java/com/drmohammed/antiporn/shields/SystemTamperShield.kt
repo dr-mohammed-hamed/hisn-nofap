@@ -31,6 +31,9 @@ object SystemTamperShield : ProtectionShield {
 
     private const val TAG = "AntiPorn_SystemTamper"
 
+    /** SystemApi constant in Android 14+ (API 34) */
+    const val DISALLOW_ADD_CLONE_PROFILE = "no_add_clone_profile"
+
     override val id: String = "system_tamper"
     override val titleResId: Int = R.string.card_system_tamper_title
 
@@ -64,6 +67,9 @@ object SystemTamperShield : ProtectionShield {
             } catch (e: Exception) { Log.w(TAG, "Add managed profile block: ${e.message}") }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 try { dpm.addUserRestriction(admin, UserManager.DISALLOW_USER_SWITCH) } catch (e: Exception) { Log.w(TAG, "User switch block: ${e.message}") }
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                try { dpm.addUserRestriction(admin, DISALLOW_ADD_CLONE_PROFILE) } catch (e: Exception) { Log.w(TAG, "Add clone profile block: ${e.message}") }
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
                 try { dpm.addUserRestriction(admin, UserManager.DISALLOW_ADD_PRIVATE_PROFILE) } catch (e: Exception) { Log.w(TAG, "Add private profile block: ${e.message}") }
@@ -272,6 +278,16 @@ object SystemTamperShield : ProtectionShield {
             val isAddUserBlocked = restrictions?.getBoolean(UserManager.DISALLOW_ADD_USER, false) ?: false
             @Suppress("DEPRECATION")
             val isAddManagedProfileBlocked = restrictions?.getBoolean(UserManager.DISALLOW_ADD_MANAGED_PROFILE, false) ?: false
+            val isAddCloneProfileBlocked = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                restrictions?.getBoolean(DISALLOW_ADD_CLONE_PROFILE, false) ?: false
+            } else {
+                true
+            }
+            val isAddPrivateProfileBlocked = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+                restrictions?.getBoolean(UserManager.DISALLOW_ADD_PRIVATE_PROFILE, false) ?: false
+            } else {
+                true
+            }
             val isDateTimeBlocked = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 restrictions?.getBoolean(UserManager.DISALLOW_CONFIG_DATE_TIME, false) ?: false
             } else {
@@ -330,7 +346,7 @@ object SystemTamperShield : ProtectionShield {
 
             val isAppsControlCompliant = if (isClearAppDataAllowed) !isAppsControlBlocked else isAppsControlBlocked
             val isFullyProtected = if (isDo) {
-                val baseProtected = isSafeBootBlocked && isFactoryResetBlocked && isAddUserBlocked && isAddManagedProfileBlocked && isUninstallBlocked && isClearDataBlocked && isAppsControlCompliant
+                val baseProtected = isSafeBootBlocked && isFactoryResetBlocked && isAddUserBlocked && isAddManagedProfileBlocked && isAddCloneProfileBlocked && isAddPrivateProfileBlocked && isUninstallBlocked && isClearDataBlocked && isAppsControlCompliant
                 if (isDateTimeLocked) {
                     baseProtected && isDateTimeBlocked && isTargetTz
                 } else {

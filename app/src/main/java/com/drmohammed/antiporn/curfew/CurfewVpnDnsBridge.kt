@@ -74,6 +74,61 @@ internal object CurfewVpnDnsBridge {
     @VisibleForTesting
     internal fun isDirectGlobalWriteDeniedForTest(): Boolean = directGlobalWriteDenied
 
+    private val dnsRestrictionLock = Any()
+
+    /**
+     * Executes atomic unlock -> write -> relock of Private DNS Settings.Global properties
+     * when [UserManager.DISALLOW_CONFIG_PRIVATE_DNS] is enforced by Device Owner.
+     * Prevents SettingsProvider SecurityException when unaffiliated users block standard DPM API.
+     */
+    internal fun writeGlobalSettingWithAtomicUnlock(context: Context, key: String, value: String): Boolean {
+        val isDnsKey = key == "private_dns_mode" || key == "private_dns_specifier"
+        if (!isDnsKey || !SafeDpmGateway.isDeviceOwner(context) || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return Settings.Global.putString(context.contentResolver, key, value)
+        }
+        return synchronized(dnsRestrictionLock) {
+            var wasRestricted = false
+            val dpmResult = SafeDpmGateway.executeRawBlocking(
+                context = context,
+                tag = BlackBoxRecorder.TAG_SHIELD,
+                actionName = "writeGlobalSettingWithAtomicUnlock"
+            ) { dpm, admin ->
+                val um = context.getSystemService(UserManager::class.java)
+                wasRestricted = try {
+                    dpm.getUserRestrictions(admin)?.getBoolean(UserManager.DISALLOW_CONFIG_PRIVATE_DNS, false) == true ||
+                        um?.hasUserRestriction(UserManager.DISALLOW_CONFIG_PRIVATE_DNS) == true
+                } catch (_: Exception) {
+                    false
+                }
+                if (wasRestricted) {
+                    dpm.clearUserRestriction(admin, UserManager.DISALLOW_CONFIG_PRIVATE_DNS)
+                }
+                try {
+                    Settings.Global.putString(context.contentResolver, key, value)
+                } finally {
+                    if (wasRestricted) {
+                        try {
+                            dpm.addUserRestriction(admin, UserManager.DISALLOW_CONFIG_PRIVATE_DNS)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed relocking DISALLOW_CONFIG_PRIVATE_DNS in finally", e)
+                        }
+                    }
+                }
+            }
+            val writeSuccess = when (dpmResult) {
+                is com.drmohammed.antiporn.telemetry.DpmExecutionResult.Success -> dpmResult.data
+                is com.drmohammed.antiporn.telemetry.DpmExecutionResult.Failure -> {
+                    dpmResult.cause?.let { throw it }
+                    Settings.Global.putString(context.contentResolver, key, value)
+                }
+            }
+            if (writeSuccess) {
+                directGlobalWriteDenied = false
+            }
+            writeSuccess
+        }
+    }
+
     private fun privateDnsModeUnknown(): Int =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) DevicePolicyManager.PRIVATE_DNS_MODE_UNKNOWN
         else COMPAT_PRIVATE_DNS_MODE_UNKNOWN
@@ -250,7 +305,7 @@ internal object CurfewVpnDnsBridge {
             getExpectedHost = { DnsShield.getEffectiveDnsHost(context) },
             readGlobal = { key -> readGlobalSetting(context, key) },
             markInternalMutation = { ProtectionTransitionGuard.markInternalDnsMutation() },
-            writeGlobal = { key, value -> Settings.Global.putString(context.contentResolver, key, value) },
+            writeGlobal = { key, value -> writeGlobalSettingWithAtomicUnlock(context, key, value) },
             clearDnsRestorePending = {
                 if (CurfewConfig.isDnsRestorePending(context)) {
                     CurfewConfig.setDnsRestorePending(context, false)
@@ -457,10 +512,10 @@ internal object CurfewVpnDnsBridge {
         val globalMode = readGlobalSetting(context, "private_dns_mode")
         if (!dpmOk || globalMode == "hostname") {
             try {
-                val modeOk = Settings.Global.putString(context.contentResolver, "private_dns_mode", "opportunistic")
-                Settings.Global.putString(context.contentResolver, "private_dns_specifier", "")
+                val modeOk = writeGlobalSettingWithAtomicUnlock(context, "private_dns_mode", "opportunistic")
+                writeGlobalSettingWithAtomicUnlock(context, "private_dns_specifier", "")
                 if (modeOk) {
-                    updatePrivateDnsBlockedByUnaffiliatedUsers(context, false)
+                    directGlobalWriteDenied = false
                 }
             } catch (e: SecurityException) {
                 directGlobalWriteDenied = true
@@ -724,7 +779,7 @@ internal object CurfewVpnDnsBridge {
             globalHost = globalHost,
             isDeviceOwner = SafeDpmGateway.isDeviceOwner(context),
             markInternalMutation = { ProtectionTransitionGuard.markInternalDnsMutation() },
-            writeGlobal = { key, value -> Settings.Global.putString(context.contentResolver, key, value) },
+            writeGlobal = { key, value -> writeGlobalSettingWithAtomicUnlock(context, key, value) },
             setDpmPrivateDns = { host ->
                 val dpmRes = SafeDpmGateway.setGlobalPrivateDnsBlocking(
                     context = context,
@@ -812,14 +867,15 @@ internal object CurfewVpnDnsBridge {
                     usedFallback = false
                 } else if (!globalMatches && (dpmSucceeded || dnsSetResult == COMPAT_PRIVATE_DNS_SET_ERROR_FAILURE_SETTING)) {
                     // Write Settings.Global if DPM succeeded OR if DPM failed with OEM error 2 (fallback)
-                    if (!directGlobalWriteDenied) {
+                    val canAttemptWrite = !directGlobalWriteDenied || isDeviceOwner
+                    if (canAttemptWrite) {
                         try {
                             val modeOk = writeGlobal("private_dns_mode", "hostname")
                             val hostOk = writeGlobal("private_dns_specifier", targetHost)
                             val globalWriteSucceeded = modeOk && hostOk
                             if (globalWriteSucceeded) {
                                 safeLogI("Enforced private DNS via Settings.Global for $targetHost (dpmSucceeded=$dpmSucceeded)")
-                                isPrivateDnsBlockedByUnaffiliatedUsers = false
+                                directGlobalWriteDenied = false
                                 if (!dpmSucceeded) {
                                     usedFallback = true
                                 }
