@@ -31,6 +31,11 @@ class SafeBankingLauncherActivity : Activity() {
 
     private fun handleLauncherIntent(intent: Intent?) {
         if (intent?.action == BankingCloakManager.ACTION_OPEN_A11Y_AFTER_BANKING) {
+            val token = intent.getStringExtra(BankingShortcutHelper.EXTRA_LAUNCH_TOKEN)
+            if (!BankingShortcutHelper.isValidLaunchToken(applicationContext, token)) {
+                Timber.tag(TAG).e("Unauthorized a11y restore attempt: invalid or missing security token")
+                return
+            }
             Timber.tag(TAG).i("Handling direct notification tap to restore Accessibility after banking")
             BankingCloakManager.handleOpenAccessibilityAfterBanking(this)
             return
@@ -45,7 +50,18 @@ class SafeBankingLauncherActivity : Activity() {
 
         if (intent?.action == Intent.ACTION_VIEW || intent?.action == Intent.ACTION_MAIN) {
             val targetPackage = intent.getStringExtra(EXTRA_PACKAGE_NAME) ?: BankingCloakManager.INSTAPAY_PACKAGE
+            val token = intent.getStringExtra(BankingShortcutHelper.EXTRA_LAUNCH_TOKEN)
+            val isValidToken = BankingShortcutHelper.isValidLaunchToken(applicationContext, token)
+
+            if (!isValidToken && !BankingAppRegistry.isAllowed(targetPackage)) {
+                Timber.tag(TAG).e("Unauthorized launcher attempt: invalid or missing security token and non-whitelisted package: $targetPackage")
+                return
+            }
+
             if (BankingAppRegistry.isAllowed(targetPackage)) {
+                if (!isValidToken) {
+                    Timber.tag(TAG).w("Allowing legacy pinned shortcut launch for whitelisted package: $targetPackage")
+                }
                 // نمرر applicationContext مع مهلة تسكين 250ms لضمان اكتمال فصل الخدمة في النظام
                 BankingCloakManager.launchSafely(
                     context = applicationContext,

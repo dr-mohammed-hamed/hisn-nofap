@@ -88,15 +88,17 @@ if ($LASTEXITCODE -ne 0) {
 $rotatedApk = "app\build\outputs\apk\release\app-release-rotated.apk"
 $apkSizeBytes = (Get-Item $rotatedApk).Length
 $apkSizeMb = [math]::Round($apkSizeBytes / 1MB, 2)
+$apkSha256 = (Get-FileHash -Path $rotatedApk -Algorithm SHA256).Hash.ToLower()
 
 # 4. Update version.json
-Write-Host "[4/5] Updating $versionJsonFile..." -ForegroundColor Green
+Write-Host "[4/5] Updating $versionJsonFile with SHA-256 and size..." -ForegroundColor Green
 if (Test-Path $versionJsonFile) {
     $vData = Get-Content $versionJsonFile -Raw | ConvertFrom-Json
     if ($NewVersionCode -gt 0) { $vData.versionCode = $NewVersionCode }
     if (-not [string]::IsNullOrWhiteSpace($NewVersionName)) { $vData.versionName = $NewVersionName }
     $vData.releaseNotes = $ReleaseNotes
     $vData.fileSizeBytes = $apkSizeBytes
+    $vData.sha256ApkHash = $apkSha256
     $vData.releaseDate = (Get-Date -Format "yyyy-MM-dd")
     $vData | ConvertTo-Json -Depth 4 | Set-Content -Path $versionJsonFile -Encoding utf8
 }

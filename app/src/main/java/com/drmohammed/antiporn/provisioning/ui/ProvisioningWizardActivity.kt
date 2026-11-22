@@ -411,7 +411,8 @@ class ProvisioningWizardActivity : AppCompatActivity() {
             findViewById<View>(R.id.cardLegacyPureSite)?.visibility = View.VISIBLE
             findViewById<View>(R.id.btnOpenPureSite)?.setOnClickListener {
                 try {
-                    startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://puresite.app/install")).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK })
+                    val url = getString(R.string.provisioning_webadb_url)
+                    startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK })
                 } catch (e: Exception) {
                     Timber.tag(TAG).e(e, "Failed opening PureSite")
                 }

@@ -113,6 +113,12 @@ object OtaRemoteSource {
             tempFile.delete()
         }
 
+        if (!downloadUrl.startsWith("https://", ignoreCase = true)) {
+            return@withContext Result.failure(
+                IOException("Insecure HTTP APK download URL rejected: $downloadUrl")
+            )
+        }
+
         var connection: HttpURLConnection? = null
         try {
             var currentUrl = downloadUrl

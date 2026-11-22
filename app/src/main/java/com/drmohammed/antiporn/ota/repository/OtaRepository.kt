@@ -278,6 +278,10 @@ class OtaRepository(private val appContext: Context) {
         }
         val info = checkResult.getOrNull()
         return if (info != null) {
+            if (com.drmohammed.antiporn.banking.BankingCloakManager.isCloaked(context)) {
+                Log.i(TAG, "New OTA version ${info.versionName} detected, but deferring auto-install because banking cloak is currently active")
+                return Result.success(Unit)
+            }
             Log.i(TAG, "New OTA version ${info.versionName} detected in background. Executing auto-install...")
             downloadAndInstall(context, info, showNotification = true)
         } else {

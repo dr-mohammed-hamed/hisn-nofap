@@ -215,7 +215,8 @@ class EnterpriseProvisioningActivity : AppCompatActivity() {
                 Intent(Intent.ACTION_DIAL),                                          // Phone / Dialer
                 Intent(Intent.ACTION_SENDTO).apply { data = "smsto:".toUri() },      // SMS / Messages
                 Intent(MediaStore.ACTION_IMAGE_CAPTURE),                             // Camera
-                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_GALLERY) // Gallery / Photos
+                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_GALLERY), // Gallery / Photos
+                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_MARKET)   // Pre-installed App Stores
             )
 
             // Dynamic Intent-based resolution: queries OEM-installed system handlers
@@ -263,25 +264,35 @@ class EnterpriseProvisioningActivity : AppCompatActivity() {
                 "com.google.android.GoogleCamera",
                 "com.google.android.apps.photos",
 
-                // Samsung OneUI Core
+                // Samsung OneUI Core & Galaxy Store
                 "com.samsung.android.dialer",
                 "com.samsung.android.messaging",
                 "com.sec.android.app.camera",
                 "com.sec.android.gallery3d",
+                "com.sec.android.app.samsungapps",
 
-                // Xiaomi / MIUI / HyperOS Core
+                // Xiaomi / MIUI / HyperOS Core & GetApps
                 "com.android.contacts",
                 "com.android.mms",
                 "com.android.camera",
                 "com.miui.gallery",
+                "com.xiaomi.mipicks",
+
+                // Huawei AppGallery
+                "com.huawei.appmarket",
 
                 // Realme / Oppo / OnePlus (ColorOS / OxygenOS)
                 "com.coloros.phoneno",
                 "com.oppo.camera",
                 "com.coloros.gallery3d",
+                "com.oppo.market",
+                "com.heytap.market",
 
-                // Transsion (Infinix / Tecno / itel)
-                "com.transsion.camera"
+                // Vivo / Honor / Transsion App Stores
+                "com.vivo.appstore",
+                "com.hihonor.appmarket",
+                "com.transsion.camera",
+                "com.transsion.palmstore"
             )
 
             for (pkg in oemKnownPackages) {

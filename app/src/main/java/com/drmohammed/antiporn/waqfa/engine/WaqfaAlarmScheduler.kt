@@ -187,10 +187,21 @@ object WaqfaAlarmScheduler {
         triggerAtMillis: Long,
         operation: PendingIntent
     ) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            alarmManager.setExactAndAllowWhileIdle(type, triggerAtMillis, operation)
-        } else {
-            alarmManager.setExact(type, triggerAtMillis, operation)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (alarmManager.canScheduleExactAlarms()) {
+                    alarmManager.setExactAndAllowWhileIdle(type, triggerAtMillis, operation)
+                } else {
+                    alarmManager.setAndAllowWhileIdle(type, triggerAtMillis, operation)
+                }
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setExactAndAllowWhileIdle(type, triggerAtMillis, operation)
+            } else {
+                alarmManager.setExact(type, triggerAtMillis, operation)
+            }
+        } catch (e: SecurityException) {
+            Timber.tag(TAG).w(e, "Exact alarm permission restricted; falling back to inexact alarm")
+            alarmManager.setAndAllowWhileIdle(type, triggerAtMillis, operation)
         }
     }
 }

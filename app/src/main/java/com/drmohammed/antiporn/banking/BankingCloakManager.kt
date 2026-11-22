@@ -536,6 +536,7 @@ object BankingCloakManager {
             } else {
                 val tapIntent = Intent(appContext, SafeBankingLauncherActivity::class.java).apply {
                     action = ACTION_OPEN_A11Y_AFTER_BANKING
+                    putExtra(BankingShortcutHelper.EXTRA_LAUNCH_TOKEN, BankingShortcutHelper.getOrCreateLaunchToken(appContext))
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 PendingIntent.getActivity(

@@ -62,13 +62,28 @@ if ($buckets -match $BucketName) {
     Write-Host "   -> $createResult" -ForegroundColor Gray
 }
 
-# 3. Upload release APK
+# 3. Read version metadata to get versioned APK naming
+$versionName = "latest"
+if (Test-Path $VersionFile) {
+    try {
+        $vObjMeta = Get-Content $VersionFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        if (-not [string]::IsNullOrWhiteSpace($vObjMeta.versionName)) {
+            $versionName = $vObjMeta.versionName
+        }
+    } catch {}
+}
+$versionedApkName = "antiporn-release-v$versionName.apk"
+
+# 3. Upload release APK (both canonical and version-tagged for cache isolation)
 if (-not (Test-Path $ApkSourcePath)) {
     Write-Host "Error: Release APK not found at $ApkSourcePath" -ForegroundColor Red
     return
 }
 $apkSizeMb = [math]::Round((Get-Item $ApkSourcePath).Length / 1MB, 2)
-Write-Host "[3/4] Uploading $ApkSourcePath ($apkSizeMb MB) to $BucketName/antiporn-release.apk..." -ForegroundColor Green
+Write-Host "[3/4] Uploading $ApkSourcePath ($apkSizeMb MB) to $BucketName/$versionedApkName and antiporn-release.apk..." -ForegroundColor Green
+$uploadVersionedApk = wrangler r2 object put "$BucketName/$versionedApkName" --file="$ApkSourcePath" --content-type="application/vnd.android.package-archive" --remote --force 2>&1
+Write-Host "   -> $uploadVersionedApk" -ForegroundColor Gray
+
 $uploadApk = wrangler r2 object put "$BucketName/antiporn-release.apk" --file="$ApkSourcePath" --content-type="application/vnd.android.package-archive" --remote --force 2>&1
 Write-Host "   -> $uploadApk" -ForegroundColor Gray
 
@@ -82,7 +97,7 @@ if (Test-Path $VersionFile) {
     $tempVersionFile = Join-Path $env:TEMP "version_upload.json"
     $vObj = Get-Content $VersionFile -Raw -Encoding UTF8 | ConvertFrom-Json
     if (-not [string]::IsNullOrWhiteSpace($r2BaseUrl)) {
-        $vObj.downloadUrl = "$($r2BaseUrl.TrimEnd('/'))/antiporn-release.apk"
+        $vObj.downloadUrl = "$($r2BaseUrl.TrimEnd('/'))/$versionedApkName"
     }
     $jsonContent = $vObj | ConvertTo-Json -Depth 4
     [System.IO.File]::WriteAllText($tempVersionFile, $jsonContent, [System.Text.UTF8Encoding]::new($false))

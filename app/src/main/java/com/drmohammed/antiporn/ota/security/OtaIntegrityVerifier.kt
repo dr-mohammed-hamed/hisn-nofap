@@ -86,16 +86,18 @@ object OtaIntegrityVerifier {
                 return false
             }
 
-            // Check c: Binary SHA-256 checksum match if specified
-            if (!info.sha256ApkHash.isNullOrBlank()) {
-                val computedHash = computeSha256(apkFile)
-                if (!computedHash.equals(info.sha256ApkHash.trim(), ignoreCase = true)) {
-                    Log.e(
-                        TAG,
-                        "Integrity check failed: SHA-256 mismatch. Expected ${info.sha256ApkHash}, computed $computedHash"
-                    )
-                    return false
-                }
+            // Check c: Binary SHA-256 checksum match is strictly mandatory
+            if (info.sha256ApkHash.isNullOrBlank()) {
+                Log.e(TAG, "Integrity check failed: Missing mandatory sha256ApkHash in OTA version info")
+                return false
+            }
+            val computedHash = computeSha256(apkFile)
+            if (!computedHash.equals(info.sha256ApkHash.trim(), ignoreCase = true)) {
+                Log.e(
+                    TAG,
+                    "Integrity check failed: SHA-256 mismatch. Expected ${info.sha256ApkHash}, computed $computedHash"
+                )
+                return false
             }
 
             // Check d: Valid installable Android APK archive and package name match

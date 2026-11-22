@@ -98,46 +98,46 @@ object DeviceOwnerTeardownManager {
         try {
             Timber.tag(TAG).w("[TEARDOWN] Starting complete safe unwinding of Device Owner restrictions...")
 
-            // 1. رفع تجميد كافة التطبيقات المعلقة (Unsuspend all packages)
+            // 0. إيقاف الخدمات القائمة وإلغاء منبهات الحظر النشطة فوراً
             try {
-                val pm = appContext.packageManager
-                val installedPackages = pm.getInstalledPackages(0) ?: emptyList()
-                val packagesToUnsuspend = mutableListOf<String>()
+                appContext.stopService(android.content.Intent(appContext, com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService::class.java))
+                Timber.tag(TAG).i("CurfewBlackholeVpnService stopped during teardown")
+            } catch (e: Exception) {
+                Timber.tag(TAG).w("Error stopping CurfewBlackholeVpnService: ${e.message}")
+            }
+            try {
+                appContext.stopService(android.content.Intent(appContext, com.drmohammed.antiporn.ai.service.ScreenAiProjectionService::class.java))
+                Timber.tag(TAG).i("ScreenAiProjectionService stopped during teardown")
+            } catch (e: Exception) {
+                Timber.tag(TAG).w("Error stopping ScreenAiProjectionService: ${e.message}")
+            }
+            try {
+                com.drmohammed.antiporn.curfew.CurfewScheduler.cancelCurfewAlarms(appContext)
+                com.drmohammed.antiporn.curfew.CurfewScheduler.cancelCurfewSnoozeAlarm(appContext)
+                com.drmohammed.antiporn.curfew.CurfewScheduler.cancelNapEndAlarm(appContext)
+                Timber.tag(TAG).i("Curfew alarms cancelled during teardown")
+            } catch (e: Exception) {
+                Timber.tag(TAG).w("Error cancelling curfew alarms: ${e.message}")
+            }
+
+            // 1. إلغاء إخفاء التطبيقات المخفية أولاً (Unhide all hidden packages FIRST with MATCH_UNINSTALLED_PACKAGES)
+            val pm = appContext.packageManager
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                PackageManager.MATCH_UNINSTALLED_PACKAGES or PackageManager.MATCH_DISABLED_COMPONENTS
+            } else {
+                @Suppress("DEPRECATION")
+                PackageManager.GET_UNINSTALLED_PACKAGES or PackageManager.GET_DISABLED_COMPONENTS
+            }
+            val installedPackages = pm.getInstalledPackages(flags) ?: emptyList()
+
+            try {
                 for (pkgInfo in installedPackages) {
                     val pkg = pkgInfo.packageName ?: continue
                     if (pkg == appContext.packageName) continue
                     try {
-                        if (dpm.isPackageSuspended(admin, pkg)) {
-                            packagesToUnsuspend.add(pkg)
-                        }
-                    } catch (e: Exception) {
-                        Timber.tag(TAG).w("Could not check suspension for $pkg: ${e.message}")
-                    }
-                }
-                if (packagesToUnsuspend.isNotEmpty()) {
-                    dpm.setPackagesSuspended(admin, packagesToUnsuspend.toTypedArray(), false)
-                    Timber.tag(TAG).i("Un-suspended ${packagesToUnsuspend.size} packages successfully")
-                }
-                com.drmohammed.antiporn.pageshield.engine.PageShieldReactionExecutor.teardown(appContext)
-            } catch (e: Exception) {
-                Timber.tag(TAG).e(e, "Error un-suspending packages during teardown")
-            }
-
-            // 2. إلغاء إخفاء التطبيقات المخفية (Unhide all hidden packages)
-            try {
-                val pm = appContext.packageManager
-                val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    PackageManager.MATCH_UNINSTALLED_PACKAGES or PackageManager.MATCH_DISABLED_COMPONENTS
-                } else {
-                    @Suppress("DEPRECATION")
-                    PackageManager.GET_UNINSTALLED_PACKAGES or PackageManager.GET_DISABLED_COMPONENTS
-                }
-                val installedPackages = pm.getInstalledPackages(flags) ?: emptyList()
-                for (pkgInfo in installedPackages) {
-                    val pkg = pkgInfo.packageName ?: continue
-                    try {
                         if (dpm.isApplicationHidden(admin, pkg)) {
                             dpm.setApplicationHidden(admin, pkg, false)
+                            Timber.tag(TAG).d("Unhid package during teardown: $pkg")
                         }
                     } catch (e: Exception) {
                         Timber.tag(TAG).w("Could not unhide $pkg: ${e.message}")
@@ -145,6 +145,39 @@ object DeviceOwnerTeardownManager {
                 }
             } catch (e: Exception) {
                 Timber.tag(TAG).e(e, "Error un-hiding packages during teardown")
+            }
+
+            // 2. رفع تجميد كافة التطبيقات المعلقة مع عزل الأخطاء لكل حزمة (Unsuspend all packages individually)
+            try {
+                for (pkgInfo in installedPackages) {
+                    val pkg = pkgInfo.packageName ?: continue
+                    if (pkg == appContext.packageName) continue
+                    try {
+                        if (dpm.isPackageSuspended(admin, pkg)) {
+                            dpm.setPackagesSuspended(admin, arrayOf(pkg), false)
+                            Timber.tag(TAG).d("Un-suspended package during teardown: $pkg")
+                        }
+                    } catch (e: Exception) {
+                        Timber.tag(TAG).w("Could not unsuspend $pkg: ${e.message}")
+                    }
+                }
+                com.drmohammed.antiporn.pageshield.engine.PageShieldReactionExecutor.teardown(appContext)
+            } catch (e: Exception) {
+                Timber.tag(TAG).e(e, "Error un-suspending packages during teardown")
+            }
+
+            // 2b. مسح قيود المتصفحات المدارة (BrowserShield Application Restrictions)
+            val browserPackages = (com.drmohammed.antiporn.core.policy.AppPolicyRegistry.getTargetBrowserPackages() + listOf(
+                "org.chromium.chrome",
+                "com.opera.gx"
+            )).distinct()
+            for (browserPkg in browserPackages) {
+                try {
+                    dpm.setApplicationRestrictions(admin, browserPkg, android.os.Bundle())
+                    Timber.tag(TAG).d("Application restrictions cleared for: $browserPkg")
+                } catch (e: Exception) {
+                    Timber.tag(TAG).w("Could not clear restrictions for $browserPkg: ${e.message}")
+                }
             }
 
             // 3. مسح كافة قيود المستخدم (UserManager User Restrictions)
@@ -199,6 +232,24 @@ object DeviceOwnerTeardownManager {
                 Settings.Global.putInt(appContext.contentResolver, "guest_user_enabled", 1)
             } catch (e: Exception) {
                 Timber.tag(TAG).w("Could not restore user_switcher settings: ${e.message}")
+            }
+
+            // 4b. إعادة ضبط الوقت والمنطقة الزمنية التلقائية
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                try {
+                    dpm.setAutoTimeZoneEnabled(admin, true)
+                    dpm.setAutoTimeRequired(admin, false)
+                    Timber.tag(TAG).i("DPM Auto time zone restored to enabled")
+                } catch (e: Exception) {
+                    Timber.tag(TAG).w("Could not restore DPM auto time zone: ${e.message}")
+                }
+            }
+            try {
+                Settings.Global.putInt(appContext.contentResolver, Settings.Global.AUTO_TIME, 1)
+                Settings.Global.putInt(appContext.contentResolver, Settings.Global.AUTO_TIME_ZONE, 1)
+                Timber.tag(TAG).i("Settings.Global AUTO_TIME and AUTO_TIME_ZONE restored")
+            } catch (e: Exception) {
+                Timber.tag(TAG).w("Could not restore Settings.Global auto time: ${e.message}")
             }
 
             // 5. إلغاء حظر مسح بيانات التطبيق لنفس الحزمة (setClearApplicationUserDataBlocked = false)
@@ -316,6 +367,7 @@ object DeviceOwnerTeardownManager {
 
             Result.success(Unit)
         } catch (t: Throwable) {
+            ProtectionTransitionGuard.isTeardownInProgress = false
             if (t is kotlinx.coroutines.CancellationException) throw t
             Timber.tag(TAG).e(t, "[TEARDOWN_FATAL] Failed to execute clearDeviceOwnerApp cleanly")
             BlackBoxRecorder.recordDpm(

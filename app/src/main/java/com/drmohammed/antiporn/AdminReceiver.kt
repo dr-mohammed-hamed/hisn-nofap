@@ -101,6 +101,12 @@ class AdminReceiver : DeviceAdminReceiver() {
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                try {
+                    com.drmohammed.antiporn.core.engine.SystemAppsHealingManager.healPreInstalledStoresSafely(appContext)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error executing SystemAppsHealingManager in AdminReceiver", e)
+                }
+                com.drmohammed.antiporn.data.repository.ApprovalRepository.getInstance(appContext).ensureInitialBaselineSeeded()
                 com.drmohammed.antiporn.core.engine.ProtectionEngine.applyAllSync(appContext)
             } catch (e: Exception) {
                 Log.e(TAG, "Error applying policies in AdminReceiver", e)

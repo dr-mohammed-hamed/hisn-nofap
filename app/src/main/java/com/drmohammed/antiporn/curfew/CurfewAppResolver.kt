@@ -449,6 +449,7 @@ object CurfewAppResolver {
         if (packageName.isBlank()) return true
         if (packageName == context.packageName || packageName == "android" || packageName == "com.android.systemui") return true
         if (AppPolicyRegistry.isImmune(packageName)) return true
+        if (AppPolicyRegistry.isAppStore(packageName)) return true
         if (AppPolicyRegistry.getSystemCriticalPackages().contains(packageName)) return true
         if (AppPolicyRegistry.getImmunePackages().contains(packageName)) return true
 

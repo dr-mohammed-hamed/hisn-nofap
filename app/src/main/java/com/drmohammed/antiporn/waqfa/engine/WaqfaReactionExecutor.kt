@@ -94,13 +94,18 @@ object WaqfaReactionExecutor {
         val appContext = context.applicationContext
         Log.i(TAG, "Lifting cooldown for $packageName")
 
-        // 1. فك التجميد عبر SafeDpmGateway
+        // 1. فك التجميد عبر SafeDpmGateway فقط إذا لم يكن مجمداً بواسطة دروع أخرى (Curfew, Blacklist, Zero-Trust)
         if (SafeDpmGateway.isDeviceOwner(appContext)) {
-            try {
-                SafeDpmGateway.setPackagesSuspended(appContext, arrayOf(packageName), false)
-                Log.i(TAG, "Lifted package suspension for $packageName via SafeDpmGateway")
-            } catch (e: Exception) {
-                Log.e(TAG, "Error unsuspending package $packageName", e)
+            val isFrozenByOther = com.drmohammed.antiporn.pageshield.engine.PageShieldAlarmReceiver.isAppFrozenByOtherShields(appContext, packageName)
+            if (!isFrozenByOther) {
+                try {
+                    SafeDpmGateway.setPackagesSuspended(appContext, arrayOf(packageName), false)
+                    Log.i(TAG, "Lifted package suspension for $packageName via SafeDpmGateway")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error unsuspending package $packageName", e)
+                }
+            } else {
+                Log.i(TAG, "Package $packageName remains suspended by another active shield (Curfew/Blacklist/ZeroTrust)")
             }
         }
 

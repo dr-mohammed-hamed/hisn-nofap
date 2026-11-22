@@ -394,7 +394,16 @@ object DeviceOwnerPromoter {
                         try {
                             client.shell("settings --user $userId put secure user_setup_complete 1")
                         } catch (e: Exception) {
-                            Timber.tag(TAG).e(e, "Failed to restore user_setup_complete in finally")
+                            Timber.tag(TAG).e(e, "Failed to restore user_setup_complete in finally via ADB")
+                        }
+                        // Local ContentResolver Fallback: Guarantees user_setup_complete=1 even if ADB disconnected!
+                        try {
+                            context?.let { ctx ->
+                                android.provider.Settings.Secure.putInt(ctx.contentResolver, "user_setup_complete", 1)
+                                Timber.tag(TAG).i("Local ContentResolver fallback restored user_setup_complete=1 successfully")
+                            }
+                        } catch (e: Exception) {
+                            Timber.tag(TAG).w(e, "Local ContentResolver fallback for user_setup_complete failed")
                         }
                         try {
                             client.shell("CLASSPATH=$dexPath app_process /system/bin SetupStateHelper $userId")
@@ -452,19 +461,18 @@ object DeviceOwnerPromoter {
         packagesToDisable.add("com.google.android.gms")
 
         try {
-            for (pkg in packagesToDisable) {
-                client.shell("pm disable-user --user $userId $pkg")
-            }
-            delay(1000)
+            val trapScript = packagesToDisable.joinToString("; ") { "pm enable --user $userId $it" }
+            val disableScript = packagesToDisable.joinToString("; ") { "pm disable-user --user $userId $it" }
 
-            var cmd = "dpm set-device-owner --user $userId $adminComponent"
-            var doResult = client.shell(cmd)
+            // Dispatch atomic shell script with trapped EXIT handler for kernel-level re-enablement even on disconnect
+            val atomicCmd = "sh -c 'trap \"$trapScript\" EXIT; $disableScript; sleep 1; dpm set-device-owner --user $userId $adminComponent'"
+            var doResult = client.shell(atomicCmd)
             var output = (doResult.stdoutText + "\n" + doResult.stderrText).trim()
 
             if (output.contains("unknown option: --user", ignoreCase = true) ||
                 output.contains("illegal option", ignoreCase = true)) {
-                cmd = "dpm set-device-owner $adminComponent"
-                doResult = client.shell(cmd)
+                val legacyAtomicCmd = "sh -c 'trap \"$trapScript\" EXIT; $disableScript; sleep 1; dpm set-device-owner $adminComponent'"
+                doResult = client.shell(legacyAtomicCmd)
                 output = (doResult.stdoutText + "\n" + doResult.stderrText).trim()
             }
 

@@ -152,6 +152,10 @@ class GlobalCrashHandler private constructor(
      * Inserts the crash event into SQLite WAL diagnostic table.
      */
     private fun writeCrashToDatabase(thread: Thread, throwable: Throwable, report: CrashReport) {
+        if (throwable is OutOfMemoryError || throwable is android.database.sqlite.SQLiteException) {
+            Log.w(TAG, "Skipping Room DB persistence for memory/SQLite crash to avoid secondary deadlock")
+            return
+        }
         try {
             val eventDao = HisnRoomDatabase.getInstance(context).diagnosticEventDao()
             val metadata = JSONObject().apply {

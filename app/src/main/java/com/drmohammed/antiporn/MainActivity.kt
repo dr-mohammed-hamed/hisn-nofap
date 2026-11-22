@@ -287,6 +287,7 @@ class MainActivity : AppCompatActivity(),
                 }
             }
             com.drmohammed.antiporn.data.repository.ApprovalRepository.getInstance(this).syncZeroTrustBaselineAndReconcileAsync()
+            com.drmohammed.antiporn.core.engine.SystemAppsHealingManager.healPreInstalledStoresAsync(this)
         }
         AppInventoryManager.getInstance(this).syncInventoryToCloudAsync()
     }

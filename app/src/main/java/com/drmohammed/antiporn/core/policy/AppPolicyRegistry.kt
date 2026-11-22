@@ -147,6 +147,9 @@ object AppPolicyRegistry {
         AppRule("com.sec.android.app.samsungapps", AppClassification.OEM_APP_STORE, "Samsung Galaxy Store"),
         AppRule("com.xiaomi.mipicks", AppClassification.OEM_APP_STORE, "Xiaomi GetApps"),
         AppRule("com.huawei.appmarket", AppClassification.OEM_APP_STORE, "Huawei AppGallery"),
+        AppRule("com.vivo.appstore", AppClassification.OEM_APP_STORE, "Vivo App Store"),
+        AppRule("com.hihonor.appmarket", AppClassification.OEM_APP_STORE, "Honor App Market"),
+        AppRule("com.transsion.palmstore", AppClassification.OEM_APP_STORE, "Transsion Palm Store"),
 
         // =========================================================================
         // 11. SEARCH LOOPHOLE APPS (Suspended during curfew)

@@ -18,6 +18,29 @@ object BankingShortcutHelper {
 
     private const val TAG = "AntiPorn_BankingShortcutHelper"
     const val SHORTCUT_ID_INSTAPAY = "shortcut_instapay_safe"
+    const val EXTRA_LAUNCH_TOKEN = "com.drmohammed.antiporn.extra.LAUNCH_TOKEN"
+    private const val PREFS_NAME = "banking_security_prefs"
+    private const val KEY_LAUNCH_TOKEN = "banking_launch_token"
+
+    @Synchronized
+    fun getOrCreateLaunchToken(context: Context): String {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        var token = prefs.getString(KEY_LAUNCH_TOKEN, null)
+        if (token.isNullOrBlank()) {
+            token = java.util.UUID.randomUUID().toString()
+            prefs.edit().putString(KEY_LAUNCH_TOKEN, token).apply()
+        }
+        return token
+    }
+
+    fun isValidLaunchToken(context: Context, candidateToken: String?): Boolean {
+        if (candidateToken.isNullOrBlank()) return false
+        val validToken = getOrCreateLaunchToken(context)
+        return java.security.MessageDigest.isEqual(
+            candidateToken.toByteArray(Charsets.UTF_8),
+            validToken.toByteArray(Charsets.UTF_8)
+        )
+    }
 
     /**
      * تثبيت اختصار إنستاباي الآمن على الشاشة الرئيسية (للتوافق القديم).
@@ -87,6 +110,7 @@ object BankingShortcutHelper {
         val targetIntent = Intent(appContext, SafeBankingLauncherActivity::class.java).apply {
             action = Intent.ACTION_VIEW
             putExtra(SafeBankingLauncherActivity.EXTRA_PACKAGE_NAME, targetPackage)
+            putExtra(EXTRA_LAUNCH_TOKEN, getOrCreateLaunchToken(appContext))
         }
 
         val shortcutId = "shortcut_safe_bank_" + targetPackage.replace(".", "_")
