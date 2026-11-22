@@ -15,6 +15,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.SetOptions
+import timber.log.Timber
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -195,27 +196,29 @@ class AccountabilityRepository(
                     "createdAt" to now,
                     "expiresAt" to expiresAt
                 )
+
+                // Proactively ensure base policy exists in Firestore under /policies/$uid before publishing pairing code
+                try {
+                    firestore.collection("policies").document(uid).set(currentLocalPolicy.toMap(), SetOptions.merge()).await()
+                    Timber.tag(TAG).d("Ensured base policy document in Firestore for UID %s", com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(uid))
+                } catch (policyEx: Exception) {
+                    if (policyEx is kotlinx.coroutines.CancellationException) throw policyEx
+                    Timber.tag(TAG).w(policyEx, "Non-critical: base policy document seed skipped: %s", policyEx.message)
+                }
+
                 firestore.collection("pairings").document(code).set(pairingDoc).await()
                 prefs.edit().putString(KEY_MY_PAIRING_CODE, code).apply()
                 com.drmohammed.antiporn.cloud.CloudSyncManager.startTemporaryPairingSession(appContext, code, expiresAt)
                 registered = true
                 val maskedCode = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(code)
                 val maskedUid = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(uid)
-                Log.i(TAG, "Successfully registered pairing code $maskedCode for UID $maskedUid (name: $deviceName, policyVersion: ${currentLocalPolicy.version})")
+                Timber.tag(TAG).i("Successfully registered pairing code %s for UID %s (name: %s, policyVersion: %d)", maskedCode, maskedUid, deviceName, currentLocalPolicy.version)
                 com.drmohammed.antiporn.telemetry.BlackBoxRecorder.recordPairing(
                     appContext,
                     "CODE_REGISTERED",
                     isSuccess = true,
                     details = "code=$maskedCode, uid=$maskedUid, version=${currentLocalPolicy.version}"
                 )
-
-                // Proactively ensure base policy exists in Firestore under /policies/$uid
-                try {
-                    firestore.collection("policies").document(uid).set(currentLocalPolicy.toMap(), com.google.firebase.firestore.SetOptions.merge()).await()
-                    Log.d(TAG, "Ensured base policy document in Firestore for UID $maskedUid")
-                } catch (policyEx: Exception) {
-                    Log.w(TAG, "Non-critical: base policy document seed skipped: ${policyEx.message}")
-                }
 
                 AppInventoryManager.getInstance(appContext).syncInventoryToCloudAsync()
             } catch (e: Exception) {
@@ -254,8 +257,10 @@ class AccountabilityRepository(
             val used = snapshot.getBoolean("used") ?: false
             val expiresAt = snapshot.getLong("expiresAt") ?: 0L
             val now = TrustedTimeProvider.currentTimeMillis(appContext)
+            val pairedGuardian = snapshot.getString("pairedGuardianUid")
+            val isAlreadyClaimedByMe = (status == "LOCKED" || used) && pairedGuardian == myUid
 
-            if (status == "LOCKED" || used) {
+            if ((status == "LOCKED" || used) && !isAlreadyClaimedByMe) {
                 return@withContext Result.failure(IllegalStateException(appContext.getString(R.string.error_pairing_code_already_used)))
             }
             if (expiresAt > 0L && now > expiresAt) {
@@ -275,46 +280,47 @@ class AccountabilityRepository(
 
             if (role == PartnerEntity.ROLE_WARD) {
                 // I am protecting targetUid (targetUid is my WARD, I am their GUARDIAN)
-                val policyDoc = try {
-                    firestore.collection("policies").document(targetUid).get().await()
-                } catch (e: Exception) {
-                    Log.w(TAG, "Ward policy doc not readable or doesn't exist yet before pairing: ${e.message}")
-                    null
+                // 1. Lock pairing code first to verify validity and claim code atomically (idempotent for claiming guardian)
+                if (!isAlreadyClaimedByMe) {
+                    try {
+                        firestore.collection("pairings").document(cleanCode).update(
+                            mapOf("status" to "LOCKED", "used" to true, "pairedGuardianUid" to myUid)
+                        ).await()
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        Timber.tag(TAG).e(e, "Failed locking pairing code in Firestore: %s", e.message)
+                        return@withContext Result.failure(IllegalStateException(appContext.getString(R.string.error_pairing_code_already_used)))
+                    }
                 }
-                val existingGuardianUid = policyDoc?.getString("guardianUid")
-                val isAlreadySupervised = policyDoc?.getBoolean("isSupervised") ?: (!existingGuardianUid.isNullOrBlank())
 
-                if (isAlreadySupervised && !existingGuardianUid.isNullOrBlank() && existingGuardianUid != myUid) {
-                    return@withContext Result.failure(IllegalStateException(appContext.getString(R.string.error_ward_already_has_guardian)))
-                }
-
-                val currentVersion = policyDoc?.getLong("version") ?: 1L
+                // 2. Perform atomic guardianship merge into ward's policy document
+                // This updates ONLY the guardianship metadata fields without overwriting
+                // pre-existing custom blocked/allowed websites or filter modes created by the ward.
                 val pairingPolicyVersion = snapshot.getLong("policyVersion") ?: 1L
-                val baseVersion = maxOf(currentVersion, pairingPolicyVersion)
-                val basePolicy = policyDoc?.data?.let { DevicePolicyBundle.fromMap(it) }
-                    ?: DevicePolicyBundle.defaultPolicy()
-
-                val updatedPolicy = basePolicy.copy(
-                    guardianUid = myUid,
-                    guardianName = myDeviceName,
-                    isSupervised = true,
-                    version = baseVersion + 1,
-                    updatedAt = TrustedTimeProvider.currentTimeMillis(appContext)
+                val targetVersion = maxOf(1L, pairingPolicyVersion) + 1L
+                val guardianshipUpdates = mapOf<String, Any>(
+                    "guardianUid" to myUid,
+                    "guardianName" to myDeviceName,
+                    "isSupervised" to true,
+                    "pairingCode" to cleanCode,
+                    "version" to targetVersion,
+                    "updatedAt" to TrustedTimeProvider.currentTimeMillis(appContext)
                 )
                 try {
-                    firestore.collection("pairings").document(cleanCode).update(
-                        mapOf("status" to "LOCKED", "used" to true, "pairedGuardianUid" to myUid)
-                    ).await()
+                    firestore.collection("policies").document(targetUid)
+                        .set(guardianshipUpdates, SetOptions.merge())
+                        .await()
+                    Timber.tag(TAG).i("Successfully performed atomic guardianship merge for ward UID: %s", com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(targetUid))
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
-                    Log.e(TAG, "Failed locking pairing code in Firestore: ${e.message}", e)
-                    return@withContext Result.failure(IllegalStateException(appContext.getString(R.string.error_pairing_code_already_used)))
+                    Timber.tag(TAG).e(e, "Failed merging guardianship into ward policy: %s", e.message)
+                    val userFacingError = if (e is FirebaseFirestoreException && e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                        IllegalStateException(appContext.getString(R.string.error_ward_already_has_guardian), e)
+                    } else {
+                        e
+                    }
+                    return@withContext Result.failure(userFacingError)
                 }
-
-                val policyMap = updatedPolicy.toMap().toMutableMap().apply {
-                    put("pairingCode", cleanCode)
-                }
-                firestore.collection("policies").document(targetUid).set(policyMap, SetOptions.merge()).await()
             } else if (role == PartnerEntity.ROLE_GUARDIAN) {
                 // Target is protecting ME (Target is my GUARDIAN, I am their WARD)
                 val myPolicyDoc = try {

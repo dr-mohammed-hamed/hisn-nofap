@@ -412,11 +412,39 @@ class PolicyRepository(
                                         )
 
                                         if (isVersionNewer || isTimeNewer || supervisoryChanged || statusChanged || supervisionChanged) {
+                                            val isTransitionToSupervised = !current.isSupervised && cloudPolicy.isSupervised
+                                            var effectiveCloudPolicy = cloudPolicy
+
+                                            // Defensive Transition Policy Reconciliation:
+                                            // When transitioning from standalone to supervised, if incoming cloud policy has empty custom blocked/allowed lists
+                                            // but the device had local pre-pairing blocked/allowed URLs, preserve the local rules to prevent data loss.
+                                            if (isTransitionToSupervised) {
+                                                val preserveBlocked = cloudPolicy.customBlockedUrls.isEmpty() && current.customBlockedUrls.isNotEmpty()
+                                                val preserveAllowed = cloudPolicy.customAllowedUrls.isEmpty() && current.customAllowedUrls.isNotEmpty()
+                                                if (preserveBlocked || preserveAllowed) {
+                                                    val restoredBlocked = if (preserveBlocked) current.customBlockedUrls else cloudPolicy.customBlockedUrls
+                                                    val restoredAllowed = if (preserveAllowed) current.customAllowedUrls else cloudPolicy.customAllowedUrls
+                                                    val restoredFilterMode = if (cloudPolicy.browserFilterMode == DevicePolicyBundle.BROWSER_FILTER_OFF && current.browserFilterMode != DevicePolicyBundle.BROWSER_FILTER_OFF) {
+                                                        current.browserFilterMode
+                                                    } else if (cloudPolicy.browserFilterMode == DevicePolicyBundle.BROWSER_FILTER_OFF && (restoredBlocked.isNotEmpty() || restoredAllowed.isNotEmpty())) {
+                                                        DevicePolicyBundle.BROWSER_FILTER_BLOCKLIST
+                                                    } else {
+                                                        cloudPolicy.browserFilterMode
+                                                    }
+                                                    Timber.tag(TAG).i("[PairingSync] Reconciled initial supervised policy: preserving %d blocked URLs and %d allowed URLs (mode=%d)", restoredBlocked.size, restoredAllowed.size, restoredFilterMode)
+                                                    effectiveCloudPolicy = effectiveCloudPolicy.copy(
+                                                        customBlockedUrls = restoredBlocked,
+                                                        customAllowedUrls = restoredAllowed,
+                                                        browserFilterMode = restoredFilterMode
+                                                    )
+                                                }
+                                            }
+
                                             val forceOverride = isFromGuardian && (supervisoryChanged || statusChanged || supervisionChanged)
                                             val enforcedPolicy = if (forceOverride) {
-                                                cloudPolicy.copy(version = maxOf(cloudPolicy.version, current.version + 1))
+                                                effectiveCloudPolicy.copy(version = maxOf(effectiveCloudPolicy.version, current.version + 1))
                                             } else {
-                                                cloudPolicy
+                                                effectiveCloudPolicy
                                             }
 
                                             Log.i(TAG, "[SelfControlDiag] Sovereign cloud policy ACCEPTED! Enforcing update on device... (v${enforcedPolicy.version}, isSelfControlAllowed=${enforcedPolicy.isSelfControlAllowed}, forceOverride=$forceOverride)")
@@ -459,6 +487,16 @@ class PolicyRepository(
                                                         )
                                                     } catch (e: Exception) {
                                                         Log.w(TAG, "Failed writing policy acknowledgment: ${e.message}")
+                                                    }
+
+                                                    // If rules were defensively reconciled on initial transition, attempt sync to cloud (safe fallback)
+                                                    if (isTransitionToSupervised && effectiveCloudPolicy != cloudPolicy) {
+                                                        try {
+                                                            syncPolicyToCloudAsync(uid, enforcedPolicy)
+                                                        } catch (syncEx: Exception) {
+                                                            if (syncEx is CancellationException) throw syncEx
+                                                            Timber.tag(TAG).w(syncEx, "Initial transition cloud policy sync deferred: %s", syncEx.message)
+                                                        }
                                                     }
                                                 }
                                             }
