@@ -293,13 +293,9 @@ class SettingsFragment : Fragment() {
         if (state.isDeviceOwner) {
             binding.tvDeviceOwnerStatus.setText(R.string.card_device_owner_active)
             binding.tvDeviceOwnerStatus.setTextColor(ContextCompat.getColor(ctx, R.color.shield_emerald_radiant))
-            binding.layoutManageSystemAppsPreference.visibility = View.VISIBLE
-            binding.dividerManageSystemApps.visibility = View.VISIBLE
         } else {
             binding.tvDeviceOwnerStatus.setText(R.string.card_device_owner_inactive)
             binding.tvDeviceOwnerStatus.setTextColor(ContextCompat.getColor(ctx, R.color.shield_amber_calm))
-            binding.layoutManageSystemAppsPreference.visibility = View.GONE
-            binding.dividerManageSystemApps.visibility = View.GONE
         }
     }
 
@@ -359,11 +355,6 @@ class SettingsFragment : Fragment() {
             view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
             showDiagnosticLogsBottomSheet()
             true
-        }
-
-        binding.layoutManageSystemAppsPreference.setOnClickListener {
-            val intent = Intent(requireContext(), com.drmohammed.antiporn.provisioning.ui.SystemAppsManagerActivity::class.java)
-            startActivity(intent)
         }
     }
 

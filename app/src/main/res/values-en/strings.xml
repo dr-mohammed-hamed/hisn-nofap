@@ -358,9 +358,6 @@
     <string name="toast_unfreeze_success">%1$s unfrozen successfully</string>
     <string name="empty_apps_search">No apps match your search</string>
     <string name="btn_done">Done</string>
-    <string name="settings_manage_system_apps_title">Manage Frozen System Apps</string>
-    <string name="settings_manage_system_apps_desc">Freeze or unfreeze system services and bloatware</string>
-    <string name="btn_open_system_apps_manager">Manage System Apps</string>
 
     <!-- OTA Auto-Update & Maintenance -->
     <string name="card_ota_title">System Updates</string>

@@ -184,16 +184,6 @@ class OtherSettingsActivity : AppCompatActivity() {
         val timezoneOptions = IslamicTimeZoneRegistry.getAllOptions()
         val tzAdapter = ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, timezoneOptions)
         actvTimezonePicker.setAdapter(tzAdapter)
-
-        val cardSystemApps = findViewById<View>(R.id.cardSystemAppsManagerOtherSettings)
-        if (ProtectionEngine.isDeviceOwner(this)) {
-            cardSystemApps?.visibility = View.VISIBLE
-            cardSystemApps?.setOnClickListener {
-                startActivity(Intent(this, com.drmohammed.antiporn.provisioning.ui.SystemAppsManagerActivity::class.java))
-            }
-        } else {
-            cardSystemApps?.visibility = View.GONE
-        }
     }
 
     private fun bindInitialPolicy() {

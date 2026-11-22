@@ -864,9 +864,6 @@
     <string name="toast_unfreeze_success">تم فك تجميد %1$s بنجاح</string>
     <string name="empty_apps_search">لم يتم العثور على تطبيقات مطابقة للبحث</string>
     <string name="btn_done">تم</string>
-    <string name="settings_manage_system_apps_title">إدارة وتجميد تطبيقات النظام</string>
-    <string name="settings_manage_system_apps_desc">تجميد خدمات وتطبيقات النظام غير المرغوبة أو فك تجميدها</string>
-    <string name="btn_open_system_apps_manager">إدارة التطبيقات المجمّدة</string>
 
     <!-- OTA Auto-Update & Maintenance -->
     <string name="card_ota_title">تحديثات النظام</string>
