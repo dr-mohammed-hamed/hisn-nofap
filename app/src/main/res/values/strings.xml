@@ -1587,4 +1587,33 @@
     <string name="dialog_danger_private_space_btn_proceed">متابعة التفعيل على مسؤوليتي</string>
     <string name="dialog_danger_private_space_cleared">رائع! تم التأكد من خلو الجهاز من المساحات الخاصة، يمكنك التفعيل بأمان الآن.</string>
     <string name="dialog_danger_private_space_still_exists">تنبيه: ما زالت المساحة الخاصة أو المجلد الآمن نشطاً في الهاتف. يرجى إزالتها أولاً ثم الضغط مجدداً.</string>
+
+    <!-- Guardian Immediate Device Owner Removal (Danger Zone & Two-Stage Warning) -->
+    <string name="other_settings_danger_zone_title">منطقة الخطر: إزالة الصلاحية بالكامل</string>
+    <string name="other_settings_danger_zone_desc">إجراء خطير وفوري: يُلغي صلاحية مالك الجهاز بالكامل عن هاتف المكفول فوراً دون انتظار مهلة الـ 48 ساعة، مما يسمح بحذف التطبيق وفك كافة القيود.</string>
+    <string name="btn_remote_remove_device_owner">إزالة الصلاحية بالكامل من هاتف المكفول</string>
+    <string name="other_settings_remote_teardown_pending_status">تم إرسال أمر إزالة الصلاحية الفورية؛ سيتم التنفيذ تلقائياً بمجرد اتصال هاتف المكفول بالإنترنت.</string>
+    <string name="btn_cancel_remote_teardown">إلغاء أمر الإزالة المعلّق</string>
+    <string name="dialog_remote_teardown_stage1_title">تحذير شديد اللهجة: إزالة الحماية بالكامل!</string>
+    <string name="dialog_remote_teardown_stage1_msg">أنت على وشك إرسال أمر فوري لإزالة صلاحية مالك الجهاز (Device Owner) بالكامل من هاتف «%1$s».\n\nتنبيه هام جداً — سيترتب على هذا الإجراء فوراً:\n• تجاوز مهلة الأمان (48 ساعة) وإسقاط الصلاحية نهائياً.\n• السماح للمكفول بحذف تطبيق «حِصْن» وتنفيذ ضبط المصنع.\n• إيقاف كافة فلاتر الإنترنت والـ DNS والحظر الليلي وتجميد التطبيقات.\n• فك الارتباط وإنهاء الإشراف بينكما تلقائياً.\n• إذا كان هاتف المكفول غير متصل بالإنترنت الآن، سيُنفَّذ الأمر تلقائياً فور اتصاله.\n\nهل تريد المتابعة لخطوة التأكيد النهائي؟</string>
+    <string name="btn_remote_teardown_stage1_continue">فهمت المخاطر، متابعة</string>
+    <string name="dialog_remote_teardown_stage2_title">التأكيد النهائي القاطع</string>
+    <string name="dialog_remote_teardown_stage2_msg">بمجرد وصول هذا الأمر إلى هاتف «%1$s»، ستُزال صلاحية مالك الجهاز وتفك كافة القيود نهائياً ولا يمكن استعادتها عن بُعد إلا بإعادة التفعيل الفيزيائي للهاتف عبر ADB أو QR.</string>
+    <string name="checkbox_remote_teardown_acknowledge">أُقرّ بأنني أفهم خطورة هذا الإجراء الفوري وأنه لا يمكن التراجع عنه بعد تنفيذه على هاتف المكفول.</string>
+    <string name="btn_remote_teardown_confirm_countdown">تأكيد الإزالة (%1$d)</string>
+    <string name="btn_remote_teardown_confirm_final">تأكيد إزالة الصلاحية نهائياً</string>
+    <string name="dialog_cancel_remote_teardown_title">إلغاء أمر الإزالة المعلّق</string>
+    <string name="dialog_cancel_remote_teardown_msg">هل تريد إلغاء أمر إزالة الصلاحية الفورية المرسل لهاتف «%1$s» والإبقاء على الحماية والإشراف نشطين؟ (يعمل فقط إذا لم يكن هاتف المكفول قد نفّذ الأمر بعد).</string>
+    <string name="btn_confirm_cancel_remote_teardown">نعم، إلغاء الأمر</string>
+    <string name="toast_guardian_remote_teardown_sent">تم إرسال أمر إزالة الصلاحية الفورية؛ سيُنفّذ تلقائياً فور اتصال هاتف المكفول</string>
+    <string name="toast_guardian_remote_teardown_failed">تعذر إرسال أمر إزالة الصلاحية: %1$s</string>
+    <string name="toast_guardian_remote_teardown_cancelled">تم إلغاء أمر الإزالة المعلّق واستمرار الحماية</string>
+    <string name="toast_guardian_remote_teardown_completed">تم تنفيذ إزالة الصلاحية على هاتف المكفول بنجاح وانتهى الإشراف</string>
+    <string name="toast_guardian_supervision_ended">انتهى الإشراف على هذا الجهاز</string>
+    <string name="btn_approve_immediate_teardown">موافقة وإزالة فورية الآن</string>
+    <string name="guardian_remote_teardown_pending_banner">بانتظار تنفيذ أمر إزالة الصلاحية الفورية على هاتف «%1$s» فور اتصاله بالإنترنت.</string>
+    <string name="notif_guardian_remote_teardown_completed_title">اكتملت إزالة الصلاحية من هاتف المكفول</string>
+    <string name="notif_guardian_remote_teardown_completed_msg">نفّذ هاتف «%1$s» أمر إزالة صلاحية مالك الجهاز بالكامل بنجاح، وتم إنهاء الإشراف بأمان.</string>
+    <string name="notif_ward_remote_teardown_completed_title">تمت إزالة صلاحية مالك الجهاز</string>
+    <string name="notif_ward_remote_teardown_completed_msg">قام مشرفك بإزالة صلاحية مالك الجهاز بالكامل من هاتفك وفك كافة القيود. يمكنك حذف التطبيق الآن بأمان إن شئت.</string>
 </resources>

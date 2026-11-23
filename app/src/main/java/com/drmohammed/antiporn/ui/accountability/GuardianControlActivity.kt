@@ -156,7 +156,8 @@ class GuardianControlActivity : AppCompatActivity() {
             policyProvider = { viewModel.uiState.value.currentPolicy },
             isSelfControlAllowedProvider = { viewModel.uiState.value.isSelfControlAllowed },
             onPolicyReverted = { reverted -> viewModel.onPolicyReverted(reverted) },
-            onPolicyAcknowledged = { acknowledged -> viewModel.onPolicyAcknowledged(acknowledged) }
+            onPolicyAcknowledged = { acknowledged -> viewModel.onPolicyAcknowledged(acknowledged) },
+            onTeardownAlreadyCompleted = { handleEvent(GuardianControlEvent.SupervisionEnded) }
         )
 
         layoutWardApprovalsSection = findViewById(R.id.layoutWardApprovalsSection)
@@ -337,11 +338,15 @@ class GuardianControlActivity : AppCompatActivity() {
                 val length = if (event.isLong) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
                 Toast.makeText(this, event.message, length).show()
             }
-            is GuardianControlEvent.DnsValidationError -> {
-                // Not used directly in hub
+            is GuardianControlEvent.DnsValidationError,
+            is GuardianControlEvent.SaveSuccess -> Unit
+            is GuardianControlEvent.WardTeardownCompleted -> {
+                Toast.makeText(this, R.string.toast_guardian_remote_teardown_completed, Toast.LENGTH_LONG).show()
+                finish()
             }
-            is GuardianControlEvent.SaveSuccess -> {
-                // Handled in sub-screens
+            is GuardianControlEvent.SupervisionEnded -> {
+                Toast.makeText(this, R.string.toast_guardian_supervision_ended, Toast.LENGTH_LONG).show()
+                finish()
             }
         }
     }
@@ -387,6 +392,7 @@ class GuardianControlActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        alertsViewBinder.onDestroy()
         viewModel.stopPolicyListener()
         approvalsViewBinder.stopListening()
         super.onDestroy()

@@ -33,6 +33,8 @@ object CloudSyncManager {
     const val KEY_CLOUD_MIGRATION_CHECKED = "cloud_migration_checked"
     const val KEY_PAIRING_SESSION_CODE = "pairing_session_code"
     const val KEY_PAIRING_SESSION_EXPIRES_AT = "pairing_session_expires_at"
+    private const val KEY_PENDING_CLOUD_TEARDOWN_ACK_UID = "pending_cloud_teardown_ack_uid"
+    private const val KEY_PENDING_CLOUD_TEARDOWN_ACK_TS = "pending_cloud_teardown_ack_ts"
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -360,6 +362,41 @@ object CloudSyncManager {
         safeLog(Log.INFO, "Pairing successfully confirmed; cloud sync locked as enabled.")
     }
 
+    fun setPendingCloudTeardownAck(context: Context, uid: String, timestamp: Long) {
+        try {
+            getPrefs(context)?.edit()
+                ?.putString(KEY_PENDING_CLOUD_TEARDOWN_ACK_UID, uid)
+                ?.putLong(KEY_PENDING_CLOUD_TEARDOWN_ACK_TS, timestamp)
+                ?.commit()
+        } catch (t: Throwable) {
+            safeLog(Log.WARN, "Error storing pending cloud teardown ack: ${t.message}")
+        }
+    }
+
+    fun getPendingCloudTeardownAck(context: Context): Pair<String, Long>? {
+        return try {
+            val prefs = getPrefs(context) ?: return null
+            val uid = prefs.getString(KEY_PENDING_CLOUD_TEARDOWN_ACK_UID, null)?.takeIf { it.isNotBlank() } ?: return null
+            val ts = prefs.getLong(KEY_PENDING_CLOUD_TEARDOWN_ACK_TS, 0L)
+            if (ts <= 0L) null else uid to ts
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    fun clearPendingCloudTeardownAck(context: Context) {
+        try {
+            getPrefs(context)?.edit()
+                ?.remove(KEY_PENDING_CLOUD_TEARDOWN_ACK_UID)
+                ?.remove(KEY_PENDING_CLOUD_TEARDOWN_ACK_TS)
+                ?.commit()
+        } catch (t: Throwable) {
+            safeLog(Log.WARN, "Error clearing pending cloud teardown ack: ${t.message}")
+        }
+    }
+
+    fun hasPendingCloudTeardownAck(context: Context): Boolean = getPendingCloudTeardownAck(context) != null
+
     /**
      * Synchronous suspend evaluation of supervision relationships.
      */
@@ -370,13 +407,14 @@ object CloudSyncManager {
             val policy = db.devicePolicyDao().getDevicePolicyBlocking()?.toBundle()
             val isSupervised = policy?.isSupervised == true || !policy?.guardianUid.isNullOrBlank()
             val activePartners = db.partnerDao().getAllPartnersBlocking().filter { it.status == PartnerEntity.STATUS_ACTIVE }
+            val hasPendingTeardownAck = hasPendingCloudTeardownAck(appCtx)
 
-            if (!isSupervised && activePartners.isEmpty()) {
+            if (!isSupervised && activePartners.isEmpty() && !hasPendingTeardownAck) {
                 safeLog(Log.INFO, "No active supervision relationships found. Rolling back cloud sync to false.")
                 currentPairingSession = null
                 setCloudSyncEnabled(appCtx, false)
             } else {
-                safeLog(Log.DEBUG, "Active relationships exist (supervised=$isSupervised, partners=${activePartners.size}); retaining cloud sync.")
+                safeLog(Log.DEBUG, "Retaining cloud sync (supervised=$isSupervised, partners=${activePartners.size}, pendingTeardownAck=$hasPendingTeardownAck).")
             }
         } catch (e: Exception) {
             safeLog(Log.WARN, "Error evaluating auto-rollback: ${e.message}")

@@ -419,10 +419,33 @@ object BankingCloakManager {
     }
 
     /**
+     * إلغاء جميع منبهات وإشعارات وحالة التخفي البنكي أثناء تفكيك صلاحيات مالك الجهاز
+     * دون إعادة تفعيل خدمة إمكانية الوصول.
+     */
+    @Synchronized
+    fun clearForTeardown(context: Context) {
+        cloakGeneration++
+        cloakGraceUntilElapsedMs = 0L
+        cancelPendingLaunch()
+        val appContext = context.applicationContext ?: context
+        cancelRestoreAlarm(appContext)
+        cancelNotification(appContext, NotificationRegistry.EVENT_BANKING_CLOAK_ACTIVE_ID)
+        cancelNotification(appContext, NotificationRegistry.EVENT_BANKING_MANUAL_RESTORE_ID)
+        AccessibilitySelfActivator.clearCloakState(appContext)
+        activeTargetPackage = INSTAPAY_PACKAGE
+        clearPersistedActiveTargetPackage(appContext)
+        Timber.tag(TAG).i("Cleared BankingCloak state, alarms, and notifications during teardown")
+    }
+
+    /**
      * استعادة حماية خدمة الوصول وفق السياسة النشطة وإلغاء المنبه وإشعار التخفي فوراً.
      */
     @Synchronized
     fun restoreProtection(context: Context) {
+        if (com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isTeardownInProgress) {
+            clearForTeardown(context)
+            return
+        }
         cloakGeneration++
         cloakGraceUntilElapsedMs = 0L
         cancelPendingLaunch()

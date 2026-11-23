@@ -44,6 +44,7 @@ internal suspend fun AccountabilityRepository.syncPartnersFromCloudInternal(): R
                 myPolicyDoc.getBoolean("isSupervised") == true &&
                 !myPolicyDoc.getString("guardianUid").isNullOrBlank()
 
+            val tombstonedWards = getTombstonedTeardownWards()
             val cloudPartnersSnapshot = firestore.collection("users").document(myUid)
                 .collection("partners").get().await()
 
@@ -54,6 +55,21 @@ internal suspend fun AccountabilityRepository.syncPartnersFromCloudInternal(): R
                 val role = doc.getString("role") ?: PartnerEntity.ROLE_WARD
                 val pairingCode = doc.getString("pairingCode") ?: AccountabilityRepository.CODE_LOCKED
                 val pairedAt = doc.getLong("pairedAt") ?: TrustedTimeProvider.currentTimeMillis(appContext)
+
+                if (role == PartnerEntity.ROLE_WARD &&
+                    (tombstonedWards.contains(doc.id) || tombstonedWards.contains(rawPartnerUid))
+                ) {
+                    try {
+                        firestore.collection("users").document(myUid)
+                            .collection("partners").document(doc.id)
+                            .delete().await()
+                        removeTombstonedTeardownWards(listOf(doc.id, rawPartnerUid))
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        Log.w(TAG, "Deferred pruning tombstoned ward ${AiTelemetryReporter.maskIdentifier(doc.id)}: ${e.message}")
+                    }
+                    continue
+                }
 
                 if (role == PartnerEntity.ROLE_GUARDIAN && !isActuallyCloudSupervised) {
                     Log.w(TAG, "[GhostGuardian] Detected orphaned guardian $maskedRawPartner in cloud while policy is unsupervised. Pruning from cloud...")
@@ -214,6 +230,8 @@ internal suspend fun AccountabilityRepository.deletePartnerInternal(partnerId: S
             .delete()
             .await()
         partnerDao.deletePartnerBlocking(partnerId)
+        clearPendingGuardianTeardownMarker(partnerId)
+        removeTombstonedTeardownWards(listOf(partnerId))
         Log.i(TAG, "Successfully deleted partner $maskedPartner from cloud and local database")
         com.drmohammed.antiporn.cloud.CloudSyncManager.checkAndAutoRollbackIfUnsupervised(appContext)
         Result.success(Unit)

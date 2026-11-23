@@ -11,6 +11,7 @@ import com.drmohammed.antiporn.telemetry.SafeDpmGateway
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import timber.log.Timber
@@ -115,9 +116,11 @@ object PageShieldReactionExecutor {
         executorScope.launch {
             // Step 2: Allow YouTube UI to pop the backstack
             delay(250L)
+            if (com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isTeardownInProgress) return@launch
 
             // Step 3: Exit to Home Screen
             service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
+            if (com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isTeardownInProgress) return@launch
 
             // Step 4: Suspend package via SafeDpmGateway
             if (SafeDpmGateway.isDeviceOwner(appContext)) {
@@ -159,6 +162,7 @@ object PageShieldReactionExecutor {
      * تفكيك آمن لكافة تجميدات درع الصفحات عند إلغاء تنصيب مسؤول الجهاز.
      */
     suspend fun teardown(context: Context) {
+        executorScope.coroutineContext.cancelChildren()
         val appContext = context.applicationContext
         Timber.tag(TAG).i("Executing PageShield teardown: clearing all frozen records and alarms...")
         val frozenRecords = PageShieldFreezeStore.getAllFrozenRecords(appContext)

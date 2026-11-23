@@ -42,6 +42,13 @@ class CloudSyncWorker(
         Timber.i("CloudSyncWorker started at $startTime (Run attempt: $runAttemptCount)")
 
         try {
+            // 0. Flush any pending post-teardown cloud completion ack before running normal sync
+            com.drmohammed.antiporn.core.engine.DeviceOwnerTeardownManager
+                .flushPendingCloudTeardownAckIfNeeded(applicationContext)
+            if (!com.drmohammed.antiporn.cloud.CloudSyncManager.isCloudSyncEnabled(applicationContext)) {
+                return@withContext Result.success()
+            }
+
             if (isStopped) return@withContext Result.retry()
 
             // 1. Update cloud heartbeat only for active supervised wards

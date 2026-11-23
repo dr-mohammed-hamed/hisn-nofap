@@ -41,16 +41,28 @@ class CurfewBootReceiver : BroadcastReceiver() {
             return
         }
 
+        if (com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isTeardownInProgress) {
+            Log.i(TAG, "Ignoring system lifecycle broadcast $action while Device Owner teardown is in progress")
+            return
+        }
+
         val pendingResult = goAsync()
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                if (com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isTeardownInProgress) {
+                    Log.i(TAG, "Aborting broadcast $action in worker coroutine because teardown is in progress")
+                    return@launch
+                }
                 Log.i(TAG, "Processing system lifecycle broadcast: $action")
 
                 CurfewEnforcer.syncBlockState(appContext)
                 CurfewScheduler.scheduleNextAlarms(appContext)
 
                 if (action == Intent.ACTION_BOOT_COMPLETED || action == Intent.ACTION_MY_PACKAGE_REPLACED) {
+                    if (com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isTeardownInProgress) {
+                        return@launch
+                    }
                     if (action == Intent.ACTION_BOOT_COMPLETED) {
                         restoreBankingCloakAfterBoot(appContext)
                     }
@@ -64,6 +76,9 @@ class CurfewBootReceiver : BroadcastReceiver() {
                 }
 
                 if (action == Intent.ACTION_TIME_CHANGED || action == Intent.ACTION_TIMEZONE_CHANGED) {
+                    if (com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isTeardownInProgress) {
+                        return@launch
+                    }
                     Log.i(TAG, "Time/Timezone change detected; re-synchronizing trusted time and policies immediately")
                     TrustedTimeProvider.syncNowAsync(appContext)
                     ProtectionEngine.applyAllAsync(appContext)

@@ -93,6 +93,12 @@ object NotificationRegistry {
     /** Emergency breakout request notification ID. */
     const val EVENT_BREAKOUT_REQUEST_ID = 8004
 
+    /** Guardian notification ID confirming ward Device Owner teardown completed. */
+    const val EVENT_GUARDIAN_TEARDOWN_COMPLETED_ID = 8005
+
+    /** Ward notification ID confirming Device Owner teardown completed by guardian. */
+    const val EVENT_WARD_TEARDOWN_COMPLETED_ID = 8006
+
     /** Ward self-control policy modification alert notification ID. */
     const val EVENT_SELF_CONTROL_ALERT_ID = 8500
 

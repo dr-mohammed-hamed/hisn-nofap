@@ -65,6 +65,7 @@ data class DevicePolicyBundle(
     val version: Long = 1L,
     val updatedAt: Long = 0L,
     val remoteSelfControlResetRequestedAt: Long? = null,
+    val remoteTeardownRequestedAt: Long? = null,
     // Ward read-only capability telemetry (NEVER written by Guardian toMap() pushes)
     val wardHasAccessibilityService: Boolean? = null,
     val wardHasUsageStats: Boolean? = null,
@@ -132,7 +133,8 @@ data class DevicePolicyBundle(
             "selfControlPageShieldAllowed" to selfControlPageShieldAllowed,
             "version" to version,
             "updatedAt" to updatedAt,
-            "remoteSelfControlResetRequestedAt" to remoteSelfControlResetRequestedAt
+            "remoteSelfControlResetRequestedAt" to remoteSelfControlResetRequestedAt,
+            "remoteTeardownRequestedAt" to remoteTeardownRequestedAt
         )
         map["guardianUid"] = guardianUid
         map["guardianName"] = guardianName
@@ -209,6 +211,7 @@ data class DevicePolicyBundle(
         if (guardianPolicySnapshot != null) json.put("guardianPolicySnapshot", guardianPolicySnapshot)
         if (lastSelfModifiedAt != null) json.put("lastSelfModifiedAt", lastSelfModifiedAt)
         if (remoteSelfControlResetRequestedAt != null) json.put("remoteSelfControlResetRequestedAt", remoteSelfControlResetRequestedAt)
+        if (remoteTeardownRequestedAt != null) json.put("remoteTeardownRequestedAt", remoteTeardownRequestedAt)
         json.put("waqfaConfig", waqfaConfig.toJson())
         json.put("pageShieldConfig", pageShieldConfig.toJson())
         json.put("selfControlPageShieldAllowed", selfControlPageShieldAllowed)
@@ -352,6 +355,7 @@ data class DevicePolicyBundle(
             val guardianPolicySnapshot = (map["guardianPolicySnapshot"] as? String)?.takeIf { it.isNotBlank() }
             val lastSelfModifiedAt = (map["lastSelfModifiedAt"] as? Number)?.toLong()
             val remoteResetAt = (map["remoteSelfControlResetRequestedAt"] as? Number)?.toLong()
+            val remoteTeardownAt = (map["remoteTeardownRequestedAt"] as? Number)?.toLong()
             val waqfa = WaqfaConfig.fromMap(map["waqfaConfig"])
             val pageShield = com.drmohammed.antiporn.pageshield.model.PageShieldConfig.fromMap(map["pageShieldConfig"])
             val selfControlPageShieldAllowed = (map["selfControlPageShieldAllowed"] as? Boolean) ?: false
@@ -415,6 +419,7 @@ data class DevicePolicyBundle(
                 selfControlPageShieldAllowed = selfControlPageShieldAllowed,
                 version = version, updatedAt = updatedAt,
                 remoteSelfControlResetRequestedAt = remoteResetAt,
+                remoteTeardownRequestedAt = remoteTeardownAt,
                 wardHasAccessibilityService = wardHasAccessibilityService,
                 wardHasUsageStats = wardHasUsageStats,
                 wardCanWriteSecureSettings = wardCanWriteSecureSettings,
@@ -500,6 +505,7 @@ data class DevicePolicyBundle(
                 val guardianPolicySnapshot = json.optNonBlankStringOrNull("guardianPolicySnapshot")
                 val lastSelfModifiedAt = if (json.has("lastSelfModifiedAt") && !json.isNull("lastSelfModifiedAt")) json.optLong("lastSelfModifiedAt") else null
                 val remoteResetAt = if (json.has("remoteSelfControlResetRequestedAt") && !json.isNull("remoteSelfControlResetRequestedAt")) json.optLong("remoteSelfControlResetRequestedAt") else null
+                val remoteTeardownAt = if (json.has("remoteTeardownRequestedAt") && !json.isNull("remoteTeardownRequestedAt")) json.optLong("remoteTeardownRequestedAt") else null
                 val waqfa = WaqfaConfig.fromJson(json.optJSONObject("waqfaConfig"))
                 val pageShield = com.drmohammed.antiporn.pageshield.model.PageShieldConfig.fromJson(json.optJSONObject("pageShieldConfig"))
                 val selfControlPageShieldAllowed = json.optBoolean("selfControlPageShieldAllowed", false)
@@ -582,6 +588,7 @@ data class DevicePolicyBundle(
                     version = json.optLong("version", 1L),
                     updatedAt = json.optLong("updatedAt", 0L),
                     remoteSelfControlResetRequestedAt = remoteResetAt,
+                    remoteTeardownRequestedAt = remoteTeardownAt,
                     wardHasAccessibilityService = wardHasAccessibilityService,
                     wardHasUsageStats = wardHasUsageStats,
                     wardCanWriteSecureSettings = wardCanWriteSecureSettings,

@@ -108,18 +108,54 @@ class AccountabilityRepository(
                 val maskedOldUid = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(oldUid)
                 Log.i(TAG, "UID transitioned from $maskedOldUid to $maskedUid. Invalidating old cached pairing code.")
                 prefs.edit().remove(KEY_MY_PAIRING_CODE).apply()
+                val migrationSecret = consumePendingMigrationSecret(oldUid)
                 repositoryScope.launch(Dispatchers.IO) {
-                    migrateUserIdentity(oldUid, uid)
+                    migrateUserIdentity(oldUid, uid, migrationSecret)
                 }
             }
         }
     }
 
     /**
+     * Generates and uploads a short-lived write-only migration secret while authenticated as [oldUid]
+     * so the destination account can securely publish a forwarding alias in `/uid_mappings/{oldUid}`.
+     */
+    suspend fun prepareMigrationTokenForCurrentUser(oldUid: String) = withContext(Dispatchers.IO) {
+        if (oldUid.isBlank() || oldUid.startsWith("dev_")) return@withContext
+        if (auth.currentUser?.uid != oldUid) return@withContext
+        try {
+            val bytes = ByteArray(32)
+            SecureRandom().nextBytes(bytes)
+            val secret = bytes.joinToString("") { "%02x".format(it) }
+            val expiresAt = TrustedTimeProvider.currentTimeMillis(appContext) + 5 * 60 * 1000L
+            firestore.collection("uid_migration_tokens").document(oldUid)
+                .set(mapOf("secret" to secret, "expiresAt" to expiresAt))
+                .await()
+            prefs.edit()
+                .putString(KEY_PENDING_MIGRATION_OLD_UID, oldUid)
+                .putString(KEY_PENDING_MIGRATION_SECRET, secret)
+                .commit()
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Log.w(TAG, "Failed preparing migration token for UID ${com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(oldUid)}: ${e.message}")
+        }
+    }
+
+    private fun consumePendingMigrationSecret(oldUid: String): String? {
+        val storedOldUid = prefs.getString(KEY_PENDING_MIGRATION_OLD_UID, null)
+        val secret = prefs.getString(KEY_PENDING_MIGRATION_SECRET, null)
+        prefs.edit()
+            .remove(KEY_PENDING_MIGRATION_OLD_UID)
+            .remove(KEY_PENDING_MIGRATION_SECRET)
+            .apply()
+        return if (storedOldUid == oldUid && !secret.isNullOrBlank()) secret else null
+    }
+
+    /**
      * Migrates user identity in Firestore from [oldUid] to [newUid].
      */
-    suspend fun migrateUserIdentity(oldUid: String, newUid: String) =
-        identityMigrator.migrateUserIdentity(oldUid, newUid)
+    suspend fun migrateUserIdentity(oldUid: String, newUid: String, migrationSecret: String? = null) =
+        identityMigrator.migrateUserIdentity(oldUid, newUid, migrationSecret)
 
     /**
      * Resolves the active UID for a partner, healing stale references caused by identity migrations.
@@ -212,7 +248,8 @@ class AccountabilityRepository(
                 registered = true
                 val maskedCode = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(code)
                 val maskedUid = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(uid)
-                Timber.tag(TAG).i("Successfully registered pairing code %s for UID %s (name: %s, policyVersion: %d)", maskedCode, maskedUid, deviceName, currentLocalPolicy.version)
+                val maskedName = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(deviceName)
+                Timber.tag(TAG).i("Successfully registered pairing code %s for UID %s (name: %s, policyVersion: %d)", maskedCode, maskedUid, maskedName, currentLocalPolicy.version)
                 com.drmohammed.antiporn.telemetry.BlackBoxRecorder.recordPairing(
                     appContext,
                     "CODE_REGISTERED",
@@ -326,6 +363,7 @@ class AccountabilityRepository(
                 val myPolicyDoc = try {
                     firestore.collection("policies").document(myUid).get().await()
                 } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     Log.w(TAG, "My policy doc not readable or doesn't exist yet: ${e.message}")
                     null
                 }
@@ -384,14 +422,17 @@ class AccountabilityRepository(
                 .set(relationData)
                 .await()
 
-            // Save locally in SQLite
+            // Save locally in SQLite and clear any historical teardown markers/tombstones for this partner
             partnerDao.savePartnerBlocking(partner)
+            clearPendingGuardianTeardownMarker(targetUid)
+            removeTombstonedTeardownWards(listOf(targetUid))
 
             // Confirm cloud sync permanently enabled upon successful pairing
             com.drmohammed.antiporn.cloud.CloudSyncManager.confirmPairingSuccess(appContext)
 
             val maskedTargetUid = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(targetUid)
-            Log.i(TAG, "Successfully paired with $targetName ($maskedTargetUid) as $role under strict single guardian lock")
+            val maskedTargetName = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(targetName)
+            Log.i(TAG, "Successfully paired with $maskedTargetName ($maskedTargetUid) as $role under strict single guardian lock")
             com.drmohammed.antiporn.telemetry.BlackBoxRecorder.recordPairing(
                 appContext,
                 "PAIR_SUCCESS",
@@ -466,8 +507,9 @@ class AccountabilityRepository(
                     Log.w(TAG, "Cloud partner relation delete warning for UID ${com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(targetUid)}: ${e.message}")
                 }
 
-                // Delete locally from SQLite
+                // Delete locally from SQLite and clear any pending remote teardown marker
                 partnerDao.deletePartnerBlocking(targetUid)
+                clearPendingGuardianTeardownMarker(targetUid)
             }
 
             val maskedTargets = targetUids.joinToString(",") {
@@ -526,6 +568,7 @@ class AccountabilityRepository(
                                 .delete().await()
                             Log.d(TAG, "Pruned revoked guardian ${com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(guardian.id)} from cloud /users/${com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(uid)}/partners")
                         } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
                             Log.w(TAG, "Failed pruning revoked guardian from cloud: ${e.message}")
                         }
                     }
@@ -542,6 +585,7 @@ class AccountabilityRepository(
                         firestore.collection("pairings").document(oldCode).delete().await()
                         Log.d(TAG, "Deleted old pairing code ${com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(oldCode)} from Firestore")
                     } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
                         Log.w(TAG, "Old pairing code delete non-critical: ${e.message}")
                     }
                 }
@@ -609,6 +653,12 @@ class AccountabilityRepository(
                     PolicyRepository.getInstance(appContext).updateLocalPolicyAndEnforce(cloudPolicy)
                     onSupervisionRevokedLocally()
                     return@withContext true
+                } else {
+                    val executedTeardown = PolicyRepository.getInstance(appContext)
+                        .checkAndExecutePendingGuardianTeardown(cloudPolicy)
+                    if (executedTeardown) {
+                        return@withContext true
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -695,6 +745,8 @@ class AccountabilityRepository(
         internal const val KEY_MY_PAIRING_CODE = "key_my_pairing_code"
         internal const val KEY_MY_DISPLAY_NAME = "key_my_display_name"
         private const val KEY_PERSISTED_UID = "key_persisted_uid"
+        private const val KEY_PENDING_MIGRATION_OLD_UID = "key_pending_migration_old_uid"
+        private const val KEY_PENDING_MIGRATION_SECRET = "key_pending_migration_secret"
         const val CODE_LOCKED = "LOCKED"
 
         @Volatile

@@ -100,7 +100,8 @@ class GoogleAuthManager(context: Context) {
                             Log.w(TAG, "Cannot switch to existing Google account while device is supervised")
                             throw IllegalStateException(appContext.getString(R.string.error_switch_account_while_supervised))
                         }
-                        Log.w(TAG, "Google account already exists in Firebase. Signing into existing account instead...")
+                        Log.w(TAG, "Google account already exists in Firebase. Preparing migration token and signing into existing account...")
+                        AccountabilityRepository.getInstance(appContext).prepareMigrationTokenForCurrentUser(currentUser.uid)
                         val signInResult = auth.signInWithCredential(firebaseCredential).await()
                         signInResult.user ?: throw collisionEx
                     }

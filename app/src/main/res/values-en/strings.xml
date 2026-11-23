@@ -1310,4 +1310,33 @@
     <string name="dialog_danger_private_space_btn_proceed">Proceed at My Own Risk</string>
     <string name="dialog_danger_private_space_cleared">Great! No conflicting profiles found. You may now safely activate.</string>
     <string name="dialog_danger_private_space_still_exists">Warning: Secure Folder / Private Space is still active. Please remove it first, then tap re-check.</string>
+
+    <!-- Guardian Immediate Device Owner Removal (Danger Zone & Two-Stage Warning) -->
+    <string name="other_settings_danger_zone_title">Danger Zone: Full Permission Removal</string>
+    <string name="other_settings_danger_zone_desc">Critical immediate action: Completely strips Device Owner permissions from the ward\'s phone right away without waiting 48 hours, allowing uninstallation and lifting all restrictions.</string>
+    <string name="btn_remote_remove_device_owner">Remove All Permissions from Ward Device</string>
+    <string name="other_settings_remote_teardown_pending_status">Immediate removal command queued; it will execute automatically as soon as the ward\'s phone connects to the internet.</string>
+    <string name="btn_cancel_remote_teardown">Cancel Pending Removal</string>
+    <string name="dialog_remote_teardown_stage1_title">Severe Warning: Complete Protection Removal!</string>
+    <string name="dialog_remote_teardown_stage1_msg">You are about to send an immediate command to completely remove Device Owner permissions from \"%1$s\"\'s phone.\n\nCRITICAL CONSEQUENCES — This will immediately:\n• Bypass the 48-hour safety delay and strip Device Owner permanently.\n• Allow the ward to uninstall Hisn and perform a factory reset.\n• Disable all internet/DNS filtering, curfew blackouts, and app suspensions.\n• End supervision and unlink the two devices automatically.\n• If the ward\'s phone is offline right now, it will execute automatically upon reconnecting.\n\nDo you want to proceed to final confirmation?</string>
+    <string name="btn_remote_teardown_stage1_continue">I Understand, Continue</string>
+    <string name="dialog_remote_teardown_stage2_title">Final Irreversible Confirmation</string>
+    <string name="dialog_remote_teardown_stage2_msg">Once this command reaches \"%1$s\"\'s phone, Device Owner privileges and all protections will be permanently removed and cannot be restored remotely without physical re-provisioning.</string>
+    <string name="checkbox_remote_teardown_acknowledge">I acknowledge the severity of this immediate action and that it cannot be undone once executed on the ward\'s device.</string>
+    <string name="btn_remote_teardown_confirm_countdown">Confirm Removal (%1$d)</string>
+    <string name="btn_remote_teardown_confirm_final">Permanently Remove Permissions</string>
+    <string name="dialog_cancel_remote_teardown_title">Cancel Pending Removal</string>
+    <string name="dialog_cancel_remote_teardown_msg">Do you want to cancel the pending immediate removal command for \"%1$s\" and keep protection and supervision active? (Only effective if the ward\'s phone has not executed it yet).</string>
+    <string name="btn_confirm_cancel_remote_teardown">Yes, Cancel Command</string>
+    <string name="toast_guardian_remote_teardown_sent">Immediate removal command sent; will execute automatically as soon as the ward is online</string>
+    <string name="toast_guardian_remote_teardown_failed">Failed to send permission removal command: %1$s</string>
+    <string name="toast_guardian_remote_teardown_cancelled">Pending removal command cancelled; protection remains active</string>
+    <string name="toast_guardian_remote_teardown_completed">Device Owner permissions removed from ward device; supervision ended</string>
+    <string name="toast_guardian_supervision_ended">Supervision for this device has ended</string>
+    <string name="btn_approve_immediate_teardown">Approve &amp; Remove Now</string>
+    <string name="guardian_remote_teardown_pending_banner">Waiting for \"%1$s\"\'s phone to execute the immediate permission removal once online.</string>
+    <string name="notif_guardian_remote_teardown_completed_title">Ward Permission Removal Completed</string>
+    <string name="notif_guardian_remote_teardown_completed_msg">\"%1$s\"\'s phone successfully completed full Device Owner removal and supervision has safely ended.</string>
+    <string name="notif_ward_remote_teardown_completed_title">Device Owner Permissions Removed</string>
+    <string name="notif_ward_remote_teardown_completed_msg">Your guardian removed Device Owner permissions and lifted all restrictions from your phone. You may now safely uninstall the app if desired.</string>
 </resources>

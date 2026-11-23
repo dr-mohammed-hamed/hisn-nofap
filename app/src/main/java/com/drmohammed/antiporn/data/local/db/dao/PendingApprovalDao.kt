@@ -141,4 +141,7 @@ interface PendingApprovalDao {
 
     @Query("DELETE FROM pending_approvals WHERE package_name = :packageName")
     fun deletePendingApprovalBlocking(packageName: String): Int
+
+    @Query("DELETE FROM pending_approvals")
+    fun clearAllPendingApprovalsBlocking(): Int
 }

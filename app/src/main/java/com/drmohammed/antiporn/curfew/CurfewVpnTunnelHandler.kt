@@ -1,0 +1,141 @@
+package com.drmohammed.antiporn.curfew
+
+import android.content.Context
+import android.net.VpnService
+import android.os.Build
+import com.drmohammed.antiporn.R
+import com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard
+import com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService.VpnMode
+import com.drmohammed.antiporn.telemetry.SafeDpmGateway
+import timber.log.Timber
+
+/**
+ * Configures TUN builder routes, bypassed application exclusions, and Always-On VPN
+ * DevicePolicyManager bindings for [CurfewBlackholeVpnService].
+ */
+internal object CurfewVpnTunnelHandler {
+
+    private const val TAG = "AntiPorn_UnifiedVpn"
+
+    data class TunnelConfigResult(
+        val builder: VpnService.Builder,
+        val appliedBypassedPackages: Set<String>?
+    )
+
+    fun prepareTunnelConfig(
+        service: CurfewBlackholeVpnService,
+        appContext: Context,
+        targetMode: VpnMode,
+        lastBypassedPackages: Set<String>?
+    ): TunnelConfigResult {
+        val sessionName = if (targetMode == VpnMode.CURFEW_BLACKHOLE) {
+            service.getString(R.string.curfew_vpn_session_name)
+        } else {
+            service.getString(R.string.curfew_vpn_dns_filter_session)
+        }
+
+        val builder = service.createTunnelBuilder()
+            .setSession(sessionName)
+            .addAddress("10.255.255.1", 30)
+            .setMtu(1500)
+            .setBlocking(true)
+
+        if (targetMode == VpnMode.DNS_FILTERING_ONLY) {
+            configureDnsSinkholeRoutes(builder)
+        } else {
+            builder.addDnsServer("10.255.255.1")
+            builder.addAddress("fd00::1", 126)
+            builder.addDnsServer("fd00::1")
+            builder.addRoute("0.0.0.0", 0)
+            builder.addRoute("::", 0)
+        }
+
+        builder.addDisallowedApplication(service.packageName)
+
+        var appliedBypassedPackages: Set<String>? = null
+        if (targetMode == VpnMode.CURFEW_BLACKHOLE) {
+            val bypassedPackages = CurfewConfig.getVpnBypassedPackages(appContext)
+            appliedBypassedPackages = bypassedPackages
+            syncAlwaysOnBlackhole(appContext, service.packageName, bypassedPackages, lastBypassedPackages)
+            for (pkg in bypassedPackages) {
+                if (pkg == service.packageName) continue
+                try {
+                    builder.addDisallowedApplication(pkg)
+                } catch (e: Exception) {
+                    Timber.tag(TAG).w(e, "Failed to bypass package $pkg from VPN")
+                }
+            }
+        } else {
+            syncAlwaysOnDnsMode(appContext, targetMode)
+        }
+
+        return TunnelConfigResult(builder, appliedBypassedPackages)
+    }
+
+    private fun configureDnsSinkholeRoutes(builder: VpnService.Builder) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            builder.setMetered(false)
+        }
+        builder.addDnsServer("10.255.255.2")
+        builder.addRoute("10.255.255.2", 32)
+        // Sinkhole hardcoded public IPv4 DNS/DoH resolvers (Hisn is excluded via addDisallowedApplication + protect())
+        builder.addRoute("8.8.8.8", 32)
+        builder.addRoute("8.8.4.4", 32)
+        builder.addRoute("1.1.1.1", 32)
+        builder.addRoute("1.0.0.1", 32)
+        builder.addRoute("9.9.9.9", 32)
+        builder.addRoute("149.112.112.112", 32)
+        builder.addAddress("fd00::1", 126)
+        builder.addDnsServer("fd00::2")
+        builder.addRoute("fd00::2", 128)
+        builder.addRoute("2001:4860:4860::8888", 128)
+        builder.addRoute("2001:4860:4860::8844", 128)
+        builder.addRoute("2606:4700:4700::1111", 128)
+        builder.addRoute("2606:4700:4700::1001", 128)
+        // Note: Cloudflare Family IPv6 (2606:4700:4700::1113 / 1003) is intentionally omitted
+        // from TUN sinkholing to allow Android's Private DNS probe to validate connectivity
+        // cleanly when Private DNS remains pointing to family.cloudflare-dns.com.
+    }
+
+    private fun syncAlwaysOnBlackhole(
+        appContext: Context,
+        selfPackage: String,
+        bypassedPackages: Set<String>,
+        lastBypassedPackages: Set<String>?
+    ) {
+        if (ProtectionTransitionGuard.isTeardownInProgress || !SafeDpmGateway.isDeviceOwner(appContext)) return
+        try {
+            val alwaysOnPkg = SafeDpmGateway.getAlwaysOnVpnPackageBlocking(appContext, recordSuccess = false).getOrNull()
+            val isLockdown = SafeDpmGateway.isAlwaysOnVpnLockdownEnabledBlocking(appContext, recordSuccess = false).getOrNull() == true
+            if (alwaysOnPkg != selfPackage || !isLockdown || lastBypassedPackages != bypassedPackages) {
+                SafeDpmGateway.setAlwaysOnVpnPackageBlocking(
+                    context = appContext,
+                    vpnPackage = selfPackage,
+                    lockdown = true,
+                    bypassedPackages = bypassedPackages
+                )
+            }
+        } catch (e: Exception) {
+            Timber.tag(TAG).w(e, "Could not update Always-On VPN lockdown bypassed packages")
+        }
+    }
+
+    private fun syncAlwaysOnDnsMode(appContext: Context, targetMode: VpnMode) {
+        if (ProtectionTransitionGuard.isTeardownInProgress || !SafeDpmGateway.isDeviceOwner(appContext)) return
+        try {
+            val alwaysOnPkg = SafeDpmGateway.getAlwaysOnVpnPackageBlocking(appContext, recordSuccess = false).getOrNull()
+            val isLockdown = SafeDpmGateway.isAlwaysOnVpnLockdownEnabledBlocking(appContext, recordSuccess = false).getOrNull() == true
+            val targetAlwaysOnPkg = CurfewVpnDnsBridge.resolveTargetAlwaysOnPackage(appContext, targetMode)
+            if (alwaysOnPkg != targetAlwaysOnPkg || isLockdown) {
+                SafeDpmGateway.setAlwaysOnVpnPackageBlocking(
+                    context = appContext,
+                    vpnPackage = targetAlwaysOnPkg,
+                    lockdown = false
+                )
+                Timber.tag(TAG).i("Always-On VPN configured to target=$targetAlwaysOnPkg with lockdown=false for daytime DNS mode")
+            }
+        } catch (e: Exception) {
+            Timber.tag(TAG).w(e, "Could not configure Always-On VPN for daytime DNS mode")
+        }
+    }
+}

@@ -65,6 +65,10 @@ internal class PolicyEnforcementHandler(
     private var pendingBaselinePreviousPolicy: DevicePolicyBundle? = null
 
     fun enqueueApply(bundle: DevicePolicyBundle, previousPolicy: DevicePolicyBundle) {
+        if (com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isTeardownInProgress) {
+            Log.d(TAG, "Skipping enqueueApply v${bundle.version} because teardown is in progress")
+            return
+        }
         val applySeq = policyApplySequence.incrementAndGet()
         synchronized(baselineLock) {
             if (pendingBaselinePreviousPolicy == null) {
@@ -90,11 +94,24 @@ internal class PolicyEnforcementHandler(
         }
     }
 
+    internal suspend fun awaitIdle() {
+        policyApplyMutex.withLock {
+            // Waits for any currently running policy enforcement pass to drain cleanly
+        }
+    }
+
     private suspend fun applyInternal(
         bundle: DevicePolicyBundle,
         effectivePreviousPolicy: DevicePolicyBundle
     ) {
+        if (com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isTeardownInProgress) {
+            Log.d(TAG, "Aborting applyInternal v${bundle.version} because teardown is in progress")
+            return
+        }
         com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.runInternalTransitionSuspend {
+            if (com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isTeardownInProgress) {
+                return@runInternalTransitionSuspend
+            }
             var appliedSuccessfully = false
             try {
                 val isDeviceOwner = SafeDpmGateway.isDeviceOwner(appContext)

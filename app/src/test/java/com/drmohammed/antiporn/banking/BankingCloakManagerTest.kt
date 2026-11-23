@@ -56,6 +56,7 @@ class BankingCloakManagerTest {
 
     @After
     fun tearDown() {
+        com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isTeardownInProgress = false
         BankingCloakManager.resetForTesting()
         AccessibilitySelfActivator.enableSilently(dummyContext, forceUncloak = true)
         TrustedTimeProvider.resetForTesting()
@@ -409,6 +410,26 @@ class BankingCloakManagerTest {
         assertTrue(BankingCloakManager.isCloaked)
 
         BankingCloakManager.restoreProtection(dummyContext)
+    }
+
+    @Test
+    fun testRestoreProtection_duringTeardownClearsCloakAndActiveTargetPackage() {
+        val prefs = InMemorySharedPreferences()
+        val cibPkg = "com.cib.cibmobilebanking"
+        val persistentContext = DummyBankingContext(sharedPrefs = prefs).apply {
+            installedPackages.add(cibPkg)
+        }
+
+        assertTrue(BankingCloakManager.launchSafely(persistentContext, cibPkg))
+        assertTrue(BankingCloakManager.isCloaked(persistentContext))
+        assertEquals(cibPkg, BankingCloakManager.activeTargetPackage)
+
+        com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isTeardownInProgress = true
+        BankingCloakManager.restoreProtection(persistentContext)
+
+        assertFalse(BankingCloakManager.isCloaked(persistentContext))
+        assertFalse(AccessibilitySelfActivator.hasPendingCloakFlag(persistentContext))
+        assertEquals(BankingCloakManager.INSTAPAY_PACKAGE, BankingCloakManager.activeTargetPackage)
     }
 
     // =========================================================================

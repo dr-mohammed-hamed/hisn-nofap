@@ -1,13 +1,14 @@
 package com.drmohammed.antiporn.accountability.coordinator
 
+import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.notification.model.NotificationActionType
 import com.drmohammed.antiporn.notification.model.NotificationCategory
 import com.drmohammed.antiporn.notification.registry.NotificationRegistry
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.math.absoluteValue
 
 class GuardianSupervisionCoordinatorTest {
 
@@ -87,5 +88,65 @@ class GuardianSupervisionCoordinatorTest {
         assertEquals(8004, NotificationRegistry.EVENT_BREAKOUT_REQUEST_ID)
         assertEquals(7001, NotificationRegistry.EVENT_SYSTEM_TAMPER_ID)
         assertEquals(8500, NotificationRegistry.EVENT_SELF_CONTROL_ALERT_ID)
+    }
+
+    @Test
+    fun testRemoteTeardown_suppressesPendingDeactivationNotificationAlert() {
+        val now = 1_790_000_000_000L
+        // Normal ward-initiated deactivation (no remoteTeardownRequestedAt) MUST alert guardian
+        assertTrue(
+            GuardianSupervisionCoordinator.isPendingGuardianDeactivationAlert(
+                deactivationStatus = DevicePolicyBundle.DEACTIVATION_STATUS_PENDING,
+                remoteTeardownRequestedAt = 0L,
+                deactivationUnlockAt = now + 60_000L,
+                nowMs = now
+            )
+        )
+        // Guardian-initiated immediate teardown (remoteTeardownRequestedAt > 0L) MUST NOT alert as breakout/deactivation request
+        assertFalse(
+            GuardianSupervisionCoordinator.isPendingGuardianDeactivationAlert(
+                deactivationStatus = DevicePolicyBundle.DEACTIVATION_STATUS_PENDING,
+                remoteTeardownRequestedAt = now - 10_000L,
+                deactivationUnlockAt = now + 60_000L,
+                nowMs = now
+            )
+        )
+        // Completed status never posts deactivation alert
+        assertFalse(
+            GuardianSupervisionCoordinator.isPendingGuardianDeactivationAlert(
+                deactivationStatus = DevicePolicyBundle.DEACTIVATION_STATUS_COMPLETED,
+                remoteTeardownRequestedAt = 0L,
+                deactivationUnlockAt = now + 60_000L,
+                nowMs = now
+            )
+        )
+    }
+
+    @Test
+    fun testRemoteTeardown_completionDetectorRequiresCompletedAndPendingMarker() {
+        assertTrue(
+            GuardianSupervisionCoordinator.shouldHandleRemoteTeardownCompletion(
+                deactivationStatus = DevicePolicyBundle.DEACTIVATION_STATUS_COMPLETED,
+                isPendingGuardianTeardown = true
+            )
+        )
+        assertTrue(
+            GuardianSupervisionCoordinator.shouldHandleRemoteTeardownCompletion(
+                deactivationStatus = "completed",
+                isPendingGuardianTeardown = true
+            )
+        )
+        assertFalse(
+            GuardianSupervisionCoordinator.shouldHandleRemoteTeardownCompletion(
+                deactivationStatus = DevicePolicyBundle.DEACTIVATION_STATUS_COMPLETED,
+                isPendingGuardianTeardown = false
+            )
+        )
+        assertFalse(
+            GuardianSupervisionCoordinator.shouldHandleRemoteTeardownCompletion(
+                deactivationStatus = DevicePolicyBundle.DEACTIVATION_STATUS_PENDING,
+                isPendingGuardianTeardown = true
+            )
+        )
     }
 }

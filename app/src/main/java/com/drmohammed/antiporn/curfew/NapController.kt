@@ -231,6 +231,14 @@ object NapController {
         }
     }
 
+    /**
+     * Clears any active Nap session exclusively during Device Owner teardown.
+     */
+    @Synchronized
+    internal fun clearNapForTeardown(context: Context) {
+        clearNap(context)
+    }
+
     @Synchronized
     private fun clearNap(context: Context) {
         try {
@@ -241,7 +249,7 @@ object NapController {
                 .putLong(NapConfig.KEY_NAP_END_ELAPSED, 0L)
                 .putLong(NapConfig.KEY_NAP_END_WALL_MS, 0L)
                 .putInt(NapConfig.KEY_NAP_BOOT_COUNT, -1)
-                .apply()
+                .commit()
         } catch (e: Exception) {
             Log.e(TAG, "clearNap failed", e)
         }

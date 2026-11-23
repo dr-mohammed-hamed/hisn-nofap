@@ -6,14 +6,18 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
-import com.drmohammed.antiporn.core.network.DnsFilteringValidator
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
+import com.drmohammed.antiporn.telemetry.AiTelemetryReporter
 import com.drmohammed.antiporn.curfew.CurfewConfig
 import com.drmohammed.antiporn.data.local.db.HisnRoomDatabase
 import com.drmohammed.antiporn.data.local.db.dao.PartnerDao
 import com.drmohammed.antiporn.data.repository.AccountabilityRepository
 import com.drmohammed.antiporn.data.repository.PolicyRepository
+import com.drmohammed.antiporn.data.repository.completeGuardianSideTeardownCleanup
+import com.drmohammed.antiporn.data.repository.isPendingGuardianTeardown
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Source
 import kotlinx.coroutines.CancellationException
@@ -95,8 +99,12 @@ class GuardianControlViewModel(
                     state.wardName
                 }
 
+                val maskedOldId = AiTelemetryReporter.maskIdentifier(state.wardId)
+                val maskedActiveId = AiTelemetryReporter.maskIdentifier(activeWardId)
+                val maskedName = AiTelemetryReporter.maskIdentifier(resolvedWardName)
+
                 if (activeWardId != state.wardId || resolvedWardName != state.wardName) {
-                    Log.i(TAG, "[UidMigration] GuardianControlViewModel switched wardId from ${state.wardId} to $activeWardId (name: $resolvedWardName)")
+                    Log.i(TAG, "[UidMigration] GuardianControlViewModel switched wardId from $maskedOldId to $maskedActiveId (name: $maskedName)")
                     _uiState.update { it.copy(wardId = activeWardId, wardName = resolvedWardName) }
                 }
 
@@ -108,13 +116,27 @@ class GuardianControlViewModel(
                     snapshot = firestore.collection("policies").document(activeWardId).get().await()
                 } catch (netEx: Exception) {
                     if (netEx is CancellationException) throw netEx
-                    Log.w(TAG, "Network fetch failed for ward policy $activeWardId, attempting offline cache", netEx)
+                    if (netEx is FirebaseFirestoreException &&
+                        netEx.code == FirebaseFirestoreException.Code.PERMISSION_DENIED &&
+                        FirebaseAuth.getInstance().currentUser != null &&
+                        (accountabilityRepository.isPendingGuardianTeardown(activeWardId) ||
+                            partnerDao.getPartnerById(activeWardId) == null)
+                    ) {
+                        val cleaned = accountabilityRepository.completeGuardianSideTeardownCleanup(activeWardId, resolvedWardName)
+                        _uiState.update { it.copy(isLoading = false) }
+                        _events.send(
+                            if (cleaned) GuardianControlEvent.WardTeardownCompleted
+                            else GuardianControlEvent.SupervisionEnded
+                        )
+                        return@launch
+                    }
+                    Log.w(TAG, "Network fetch failed for ward policy $maskedActiveId, attempting offline cache", netEx)
                     isOffline = true
                     try {
                         snapshot = firestore.collection("policies").document(activeWardId).get(Source.CACHE).await()
                     } catch (cacheEx: Exception) {
                         if (cacheEx is CancellationException) throw cacheEx
-                        Log.w(TAG, "Cache fetch failed or empty for ward $activeWardId", cacheEx)
+                        Log.w(TAG, "Cache fetch failed or empty for ward $maskedActiveId", cacheEx)
                     }
                 }
 
@@ -126,11 +148,24 @@ class GuardianControlViewModel(
                     DevicePolicyBundle.defaultPolicy()
                 }
 
+                if (isLivePolicy &&
+                    policy.deactivationStatus == DevicePolicyBundle.DEACTIVATION_STATUS_COMPLETED &&
+                    (accountabilityRepository.isPendingGuardianTeardown(activeWardId) || !policy.isSupervised)
+                ) {
+                    val cleaned = accountabilityRepository.completeGuardianSideTeardownCleanup(activeWardId, resolvedWardName)
+                    _uiState.update { it.copy(isLoading = false) }
+                    _events.send(
+                        if (cleaned) GuardianControlEvent.WardTeardownCompleted
+                        else GuardianControlEvent.SupervisionEnded
+                    )
+                    return@launch
+                }
+
                 com.drmohammed.antiporn.telemetry.BlackBoxRecorder.recordCloudSync(
                     app,
                     "WARD_POLICY_FETCH",
                     isSuccess = isLivePolicy && !isOffline,
-                    details = "wardId=$activeWardId, isLive=$isLivePolicy, offline=$isOffline, curfew=${policy.curfewStartHour}:${policy.curfewStartMinute}-${policy.curfewEndHour}:${policy.curfewEndMinute}, selfControl=${policy.isSelfControlAllowed}"
+                    details = "wardId=$maskedActiveId, isLive=$isLivePolicy, offline=$isOffline, curfew=${policy.curfewStartHour}:${policy.curfewStartMinute}-${policy.curfewEndHour}:${policy.curfewEndMinute}, selfControl=${policy.isSelfControlAllowed}"
                 )
 
                 val version = snapshot?.getLong("version") ?: policy.version
@@ -195,82 +230,58 @@ class GuardianControlViewModel(
                         wardSdkInt = wardSdkInt
                     )
                 }
-                if (isListenerDesired) {
-                    attachPolicyListenerLocked()
+                synchronized(listenerLock) {
+                    if (isListenerDesired) {
+                        attachPolicyListenerLocked()
+                    }
                 }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                Timber.tag(TAG).e(e, "Error loading ward policy for ${state.wardId}")
+                Timber.tag(TAG).e(e, "Error loading ward policy for %s", AiTelemetryReporter.maskIdentifier(state.wardId))
                 _uiState.update { it.copy(isLoading = false, isOffline = true) }
             }
         }
     }
 
-    fun setCurfewTimings(startHour: Int, startMin: Int, endHour: Int, endMin: Int) {
-        _uiState.update {
-            it.copy(
-                selectedStartHour = startHour,
-                selectedStartMinute = startMin,
-                selectedEndHour = endHour,
-                selectedEndMinute = endMin
-            )
-        }
-    }
-
-    fun setWeekendCurfewTimings(startHour: Int, startMin: Int, endHour: Int, endMin: Int) {
-        _uiState.update {
-            it.copy(
-                selectedWeekendStartHour = startHour,
-                selectedWeekendStartMinute = startMin,
-                selectedWeekendEndHour = endHour,
-                selectedWeekendEndMinute = endMin
-            )
-        }
-    }
-
-    fun setTimeZoneId(tzId: String) {
-        _uiState.update { it.copy(selectedTimeZoneId = tzId) }
-    }
-
-    fun setDnsHost(host: String) {
-        _uiState.update { it.copy(dnsHost = host.trim()) }
-    }
-
-    fun toggleCurfew(enabled: Boolean) {
-        _uiState.update { it.copy(isCurfewEnabled = enabled) }
-    }
-
-    fun toggleWeekendCurfew(enabled: Boolean) {
-        _uiState.update { it.copy(isWeekendCurfewEnabled = enabled) }
-    }
-
-    fun toggleSelfControl(allowed: Boolean) {
-        _uiState.update { it.copy(isSelfControlAllowed = allowed) }
-    }
-
     fun updateSelfControlPermissionImmediately(allowed: Boolean) {
         val state = _uiState.value
+        val baseline = state.initialPolicySnapshot
         if (state.wardId.isBlank() || state.isSaving || state.isLoading) return
+        if (baseline == null) {
+            viewModelScope.launch {
+                _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_guardian_policy_save_failed))
+            }
+            return
+        }
         val previousAllowed = state.isSelfControlAllowed
         _uiState.update { it.copy(isSelfControlAllowed = allowed, isSaving = true) }
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val context = getApplication<android.app.Application>()
-                val updated = state.currentPolicy.copy(
-                    isSelfControlAllowed = allowed,
-                    version = state.currentPolicy.version + 1,
-                    updatedAt = com.drmohammed.antiporn.core.time.TrustedTimeProvider.currentTimeMillis(context)
-                )
-                val success = policyRepository.pushPolicyToWard(state.wardId, updated)
+                val context = getApplication<Application>()
+                val myUid = accountabilityRepository.getCachedUid()
+                val myName = accountabilityRepository.getMyDisplayName()
+                val pushedPolicy = policyRepository.mergeAndPushRemotePolicyPatch(
+                    wardUid = state.wardId,
+                    fallbackPolicy = baseline,
+                    guardianUidFallback = myUid,
+                    guardianNameFallback = myName
+                ) { latest ->
+                    val now = TrustedTimeProvider.currentTimeMillis(context)
+                    latest.copy(
+                        isSelfControlAllowed = allowed,
+                        version = latest.version + 1,
+                        updatedAt = now
+                    )
+                }
                 withContext(Dispatchers.Main) {
-                    if (success) {
+                    if (pushedPolicy != null) {
                         _uiState.update {
                             it.copy(
-                                currentPolicy = updated,
-                                initialPolicySnapshot = updated.copy(),
-                                isSelfControlAllowed = allowed,
-                                version = updated.version
+                                currentPolicy = pushedPolicy,
+                                initialPolicySnapshot = pushedPolicy.copy(),
+                                isSelfControlAllowed = pushedPolicy.isSelfControlAllowed,
+                                version = pushedPolicy.version
                             )
                         }
                         _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_guardian_policy_saved))
@@ -292,74 +303,70 @@ class GuardianControlViewModel(
 
     fun resetWardSelfControlQr(onComplete: (Boolean) -> Unit) {
         val state = _uiState.value
-        if (state.wardId.isBlank()) {
+        val baseline = state.initialPolicySnapshot
+        if (state.wardId.isBlank() || baseline == null) {
+            if (state.wardId.isNotBlank()) {
+                viewModelScope.launch {
+                    _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_reset_ward_qr_failed))
+                }
+            }
             onComplete(false)
             return
         }
 
         viewModelScope.launch(Dispatchers.IO) {
-            val context = getApplication<android.app.Application>()
-            val now = com.drmohammed.antiporn.core.time.TrustedTimeProvider.currentTimeMillis(context)
-            val current = _uiState.value.currentPolicy
-            val updated = current.copy(
-                remoteSelfControlResetRequestedAt = now,
-                version = current.version + 1,
-                updatedAt = now
-            )
-            val success = policyRepository.pushPolicyToWard(state.wardId, updated)
-            withContext(Dispatchers.Main) {
-                if (success) {
+            var success = false
+            try {
+                val context = getApplication<Application>()
+                val myUid = accountabilityRepository.getCachedUid()
+                val myName = accountabilityRepository.getMyDisplayName()
+                val pushedPolicy = policyRepository.mergeAndPushRemotePolicyPatch(
+                    wardUid = state.wardId,
+                    fallbackPolicy = baseline,
+                    guardianUidFallback = myUid,
+                    guardianNameFallback = myName
+                ) { latest ->
+                    val now = TrustedTimeProvider.currentTimeMillis(context)
+                    latest.copy(
+                        remoteSelfControlResetRequestedAt = now,
+                        version = latest.version + 1,
+                        updatedAt = now
+                    )
+                }
+                if (pushedPolicy != null) {
+                    success = true
                     _uiState.update {
                         it.copy(
-                            currentPolicy = updated,
-                            initialPolicySnapshot = updated.copy(),
-                            version = updated.version
+                            currentPolicy = pushedPolicy,
+                            initialPolicySnapshot = pushedPolicy.copy(),
+                            version = pushedPolicy.version
                         )
                     }
                     _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_reset_ward_qr_success))
                 } else {
                     _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_reset_ward_qr_failed))
                 }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                Log.e(TAG, "Error resetting ward self-control QR", e)
+                _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_reset_ward_qr_failed))
+            }
+            withContext(Dispatchers.Main) {
                 onComplete(success)
             }
         }
     }
 
-    fun toggleVpnBlackhole(enabled: Boolean) {
-        _uiState.update { it.copy(isVpnBlackholeEnabled = enabled) }
-    }
-
-    fun toggleInstantInternetKill(enabled: Boolean) {
-        _uiState.update { it.copy(isInstantInternetKillEnabled = enabled) }
-    }
-
-    fun toggleIncognitoBlocked(blocked: Boolean) {
-        _uiState.update { it.copy(isIncognitoBlocked = blocked) }
-    }
-
-    fun toggleLockNewInstalls(locked: Boolean) {
-        _uiState.update { it.copy(lockNewInstallsUntilApproved = locked) }
-    }
-
-    fun toggleLockDateTime(locked: Boolean) {
-        _uiState.update { it.copy(isDateTimeLocked = locked) }
-    }
-
-    fun toggleYouTubeRestricted(enabled: Boolean) {
-        _uiState.update { it.copy(isYouTubeRestrictedModeEnabled = enabled) }
-    }
-
-    fun toggleTelegramWeb(enabled: Boolean) {
-        _uiState.update { it.copy(isTelegramWebBlocked = enabled) }
-    }
-
-    fun setScreenAiEnabledGlobally(enabled: Boolean) {
-        _uiState.update { it.copy(isScreenAiEnabledGlobally = enabled) }
-    }
-
     fun updateScreenAiEnabledImmediately(enabled: Boolean) {
         val state = _uiState.value
+        val baseline = state.initialPolicySnapshot
         if (state.wardId.isBlank() || state.isSaving || state.isLoading) return
+        if (baseline == null) {
+            viewModelScope.launch {
+                _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_guardian_policy_save_failed))
+            }
+            return
+        }
         val previousEnabled = state.isScreenAiEnabledGlobally
         _uiState.update {
             it.copy(
@@ -371,40 +378,30 @@ class GuardianControlViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val context = getApplication<Application>()
-                val latestPolicy = try {
-                    val snap = FirebaseFirestore.getInstance().collection("policies").document(state.wardId).get().await()
-                    if (snap != null && snap.exists() && snap.data != null) {
-                        DevicePolicyBundle.fromMap(snap.data ?: emptyMap())
-                    } else {
-                        state.currentPolicy
-                    }
-                } catch (e: Exception) {
-                    if (e is CancellationException) throw e
-                    Log.w(TAG, "Failed fetching latest policy before Vision Guard AI toggle, using current state", e)
-                    state.currentPolicy
-                }
-
                 val myUid = accountabilityRepository.getCachedUid()
                 val myName = accountabilityRepository.getMyDisplayName()
-                val updated = latestPolicy.copy(
-                    guardianUid = latestPolicy.guardianUid?.takeIf { it.isNotBlank() } ?: myUid,
-                    guardianName = latestPolicy.guardianName?.takeIf { it.isNotBlank() } ?: myName,
-                    isSupervised = true,
-                    isScreenAiEnabledGlobally = enabled,
-                    screenAiSchemaVersion = DevicePolicyBundle.CURRENT_SCREEN_AI_SCHEMA_VERSION,
-                    version = latestPolicy.version + 1,
-                    updatedAt = TrustedTimeProvider.currentTimeMillis(context)
-                )
-
-                val success = policyRepository.pushPolicyToWard(state.wardId, updated)
+                val pushedPolicy = policyRepository.mergeAndPushRemotePolicyPatch(
+                    wardUid = state.wardId,
+                    fallbackPolicy = baseline,
+                    guardianUidFallback = myUid,
+                    guardianNameFallback = myName
+                ) { latest ->
+                    val now = TrustedTimeProvider.currentTimeMillis(context)
+                    latest.copy(
+                        isScreenAiEnabledGlobally = enabled,
+                        screenAiSchemaVersion = DevicePolicyBundle.CURRENT_SCREEN_AI_SCHEMA_VERSION,
+                        version = latest.version + 1,
+                        updatedAt = now
+                    )
+                }
                 withContext(Dispatchers.Main) {
-                    if (success) {
+                    if (pushedPolicy != null) {
                         _uiState.update {
                             it.copy(
-                                currentPolicy = updated,
-                                initialPolicySnapshot = updated.copy(),
-                                isScreenAiEnabledGlobally = enabled,
-                                version = updated.version
+                                currentPolicy = pushedPolicy,
+                                initialPolicySnapshot = pushedPolicy.copy(),
+                                isScreenAiEnabledGlobally = pushedPolicy.isScreenAiEnabledGlobally,
+                                version = pushedPolicy.version
                             )
                         }
                         _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_guardian_policy_saved))
@@ -423,30 +420,6 @@ class GuardianControlViewModel(
             } finally {
                 _uiState.update { it.copy(isSaving = false) }
             }
-        }
-    }
-
-    fun updateBrowserFilter(
-        filterMode: Int,
-        customBlocked: Set<String>,
-        customAllowed: Set<String>,
-        isFullSystemFilteringEnabled: Boolean = false
-    ) {
-        _uiState.update { current ->
-            val updated = current.currentPolicy.copy(
-                browserFilterMode = filterMode,
-                isFullSystemFilteringEnabled = isFullSystemFilteringEnabled,
-                customBlockedUrls = customBlocked,
-                customAllowedUrls = customAllowed
-            )
-            current.copy(currentPolicy = updated)
-        }
-    }
-
-    fun updateWaqfaConfig(waqfaConfig: com.drmohammed.antiporn.waqfa.model.WaqfaConfig) {
-        _uiState.update { current ->
-            val updated = current.currentPolicy.copy(waqfaConfig = waqfaConfig)
-            current.copy(currentPolicy = updated)
         }
     }
 
@@ -484,161 +457,12 @@ class GuardianControlViewModel(
         _uiState.update {
             it.copy(
                 currentPolicy = acknowledged,
-                initialPolicySnapshot = acknowledged.copy()
+                initialPolicySnapshot = acknowledged.copy(),
+                isInstantInternetKillEnabled = acknowledged.isInstantInternetKillEnabled,
+                isSelfControlAllowed = acknowledged.isSelfControlAllowed,
+                isScreenAiEnabledGlobally = acknowledged.isScreenAiEnabledGlobally,
+                version = acknowledged.version
             )
-        }
-    }
-
-    fun saveAndPushPolicy(rawDns: String) {
-        val state = _uiState.value
-        if (state.isSaving || !state.hasUnsavedChanges) return
-
-        val trimmedDns = rawDns.trim()
-        if (!trimmedDns.matches(Regex("^[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"))) {
-            viewModelScope.launch {
-                _events.send(GuardianControlEvent.ShowToastRes(R.string.error_invalid_dns_host))
-            }
-            return
-        }
-
-        _uiState.update { it.copy(isSaving = true) }
-
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val context = getApplication<Application>()
-
-                // 1. DNS Pre-flight probe
-                val initialDns = _uiState.value.initialPolicySnapshot?.dnsHost ?: _uiState.value.currentPolicy.dnsHost
-                val isUnchanged = trimmedDns.equals(initialDns, ignoreCase = true)
-                val isKnownPreset = DnsFilteringValidator.isKnownFamilyPreset(trimmedDns)
-                val validationResult = if (isUnchanged || isKnownPreset) {
-                    DnsFilteringValidator.ValidationResult.Valid
-                } else {
-                    DnsFilteringValidator.validateDnsHost(trimmedDns)
-                }
-                when (validationResult) {
-                    is DnsFilteringValidator.ValidationResult.Valid -> {
-                        // Valid, continue
-                    }
-                    is DnsFilteringValidator.ValidationResult.UnfilteredPorn -> {
-                        _uiState.update { it.copy(isSaving = false) }
-                        _events.send(
-                            GuardianControlEvent.DnsValidationError(
-                                titleRes = R.string.dns_probe_dialog_failed_title,
-                                message = context.getString(
-                                    R.string.dns_probe_error_not_blocking_detail,
-                                    validationResult.domain,
-                                    validationResult.resolvedIp
-                                )
-                            )
-                        )
-                        return@launch
-                    }
-                    is DnsFilteringValidator.ValidationResult.Unreachable -> {
-                        _uiState.update { it.copy(isSaving = false) }
-                        _events.send(
-                            GuardianControlEvent.DnsValidationError(
-                                titleRes = R.string.dns_probe_dialog_failed_title,
-                                message = context.getString(
-                                    R.string.dns_probe_error_unreachable_detail,
-                                    validationResult.reason
-                                )
-                            )
-                        )
-                        return@launch
-                    }
-                    is DnsFilteringValidator.ValidationResult.ResolverBroken -> {
-                        _uiState.update { it.copy(isSaving = false) }
-                        _events.send(
-                            GuardianControlEvent.DnsValidationError(
-                                titleRes = R.string.dns_probe_dialog_failed_title,
-                                message = context.getString(
-                                    R.string.dns_probe_error_broken_detail,
-                                    validationResult.reason
-                                )
-                            )
-                        )
-                        return@launch
-                    }
-                }
-                // 2. Fetch latest policy to avoid version stomp
-                val firestore = FirebaseFirestore.getInstance()
-                val latestPolicy = try {
-                    val snap = firestore.collection("policies").document(state.wardId).get().await()
-                    if (snap != null && snap.exists() && snap.data != null) {
-                        DevicePolicyBundle.fromMap(snap.data ?: emptyMap())
-                    } else {
-                        state.currentPolicy
-                    }
-                } catch (netEx: Exception) {
-                    if (netEx is CancellationException) throw netEx
-                    Log.w(TAG, "Failed fetching latest policy before push, using current state", netEx)
-                    state.currentPolicy
-                }
-
-                val myUid = accountabilityRepository.getCachedUid()
-                val myName = accountabilityRepository.getMyDisplayName()
-
-                val updatedPolicy = latestPolicy.copy(
-                    guardianUid = latestPolicy.guardianUid?.takeIf { it.isNotBlank() } ?: myUid,
-                    guardianName = latestPolicy.guardianName?.takeIf { it.isNotBlank() } ?: myName,
-                    isSupervised = true,
-                    curfewStartHour = state.selectedStartHour,
-                    curfewStartMinute = state.selectedStartMinute,
-                    curfewEndHour = state.selectedEndHour,
-                    curfewEndMinute = state.selectedEndMinute,
-                    isCurfewEnabled = state.isCurfewEnabled,
-                    isInstantInternetKillEnabled = state.isInstantInternetKillEnabled,
-                    isWeekendCurfewEnabled = state.isWeekendCurfewEnabled,
-                    weekendCurfewStartHour = state.selectedWeekendStartHour,
-                    weekendCurfewStartMinute = state.selectedWeekendStartMinute,
-                    weekendCurfewEndHour = state.selectedWeekendEndHour,
-                    weekendCurfewEndMinute = state.selectedWeekendEndMinute,
-                    isVpnBlackholeEnabled = state.isVpnBlackholeEnabled,
-                    isIncognitoBlocked = state.isIncognitoBlocked,
-                    lockNewInstallsUntilApproved = state.lockNewInstallsUntilApproved,
-                    isSelfControlAllowed = state.isSelfControlAllowed,
-                    isDateTimeLocked = state.isDateTimeLocked,
-                    isYouTubeRestrictedModeEnabled = state.isYouTubeRestrictedModeEnabled,
-                    isTelegramWebBlocked = state.isTelegramWebBlocked,
-                    isScreenAiEnabledGlobally = state.isScreenAiEnabledGlobally,
-                    screenAiSchemaVersion = DevicePolicyBundle.CURRENT_SCREEN_AI_SCHEMA_VERSION,
-                    browserFilterMode = state.currentPolicy.browserFilterMode,
-                    isFullSystemFilteringEnabled = state.currentPolicy.isFullSystemFilteringEnabled,
-                    isAdBlockingEnabled = state.currentPolicy.isAdBlockingEnabled,
-                    waqfaConfig = state.currentPolicy.waqfaConfig,
-                    customAiScanPackages = state.currentPolicy.customAiScanPackages,
-                    customBlockedUrls = state.currentPolicy.customBlockedUrls,
-                    customAllowedUrls = state.currentPolicy.customAllowedUrls,
-                    dnsHost = trimmedDns,
-                    timeZoneId = state.selectedTimeZoneId,
-                    version = latestPolicy.version + 1,
-                    guardianPolicySnapshot = null,
-                    lastSelfModifiedAt = null,
-                    updatedAt = TrustedTimeProvider.currentTimeMillis(context)
-                )
-
-                val success = policyRepository.pushPolicyToWard(state.wardId, updatedPolicy)
-                if (success) {
-                    _uiState.update {
-                        it.copy(
-                            currentPolicy = updatedPolicy,
-                            initialPolicySnapshot = updatedPolicy.copy(),
-                            version = updatedPolicy.version
-                        )
-                    }
-                    _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_policy_saved, isLong = true))
-                    _events.send(GuardianControlEvent.SaveSuccess)
-                } else {
-                    _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_policy_push_failed, isLong = true))
-                }
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                Log.e(TAG, "Error pushing policy to ward", e)
-                _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_policy_push_failed, isLong = true))
-            } finally {
-                _uiState.update { it.copy(isSaving = false) }
-            }
         }
     }
 
@@ -664,14 +488,17 @@ class GuardianControlViewModel(
     }
 
     fun startPolicyListener() {
-        isListenerDesired = true
-        attachPolicyListenerLocked()
+        synchronized(listenerLock) {
+            isListenerDesired = true
+            attachPolicyListenerLocked()
+        }
     }
 
     private fun attachPolicyListenerLocked() {
         val state = _uiState.value
         val targetWardId = state.wardId.trim()
         if (targetWardId.isBlank()) return
+        val maskedWardId = AiTelemetryReporter.maskIdentifier(targetWardId)
         synchronized(listenerLock) {
             if (!isListenerDesired) return
             policyListenerRegistration?.remove()
@@ -681,12 +508,50 @@ class GuardianControlViewModel(
                 policyListenerRegistration = firestore.collection("policies").document(targetWardId)
                     .addSnapshotListener { snapshot, error ->
                         if (error != null) {
-                            Log.w(TAG, "Error in real-time policy listener for ward $targetWardId", error)
+                            if (error.code == FirebaseFirestoreException.Code.PERMISSION_DENIED &&
+                                FirebaseAuth.getInstance().currentUser != null
+                            ) {
+                                viewModelScope.launch(Dispatchers.IO) {
+                                    val isPendingOrRemoved = accountabilityRepository.isPendingGuardianTeardown(targetWardId) ||
+                                        partnerDao.getPartnerById(targetWardId) == null
+                                    if (isPendingOrRemoved) {
+                                        stopPolicyListener()
+                                        val cleaned = accountabilityRepository.completeGuardianSideTeardownCleanup(
+                                            targetWardId,
+                                            _uiState.value.wardName
+                                        )
+                                        _events.send(
+                                            if (cleaned) GuardianControlEvent.WardTeardownCompleted
+                                            else GuardianControlEvent.SupervisionEnded
+                                        )
+                                    } else {
+                                        Timber.tag(TAG).w(error, "Error in real-time policy listener for ward %s", maskedWardId)
+                                    }
+                                }
+                                return@addSnapshotListener
+                            }
+                            Timber.tag(TAG).w(error, "Error in real-time policy listener for ward %s", maskedWardId)
                             return@addSnapshotListener
                         }
                         if (snapshot == null || !snapshot.exists()) return@addSnapshotListener
                         val snapshotData = snapshot.data ?: return@addSnapshotListener
                         val policy = DevicePolicyBundle.fromMap(snapshotData)
+                        if (policy.deactivationStatus == DevicePolicyBundle.DEACTIVATION_STATUS_COMPLETED &&
+                            (accountabilityRepository.isPendingGuardianTeardown(targetWardId) || !policy.isSupervised)
+                        ) {
+                            stopPolicyListener()
+                            viewModelScope.launch(Dispatchers.IO) {
+                                val cleaned = accountabilityRepository.completeGuardianSideTeardownCleanup(
+                                    targetWardId,
+                                    _uiState.value.wardName
+                                )
+                                _events.send(
+                                    if (cleaned) GuardianControlEvent.WardTeardownCompleted
+                                    else GuardianControlEvent.SupervisionEnded
+                                )
+                            }
+                            return@addSnapshotListener
+                        }
                         val version = snapshot.getLong("version") ?: policy.version
                         val acknowledgedVersion = snapshot.getLong("acknowledgedVersion") ?: 0L
                         val lastAcknowledgedAt = snapshot.getLong("lastAcknowledgedAt") ?: 0L
@@ -766,16 +631,16 @@ class GuardianControlViewModel(
                             }
                         }
                     }
-                Log.i(TAG, "Attached real-time policy listener for ward $targetWardId")
+                Log.i(TAG, "Attached real-time policy listener for ward $maskedWardId")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to attach real-time policy listener for ward $targetWardId", e)
+                Log.e(TAG, "Failed to attach real-time policy listener for ward $maskedWardId", e)
             }
         }
     }
 
     fun stopPolicyListener() {
-        isListenerDesired = false
         synchronized(listenerLock) {
+            isListenerDesired = false
             policyListenerRegistration?.remove()
             policyListenerRegistration = null
         }

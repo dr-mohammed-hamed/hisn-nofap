@@ -276,6 +276,7 @@ class MainActivity : AppCompatActivity(),
             CurfewScheduler.scheduleNextAlarms(this)
             CurfewEnforcer.syncBlockStateAsync(this)
             lifecycleScope.launch(Dispatchers.IO) {
+                PolicyRepository.getInstance(this@MainActivity).retryPendingGuardianTeardownIfNeeded()
                 if (!ProtectionEngine.isSystemFullyProtected(this@MainActivity)) {
                     withContext(Dispatchers.Main) {
                         if (!isFinishing && !isDestroyed) {
@@ -288,6 +289,11 @@ class MainActivity : AppCompatActivity(),
             }
             com.drmohammed.antiporn.data.repository.ApprovalRepository.getInstance(this).syncZeroTrustBaselineAndReconcileAsync()
             com.drmohammed.antiporn.core.engine.SystemAppsHealingManager.healPreInstalledStoresAsync(this)
+        } else {
+            lifecycleScope.launch(Dispatchers.IO) {
+                com.drmohammed.antiporn.core.engine.DeviceOwnerTeardownManager
+                    .flushPendingCloudTeardownAckIfNeeded(this@MainActivity)
+            }
         }
         AppInventoryManager.getInstance(this).syncInventoryToCloudAsync()
     }

@@ -256,6 +256,21 @@ object CurfewConfig {
     }
 
     /**
+     * Clears transient curfew, DNS-restore, and manual-test flags synchronously during Device Owner teardown.
+     */
+    fun clearTransientFlagsForTeardown(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit()
+            .putBoolean(KEY_MANUAL_TEST_ACTIVE, false)
+            .putBoolean(KEY_LAST_BLOCK_ENFORCED, false)
+            .putBoolean(KEY_DNS_RESTORE_PENDING, false)
+            .putBoolean(KEY_PRIVATE_DNS_BLOCKED_UNAFFILIATED, false)
+            .remove(KEY_CURFEW_SUSPENDED_PACKAGES)
+            .remove(KEY_CURFEW_SNOOZE_END_WALL)
+            .commit()
+    }
+
+    /**
      * Packages explicitly permitted to bypass the curfew blackhole VPN.
      * Guaranteed to always include AntiPorn self-package so background IPC,
      * Firebase FCM push notifications, and Firestore policy synchronization remain active,

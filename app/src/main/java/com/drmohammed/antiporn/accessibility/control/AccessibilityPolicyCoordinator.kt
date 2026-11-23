@@ -114,11 +114,20 @@ object AccessibilityPolicyCoordinator {
      * يطابق حالة خدمة الوصول الفعلية مع متطلبات السياسة النشطة.
      */
     @Synchronized
+    internal fun awaitIdleForTeardown() {
+        // Acquiring and releasing the intrinsic monitor guarantees any in-flight @Synchronized reconcile() has finished
+    }
+
+    @Synchronized
     fun reconcile(
         context: Context,
         policy: DevicePolicyBundle? = null,
         forceUncloak: Boolean = false
     ): AccessibilityReconcileResult {
+        if (com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isTeardownInProgress) {
+            Timber.tag(TAG).d("reconcile skipped: Device Owner teardown in progress")
+            return AccessibilityReconcileResult.NotRequiredAlreadyOff
+        }
         val appContext = context.applicationContext ?: context
 
         // 1. التأكد من أن مكون الخدمة غير معطل في PackageManager

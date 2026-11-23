@@ -865,6 +865,10 @@ object ProtectionWatchdogRuntime {
                 isCurfewStateSynchronized &&
                 !CurfewConfig.isDnsRestorePending(appContext)
 
+            if (ProtectionTransitionGuard.isTeardownInProgress) {
+                Timber.tag(TAG).d("Aborting watchdog re-enforcement because teardown is in progress")
+                return
+            }
             ProtectionEngine.applyAllAsync(appContext)
 
             if (isDirectTamper && isTransitionSafe) {

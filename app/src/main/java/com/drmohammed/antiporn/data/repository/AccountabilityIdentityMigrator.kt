@@ -31,7 +31,11 @@ class AccountabilityIdentityMigrator(
      * Migrates user identity in Firestore from [oldUid] (e.g. anonymous or device fallback)
      * to [newUid] (e.g. authenticated Google account).
      */
-    suspend fun migrateUserIdentity(oldUid: String, newUid: String) = withContext(Dispatchers.IO) {
+    suspend fun migrateUserIdentity(
+        oldUid: String,
+        newUid: String,
+        migrationSecret: String? = null
+    ) = withContext(Dispatchers.IO) {
         if (oldUid.isBlank() || newUid.isBlank() || oldUid == newUid) return@withContext
         val maskedOldUid = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(oldUid)
         val maskedNewUid = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(newUid)
@@ -53,18 +57,27 @@ class AccountabilityIdentityMigrator(
                 Log.w(TAG, "[UidMigration] Non-fatal error clearing /uid_mappings/$maskedNewUid: ${e.message}")
             }
 
-            // 1. Write forwarding record to /uid_mappings/$oldUid
-            val forwardingRecord = mapOf(
-                "activeUid" to newUid,
-                "migratedAt" to TrustedTimeProvider.currentTimeMillis(appContext)
-            )
-            try {
-                firestore.collection("uid_mappings").document(oldUid)
-                    .set(forwardingRecord, SetOptions.merge()).await()
-                Log.i(TAG, "[UidMigration] Forwarding mapping created: $maskedOldUid -> $maskedNewUid")
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.w(TAG, "[UidMigration] Failed writing /uid_mappings/$maskedOldUid: ${e.message}")
+            // 1. Write forwarding record to /uid_mappings/$oldUid when authorized (self or token-backed)
+            if (!oldUid.startsWith("dev_") && !migrationSecret.isNullOrBlank()) {
+                val forwardingRecord = mapOf(
+                    "activeUid" to newUid,
+                    "migrationSecret" to migrationSecret,
+                    "migratedAt" to TrustedTimeProvider.currentTimeMillis(appContext)
+                )
+                try {
+                    firestore.collection("uid_mappings").document(oldUid)
+                        .set(forwardingRecord, SetOptions.merge()).await()
+                    Log.i(TAG, "[UidMigration] Forwarding mapping created: $maskedOldUid -> $maskedNewUid")
+                    try {
+                        firestore.collection("uid_migration_tokens").document(oldUid).delete().await()
+                    } catch (cleanupEx: Exception) {
+                        if (cleanupEx is kotlinx.coroutines.CancellationException) throw cleanupEx
+                        Log.w(TAG, "[UidMigration] Non-fatal cleanup error for migration token: ${cleanupEx.message}")
+                    }
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    Log.w(TAG, "[UidMigration] Failed writing /uid_mappings/$maskedOldUid: ${e.message}")
+                }
             }
 
             // 2. Migrate sovereign policy document

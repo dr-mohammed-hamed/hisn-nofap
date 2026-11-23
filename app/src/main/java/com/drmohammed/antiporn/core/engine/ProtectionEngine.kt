@@ -58,6 +58,19 @@ object ProtectionEngine {
     }
 
     /**
+     * Waits up to [timeoutMs] for any in-flight async enforcement pass (full or DNS fast-path)
+     * to drain so Device Owner teardown cannot race with active DPM writes.
+     */
+    internal suspend fun awaitIdleForTeardown(timeoutMs: Long = 8_000L) {
+        val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
+        while ((isEnforcing.get() || isDnsFastEnforcing.get()) &&
+            android.os.SystemClock.elapsedRealtime() < deadline
+        ) {
+            kotlinx.coroutines.delay(25L)
+        }
+    }
+
+    /**
      * Suspending version: Applies all registered security shields asynchronously on [Dispatchers.IO].
      */
     suspend fun applyAll(context: Context): List<ShieldResult> = withContext(Dispatchers.IO) {
@@ -84,43 +97,58 @@ object ProtectionEngine {
 
         val appContext = context.applicationContext ?: context
         engineScope.launch {
-            while (true) {
-                val results = try {
-                    applyAllSync(appContext)
-                } catch (t: Throwable) {
-                    Log.e(TAG, "Fatal error executing applyAllSync", t)
-                    listOf(
-                        ShieldResult(
-                            shieldId = "engine",
-                            success = false,
-                            message = appContext.getString(R.string.toast_error_applying, t.localizedMessage ?: "Unknown")
+            var released = false
+            try {
+                while (true) {
+                    val results = try {
+                        applyAllSync(appContext)
+                    } catch (t: Throwable) {
+                        if (t is kotlinx.coroutines.CancellationException) throw t
+                        Log.e(TAG, "Fatal error executing applyAllSync", t)
+                        listOf(
+                            ShieldResult(
+                                shieldId = "engine",
+                                success = false,
+                                message = appContext.getString(R.string.toast_error_applying, t.localizedMessage ?: "Unknown")
+                            )
                         )
-                    )
-                }
-
-                val callbacksToNotify: List<(List<ShieldResult>) -> Unit>? = synchronized(pendingCallbacks) {
-                    if (needsRerun) {
-                        needsRerun = false
-                        null
-                    } else {
-                        val copy = pendingCallbacks.toList()
-                        pendingCallbacks.clear()
-                        isEnforcing.set(false)
-                        copy
                     }
-                }
 
-                if (callbacksToNotify != null) {
-                    withContext(Dispatchers.Main) {
-                        for (cb in callbacksToNotify) {
-                            try {
-                                cb.invoke(results)
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Error invoking completion callback", e)
-                            }
+                    val callbacksToNotify: List<(List<ShieldResult>) -> Unit>? = synchronized(pendingCallbacks) {
+                        if (needsRerun) {
+                            needsRerun = false
+                            null
+                        } else {
+                            val copy = pendingCallbacks.toList()
+                            pendingCallbacks.clear()
+                            isEnforcing.set(false)
+                            released = true
+                            copy
                         }
                     }
-                    break
+
+                    if (callbacksToNotify != null) {
+                        withContext(Dispatchers.Main) {
+                            for (cb in callbacksToNotify) {
+                                try {
+                                    cb.invoke(results)
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Error invoking completion callback", e)
+                                }
+                            }
+                        }
+                        break
+                    }
+                }
+            } finally {
+                if (!released) {
+                    synchronized(pendingCallbacks) {
+                        if (!released) {
+                            pendingCallbacks.clear()
+                            needsRerun = false
+                            isEnforcing.set(false)
+                        }
+                    }
                 }
             }
         }
@@ -268,8 +296,12 @@ object ProtectionEngine {
      * MUST be called from a background thread.
      */
     fun applyAllSync(context: Context): List<ShieldResult> {
+        val appContext = context.applicationContext ?: context
+        if (ProtectionTransitionGuard.isTeardownInProgress) {
+            Log.d(TAG, "Skipping applyAllSync because Device Owner teardown is in progress")
+            return emptyList()
+        }
         return ProtectionTransitionGuard.runInternalTransition {
-            val appContext = context.applicationContext ?: context
             if (!isDeviceOwner(appContext)) {
                 Log.w(TAG, "App is not Device/Profile Owner. Cannot apply shields.")
                 return@runInternalTransition listOf(
@@ -289,6 +321,10 @@ object ProtectionEngine {
             ) { dpm, admin ->
                 val results = mutableListOf<ShieldResult>()
                 for (shield in shields) {
+                    if (ProtectionTransitionGuard.isTeardownInProgress) {
+                        Log.i(TAG, "Aborting remaining shields mid-loop due to Device Owner teardown")
+                        break
+                    }
                     try {
                         val res = shield.apply(appContext, dpm, admin)
                         results.add(res)
@@ -318,7 +354,9 @@ object ProtectionEngine {
             // If critical shields applied successfully, mark initial baseline as established
             val criticalResults = results.filter { it.shieldId in listOf("system_tamper", "vpn", "dns") }
             val criticalShieldsSuccess = criticalResults.isNotEmpty() && criticalResults.all { it.success }
-            if (criticalShieldsSuccess || (results.isNotEmpty() && results.all { it.success })) {
+            if (!ProtectionTransitionGuard.isTeardownInProgress &&
+                (criticalShieldsSuccess || (results.isNotEmpty() && results.all { it.success }))
+            ) {
                 ProtectionTransitionGuard.markInitialEnforcementCompleted(appContext)
             }
 

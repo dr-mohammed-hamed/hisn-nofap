@@ -7,13 +7,17 @@ import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
 import com.drmohammed.antiporn.data.local.db.entity.PartnerEntity
 import com.drmohammed.antiporn.data.repository.AccountabilityRepository
+import com.drmohammed.antiporn.data.repository.completeGuardianSideTeardownCleanup
+import com.drmohammed.antiporn.data.repository.isPendingGuardianTeardown
 import com.drmohammed.antiporn.notification.manager.AppNotificationManager
 import com.drmohammed.antiporn.notification.model.NotificationActionType
 import com.drmohammed.antiporn.notification.model.NotificationCategory
 import com.drmohammed.antiporn.notification.registry.NotificationRegistry
 import com.drmohammed.antiporn.notification.repository.NotificationRepository
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentChange
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.ListenerRegistration
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -62,6 +66,8 @@ class GuardianSupervisionCoordinator(
     private val listenersMutex = Mutex()
     private val approvalListeners = ConcurrentHashMap<String, ListenerRegistration>()
     private val policyListeners = ConcurrentHashMap<String, ListenerRegistration>()
+    private val cleaningUpWards = ConcurrentHashMap.newKeySet<String>()
+    private val wardSnapshotMutexes = ConcurrentHashMap<String, Mutex>()
 
     private var wardObservationJob: Job? = null
 
@@ -125,6 +131,7 @@ class GuardianSupervisionCoordinator(
         for (ward in activeWards) {
             val canonicalUid = accountabilityRepository.resolveActivePartnerUid(ward.id, ward.pairingCode)
             if (canonicalUid.isNotBlank()) {
+                if (cleaningUpWards.contains(canonicalUid)) continue
                 activeWardUids.add(canonicalUid)
                 val displayName = ward.displayName.ifBlank {
                     appContext.getString(R.string.status_ward_badge)
@@ -139,7 +146,10 @@ class GuardianSupervisionCoordinator(
         while (approvalIterator.hasNext()) {
             val entry = approvalIterator.next()
             if (!activeWardUids.contains(entry.key)) {
-                Log.d(TAG, "Detaching approval listener for inactive ward: ${entry.key}")
+                Log.d(
+                    TAG,
+                    "Detaching approval listener for inactive ward: ${com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(entry.key)}"
+                )
                 entry.value.remove()
                 approvalIterator.remove()
             }
@@ -149,15 +159,21 @@ class GuardianSupervisionCoordinator(
         while (policyIterator.hasNext()) {
             val entry = policyIterator.next()
             if (!activeWardUids.contains(entry.key)) {
-                Log.d(TAG, "Detaching policy listener for inactive ward: ${entry.key}")
+                Log.d(
+                    TAG,
+                    "Detaching policy listener for inactive ward: ${com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(entry.key)}"
+                )
                 entry.value.remove()
                 policyIterator.remove()
+                wardSnapshotMutexes.remove(entry.key)
             }
         }
     }
 
     private fun attachWardApprovalListener(wardUid: String, wardName: String) {
         if (approvalListeners.containsKey(wardUid)) return
+        val maskedUid = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(wardUid)
+        val maskedName = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(wardName)
 
         try {
             val firestore = firestoreProvider()
@@ -165,7 +181,7 @@ class GuardianSupervisionCoordinator(
                 .collection("approvals")
                 .addSnapshotListener { snapshot, error ->
                     if (error != null) {
-                        Log.w(TAG, "Error in approvals snapshot listener for ward $wardUid: ${error.message}")
+                        Log.w(TAG, "Error in approvals snapshot listener for ward $maskedUid: ${error.message}")
                         return@addSnapshotListener
                     }
                     if (snapshot == null) return@addSnapshotListener
@@ -175,34 +191,66 @@ class GuardianSupervisionCoordinator(
                     }
                 }
             approvalListeners[wardUid] = registration
-            Log.i(TAG, "Attached approvals snapshot listener for ward $wardUid ($wardName)")
+            Log.i(TAG, "Attached approvals snapshot listener for ward $maskedUid ($maskedName)")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to attach approvals listener for ward $wardUid", e)
+            Log.e(TAG, "Failed to attach approvals listener for ward $maskedUid", e)
         }
     }
 
     private fun attachWardPolicyListener(wardUid: String, wardName: String) {
         if (policyListeners.containsKey(wardUid)) return
+        val maskedUid = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(wardUid)
+        val maskedName = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(wardName)
 
         try {
             val firestore = firestoreProvider()
             val registration = firestore.collection("policies").document(wardUid)
                 .addSnapshotListener { snapshot, error ->
                     if (error != null) {
-                        Log.w(TAG, "Error in policy snapshot listener for ward $wardUid: ${error.message}")
+                        if (error.code == FirebaseFirestoreException.Code.PERMISSION_DENIED &&
+                            FirebaseAuth.getInstance().currentUser != null &&
+                            accountabilityRepository.isPendingGuardianTeardown(wardUid)
+                        ) {
+                            launchTeardownCleanupForWard(wardUid, wardName)
+                            return@addSnapshotListener
+                        }
+                        Log.w(TAG, "Error in policy snapshot listener for ward $maskedUid: ${error.message}")
                         return@addSnapshotListener
                     }
                     if (snapshot == null || !snapshot.exists()) return@addSnapshotListener
 
                     coordinatorScope.launch {
-                        handlePolicySnapshot(wardUid, wardName, snapshot)
+                        val wardMutex = wardSnapshotMutexes.computeIfAbsent(wardUid) { Mutex() }
+                        wardMutex.withLock {
+                            handlePolicySnapshot(wardUid, wardName, snapshot)
+                        }
                     }
                 }
             policyListeners[wardUid] = registration
-            Log.i(TAG, "Attached policy snapshot listener for ward $wardUid ($wardName)")
+            Log.i(TAG, "Attached policy snapshot listener for ward $maskedUid ($maskedName)")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to attach policy listener for ward $wardUid", e)
+            Log.e(TAG, "Failed to attach policy listener for ward $maskedUid", e)
         }
+    }
+
+    private fun launchTeardownCleanupForWard(wardUid: String, wardName: String) {
+        if (!cleaningUpWards.add(wardUid)) return
+        coordinatorScope.launch {
+            try {
+                executeTeardownCleanupForWard(wardUid, wardName)
+            } finally {
+                cleaningUpWards.remove(wardUid)
+            }
+        }
+    }
+
+    private suspend fun executeTeardownCleanupForWard(wardUid: String, wardName: String) {
+        listenersMutex.withLock {
+            policyListeners.remove(wardUid)?.remove()
+            approvalListeners.remove(wardUid)?.remove()
+            wardSnapshotMutexes.remove(wardUid)
+        }
+        accountabilityRepository.completeGuardianSideTeardownCleanup(wardUid, wardName)
     }
 
     /**
@@ -244,7 +292,10 @@ class GuardianSupervisionCoordinator(
                             postSystemNotification = true,
                             importance = 2
                         )
-                        Log.i(TAG, "Posted pending approval notification for $pkg ($wardName) in status bar and in-app center")
+                        Log.i(
+                            TAG,
+                            "Posted pending approval notification for $pkg (${com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(wardName)}) in status bar and in-app center"
+                        )
                     } else {
                         // Request resolved (APPROVED or REJECTED)
                         // Cancel status bar alert
@@ -301,6 +352,7 @@ class GuardianSupervisionCoordinator(
                 cooldownMs = 0L
             )
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.w(TAG, "Failed updating in-app approval status for $dedupKey", e)
         }
     }
@@ -343,12 +395,24 @@ class GuardianSupervisionCoordinator(
             notificationManager.cancelSystemNotification(breakoutNotifId)
         }
 
-        // 2. Device Owner Deactivation Request (48h)
+        // 2. Device Owner Deactivation Request (48h) vs Guardian Remote Teardown
         val deactivationStatus = snapshot.getString("deactivationStatus")
         val deactivationUnlockAt = snapshot.getLong("deactivationUnlockAt") ?: 0L
+        val remoteTeardownAt = snapshot.getLong("remoteTeardownRequestedAt") ?: 0L
         val deactivationNotifId = NotificationRegistry.EVENT_GUARDIAN_REQUEST_ID + ((wardUid.hashCode() and 0x7FFFFFFF) % 1000)
 
-        if (deactivationStatus.equals("PENDING", ignoreCase = true) && deactivationUnlockAt > now) {
+        if (shouldHandleRemoteTeardownCompletion(deactivationStatus, accountabilityRepository.isPendingGuardianTeardown(wardUid))) {
+            if (cleaningUpWards.add(wardUid)) {
+                try {
+                    executeTeardownCleanupForWard(wardUid, wardName)
+                    notificationManager.cancelSystemNotification(deactivationNotifId)
+                } finally {
+                    cleaningUpWards.remove(wardUid)
+                }
+            } else {
+                notificationManager.cancelSystemNotification(deactivationNotifId)
+            }
+        } else if (isPendingGuardianDeactivationAlert(deactivationStatus, remoteTeardownAt, deactivationUnlockAt, now)) {
             val remainingMs = (deactivationUnlockAt - now).coerceAtLeast(0L)
             val hours = remainingMs / 3600000L
             val mins = (remainingMs % 3600000L) / 60000L
@@ -423,14 +487,23 @@ class GuardianSupervisionCoordinator(
 
     private suspend fun detachAllListeners() = listenersMutex.withLock {
         for (reg in approvalListeners.values) {
-            try { reg.remove() } catch (ignored: Exception) {}
+            try {
+                reg.remove()
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed removing approval listener during detach", e)
+            }
         }
         approvalListeners.clear()
 
         for (reg in policyListeners.values) {
-            try { reg.remove() } catch (ignored: Exception) {}
+            try {
+                reg.remove()
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed removing policy listener during detach", e)
+            }
         }
         policyListeners.clear()
+        wardSnapshotMutexes.clear()
     }
 
     companion object {
@@ -444,6 +517,24 @@ class GuardianSupervisionCoordinator(
             val baseId = NotificationRegistry.EVENT_WARD_REQUEST_ID
             val offset = ((wardUid + "_" + packageName).hashCode() and 0x7FFFFFFF) % 1000
             return baseId + offset
+        }
+
+        internal fun shouldHandleRemoteTeardownCompletion(
+            deactivationStatus: String?,
+            isPendingGuardianTeardown: Boolean
+        ): Boolean {
+            return deactivationStatus.equals("COMPLETED", ignoreCase = true) && isPendingGuardianTeardown
+        }
+
+        internal fun isPendingGuardianDeactivationAlert(
+            deactivationStatus: String?,
+            remoteTeardownRequestedAt: Long,
+            deactivationUnlockAt: Long,
+            nowMs: Long
+        ): Boolean {
+            return deactivationStatus.equals("PENDING", ignoreCase = true) &&
+                remoteTeardownRequestedAt <= 0L &&
+                deactivationUnlockAt > nowMs
         }
 
         @Volatile

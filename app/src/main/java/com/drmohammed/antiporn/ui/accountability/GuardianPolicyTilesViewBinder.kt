@@ -82,6 +82,7 @@ internal class GuardianPolicyTilesViewBinder(
                 Intent(activity, OtherSettingsActivity::class.java).apply {
                     putExtra(OtherSettingsActivity.EXTRA_IS_REMOTE, true)
                     putExtra(OtherSettingsActivity.EXTRA_WARD_ID, state.wardId)
+                    putExtra(OtherSettingsActivity.EXTRA_WARD_NAME, state.wardName)
                     putExtra(OtherSettingsActivity.EXTRA_POLICY_JSON, state.currentPolicy.toJson())
                 }
             }

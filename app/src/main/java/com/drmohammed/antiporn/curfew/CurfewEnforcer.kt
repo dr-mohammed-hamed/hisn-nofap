@@ -212,11 +212,20 @@ object CurfewEnforcer {
      * and night curfew window holds unless explicitly snoozed.
      */
     @Synchronized
+    internal fun awaitIdleForTeardown() {
+        // Acquiring and releasing the intrinsic monitor guarantees any in-flight @Synchronized enforce() has finished
+    }
+
+    @Synchronized
     fun enforce(
         context: Context,
         activate: Boolean,
         calendar: Calendar = CurfewConfig.getCurfewCalendar(context)
     ): Boolean {
+        if (com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isTeardownInProgress) {
+            Log.d(TAG, "Skipping CurfewEnforcer.enforce because teardown is in progress")
+            return false
+        }
         if (!SafeDpmGateway.isDeviceOwner(context)) {
             Log.w(TAG, "Cannot enforce curfew: Not Device/Profile Owner")
             return false

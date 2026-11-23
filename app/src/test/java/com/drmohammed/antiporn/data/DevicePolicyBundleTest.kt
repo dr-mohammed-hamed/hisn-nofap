@@ -46,6 +46,7 @@ class DevicePolicyBundleTest {
         assertTrue(policy.isBlockExternalVpnEnabled)
         assertEquals(com.drmohammed.antiporn.curfew.CurfewConfig.getDefaultFallbackTimeZone(), policy.timeZoneId)
         assertEquals(1L, policy.version)
+        assertNull(policy.remoteTeardownRequestedAt)
     }
 
     @Test
@@ -90,7 +91,8 @@ class DevicePolicyBundleTest {
             lastSelfModifiedAt = 1790000010000L,
             version = 42L,
             updatedAt = 1790000000000L,
-            remoteSelfControlResetRequestedAt = 1790000020000L
+            remoteSelfControlResetRequestedAt = 1790000020000L,
+            remoteTeardownRequestedAt = 1790000030000L
         )
 
         val map = original.toMap()
@@ -136,6 +138,7 @@ class DevicePolicyBundleTest {
         assertEquals(original.version, restored.version)
         assertEquals(original.updatedAt, restored.updatedAt)
         assertEquals(original.remoteSelfControlResetRequestedAt, restored.remoteSelfControlResetRequestedAt)
+        assertEquals(original.remoteTeardownRequestedAt, restored.remoteTeardownRequestedAt)
     }
 
     @Test
@@ -180,7 +183,8 @@ class DevicePolicyBundleTest {
             lastSelfModifiedAt = 1234560500L,
             version = 5L,
             updatedAt = 123456789L,
-            remoteSelfControlResetRequestedAt = 1234560700L
+            remoteSelfControlResetRequestedAt = 1234560700L,
+            remoteTeardownRequestedAt = 1234560900L
         )
 
         val json = original.toJson()
@@ -226,6 +230,7 @@ class DevicePolicyBundleTest {
         assertEquals(original.version, restored.version)
         assertEquals(original.updatedAt, restored.updatedAt)
         assertEquals(original.remoteSelfControlResetRequestedAt, restored.remoteSelfControlResetRequestedAt)
+        assertEquals(original.remoteTeardownRequestedAt, restored.remoteTeardownRequestedAt)
     }
 
     @Test
@@ -241,6 +246,7 @@ class DevicePolicyBundleTest {
         assertEquals(com.drmohammed.antiporn.curfew.CurfewConfig.DEFAULT_TIMEZONE_ID, parsed.timeZoneId)
         assertFalse(parsed.isDateTimeLocked)
         assertTrue(parsed.isSelfControlAllowed)
+        assertNull(parsed.remoteTeardownRequestedAt)
 
         val legacyMap = mapOf<String, Any?>(
             "curfewStartHour" to 20,
@@ -250,6 +256,7 @@ class DevicePolicyBundleTest {
         assertEquals(com.drmohammed.antiporn.curfew.CurfewConfig.DEFAULT_TIMEZONE_ID, fromMap.timeZoneId)
         assertFalse(fromMap.isDateTimeLocked)
         assertTrue(fromMap.isSelfControlAllowed)
+        assertNull(fromMap.remoteTeardownRequestedAt)
 
         val emptyTzPolicy = DevicePolicyBundle(timeZoneId = "")
         val reconciled = DevicePolicyBundle.reconcileLegacyV1(emptyTzPolicy)
@@ -480,6 +487,7 @@ class DevicePolicyBundleTest {
                 "timeZoneId": null,
                 "breakoutStatus": null,
                 "deactivationStatus": null,
+                "remoteTeardownRequestedAt": null,
                 "guardianPolicySnapshot": null
             }
         """.trimIndent()
@@ -491,6 +499,7 @@ class DevicePolicyBundleTest {
         assertEquals(com.drmohammed.antiporn.curfew.CurfewConfig.DEFAULT_TIMEZONE_ID, parsed.timeZoneId)
         assertNull(parsed.breakoutStatus)
         assertNull(parsed.deactivationStatus)
+        assertNull(parsed.remoteTeardownRequestedAt)
         assertNull(parsed.guardianPolicySnapshot)
     }
 

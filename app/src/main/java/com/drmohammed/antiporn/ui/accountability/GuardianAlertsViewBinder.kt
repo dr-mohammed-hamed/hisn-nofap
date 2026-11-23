@@ -11,8 +11,11 @@ import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
 import com.drmohammed.antiporn.data.repository.AccountabilityRepository
+import com.drmohammed.antiporn.data.repository.GuardianTeardownAlreadyCompletedException
 import com.drmohammed.antiporn.data.repository.PolicyRepository
+import com.drmohammed.antiporn.data.repository.cancelGuardianImmediateTeardown
 import com.drmohammed.antiporn.data.repository.rejectDeviceOwnerDeactivation
+import com.drmohammed.antiporn.data.repository.requestGuardianImmediateTeardown
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.drmohammed.antiporn.notification.manager.AppNotificationManager
@@ -21,6 +24,7 @@ import com.drmohammed.antiporn.notification.model.NotificationCategory
 import com.drmohammed.antiporn.notification.registry.NotificationRegistry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import timber.log.Timber
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -43,9 +47,17 @@ class GuardianAlertsViewBinder(
     private val policyProvider: () -> DevicePolicyBundle,
     private val isSelfControlAllowedProvider: () -> Boolean,
     private val onPolicyReverted: (DevicePolicyBundle) -> Unit,
-    private val onPolicyAcknowledged: (DevicePolicyBundle) -> Unit
+    private val onPolicyAcknowledged: (DevicePolicyBundle) -> Unit,
+    private val onTeardownAlreadyCompleted: () -> Unit = {}
 ) {
     private var lastRejectBreakoutClickTime = 0L
+    private val teardownUiHelper = GuardianRemoteTeardownUiHelper()
+    private val btnApproveImmediateTeardown: MaterialButton? by lazy {
+        activity.findViewById(R.id.btnApproveImmediateTeardown)
+    }
+    private val btnCancelPendingTeardown: MaterialButton? by lazy {
+        activity.findViewById(R.id.btnCancelPendingTeardown)
+    }
 
     fun setupListeners() {
         btnRevertSelfControlChanges.setOnClickListener {
@@ -56,6 +68,11 @@ class GuardianAlertsViewBinder(
                 cardSelfControlAlertBanner.visibility = View.GONE
                 return@setOnClickListener
             }
+            val wardId = wardIdProvider()
+            if (wardId.isBlank()) {
+                Toast.makeText(activity.applicationContext, R.string.toast_policy_push_failed, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
             btnRevertSelfControlChanges.isEnabled = false
             activity.lifecycleScope.launch {
                 try {
@@ -63,20 +80,29 @@ class GuardianAlertsViewBinder(
                     val accountRepo = AccountabilityRepository.getInstance(activity.applicationContext)
                     val myUid = accountRepo.getCachedUid()
                     val myName = accountRepo.getMyDisplayName()
-                    val wardId = wardIdProvider()
-                    val revertedPolicy = snapshotPolicy.copy(
-                        guardianUid = currentPolicy.guardianUid?.takeIf { it.isNotBlank() } ?: myUid,
-                        guardianName = currentPolicy.guardianName?.takeIf { it.isNotBlank() } ?: myName,
-                        isSupervised = true,
-                        isSelfControlAllowed = isSelfControlAllowedProvider(),
-                        guardianPolicySnapshot = null,
-                        lastSelfModifiedAt = null,
-                        version = currentPolicy.version + 1,
-                        updatedAt = TrustedTimeProvider.currentTimeMillis(activity.applicationContext)
-                    )
-                    val success = PolicyRepository.getInstance(activity.applicationContext).pushPolicyToWard(wardId, revertedPolicy)
+                    val revertedPolicy = PolicyRepository.getInstance(activity.applicationContext)
+                        .mergeAndPushRemotePolicyPatch(
+                            wardUid = wardId,
+                            fallbackPolicy = currentPolicy,
+                            guardianUidFallback = myUid,
+                            guardianNameFallback = myName
+                        ) { latest ->
+                            snapshotPolicy.copy(
+                                isSelfControlAllowed = isSelfControlAllowedProvider(),
+                                deactivationStatus = latest.deactivationStatus,
+                                deactivationRequestedAt = latest.deactivationRequestedAt,
+                                deactivationUnlockAt = latest.deactivationUnlockAt,
+                                deactivationHasQr = latest.deactivationHasQr,
+                                remoteTeardownRequestedAt = latest.remoteTeardownRequestedAt,
+                                breakoutStatus = latest.breakoutStatus,
+                                breakoutRequestedAt = latest.breakoutRequestedAt,
+                                breakoutUnlockAt = latest.breakoutUnlockAt,
+                                version = maxOf(latest.version, currentPolicy.version) + 1,
+                                updatedAt = TrustedTimeProvider.currentTimeMillis(activity.applicationContext)
+                            )
+                        }
                     if (activity.isFinishing || activity.isDestroyed) return@launch
-                    if (success) {
+                    if (revertedPolicy != null) {
                         cardSelfControlAlertBanner.visibility = View.GONE
                         onPolicyReverted(revertedPolicy)
                         Toast.makeText(activity, R.string.toast_self_control_reverted, Toast.LENGTH_SHORT).show()
@@ -86,6 +112,7 @@ class GuardianAlertsViewBinder(
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
                     Log.e(TAG, "Error reverting self-control policy", e)
+                    Toast.makeText(activity.applicationContext, R.string.toast_policy_push_failed, Toast.LENGTH_LONG).show()
                 } finally {
                     if (!activity.isFinishing && !activity.isDestroyed) {
                         btnRevertSelfControlChanges.isEnabled = true
@@ -96,6 +123,11 @@ class GuardianAlertsViewBinder(
 
         btnDismissSelfControlAlert.setOnClickListener {
             if (activity.isFinishing || activity.isDestroyed) return@setOnClickListener
+            val wardId = wardIdProvider()
+            if (wardId.isBlank()) {
+                Toast.makeText(activity.applicationContext, R.string.toast_policy_push_failed, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
             btnDismissSelfControlAlert.isEnabled = false
             activity.lifecycleScope.launch {
                 try {
@@ -103,19 +135,20 @@ class GuardianAlertsViewBinder(
                     val accountRepo = AccountabilityRepository.getInstance(activity.applicationContext)
                     val myUid = accountRepo.getCachedUid()
                     val myName = accountRepo.getMyDisplayName()
-                    val wardId = wardIdProvider()
-                    val acknowledgedPolicy = currentPolicy.copy(
-                        guardianUid = currentPolicy.guardianUid?.takeIf { it.isNotBlank() } ?: myUid,
-                        guardianName = currentPolicy.guardianName?.takeIf { it.isNotBlank() } ?: myName,
-                        isSupervised = true,
-                        guardianPolicySnapshot = null,
-                        lastSelfModifiedAt = null,
-                        version = currentPolicy.version + 1,
-                        updatedAt = TrustedTimeProvider.currentTimeMillis(activity.applicationContext)
-                    )
-                    val success = PolicyRepository.getInstance(activity.applicationContext).pushPolicyToWard(wardId, acknowledgedPolicy)
+                    val acknowledgedPolicy = PolicyRepository.getInstance(activity.applicationContext)
+                        .mergeAndPushRemotePolicyPatch(
+                            wardUid = wardId,
+                            fallbackPolicy = currentPolicy,
+                            guardianUidFallback = myUid,
+                            guardianNameFallback = myName
+                        ) { latest ->
+                            latest.copy(
+                                version = maxOf(latest.version, currentPolicy.version) + 1,
+                                updatedAt = TrustedTimeProvider.currentTimeMillis(activity.applicationContext)
+                            )
+                        }
                     if (activity.isFinishing || activity.isDestroyed) return@launch
-                    if (success) {
+                    if (acknowledgedPolicy != null) {
                         cardSelfControlAlertBanner.visibility = View.GONE
                         onPolicyAcknowledged(acknowledgedPolicy)
                         Toast.makeText(activity, R.string.toast_self_control_dismissed, Toast.LENGTH_SHORT).show()
@@ -125,6 +158,7 @@ class GuardianAlertsViewBinder(
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
                     Log.e(TAG, "Error dismissing self-control alert", e)
+                    Toast.makeText(activity.applicationContext, R.string.toast_policy_push_failed, Toast.LENGTH_LONG).show()
                 } finally {
                     if (!activity.isFinishing && !activity.isDestroyed) {
                         btnDismissSelfControlAlert.isEnabled = true
@@ -135,13 +169,15 @@ class GuardianAlertsViewBinder(
 
         btnRejectBreakout.setOnClickListener {
             if (activity.isFinishing || activity.isDestroyed) return@setOnClickListener
+            val wardId = wardIdProvider()
+            if (wardId.isBlank()) return@setOnClickListener
             val now = SystemClock.elapsedRealtime()
             if (now - lastRejectBreakoutClickTime < 1000L) return@setOnClickListener
             lastRejectBreakoutClickTime = now
             btnRejectBreakout.isEnabled = false
+            btnApproveImmediateTeardown?.isEnabled = false
             activity.lifecycleScope.launch {
                 try {
-                    val wardId = wardIdProvider()
                     val currentPolicy = policyProvider()
                     val accountRepo = AccountabilityRepository.getInstance(activity.applicationContext)
                     val result = if (currentPolicy.deactivationStatus == DevicePolicyBundle.DEACTIVATION_STATUS_PENDING) {
@@ -162,9 +198,132 @@ class GuardianAlertsViewBinder(
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
                     Log.e(TAG, "Error rejecting breakout", e)
+                    Toast.makeText(
+                        activity.applicationContext,
+                        e.localizedMessage ?: activity.getString(R.string.error_unknown),
+                        Toast.LENGTH_LONG
+                    ).show()
                 } finally {
                     if (!activity.isFinishing && !activity.isDestroyed) {
                         btnRejectBreakout.isEnabled = true
+                        btnApproveImmediateTeardown?.isEnabled = true
+                    }
+                }
+            }
+        }
+
+        btnApproveImmediateTeardown?.setOnClickListener {
+            if (activity.isFinishing || activity.isDestroyed) return@setOnClickListener
+            val wardId = wardIdProvider()
+            if (wardId.isBlank()) return@setOnClickListener
+            val wardName = wardNameProvider()
+            teardownUiHelper.showTwoStageSevereWarningDialog(activity, wardName) {
+                btnApproveImmediateTeardown?.isEnabled = false
+                btnRejectBreakout.isEnabled = false
+                activity.lifecycleScope.launch {
+                    try {
+                        val accountRepo = AccountabilityRepository.getInstance(activity.applicationContext)
+                        val result = accountRepo.requestGuardianImmediateTeardown(wardId)
+                        if (activity.isFinishing || activity.isDestroyed) return@launch
+                        result.fold(
+                            onSuccess = { requestedAt ->
+                                val updated = policyProvider().copy(
+                                    deactivationStatus = DevicePolicyBundle.DEACTIVATION_STATUS_PENDING,
+                                    deactivationRequestedAt = requestedAt,
+                                    deactivationUnlockAt = maxOf(1L, requestedAt - 60_000L),
+                                    deactivationHasQr = false,
+                                    remoteTeardownRequestedAt = requestedAt,
+                                    isInstantInternetKillEnabled = false
+                                )
+                                onPolicyAcknowledged(updated)
+                                Toast.makeText(
+                                    activity.applicationContext,
+                                    R.string.toast_guardian_remote_teardown_sent,
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            },
+                            onFailure = { err ->
+                                val msg = err.localizedMessage ?: activity.getString(R.string.error_unknown)
+                                Toast.makeText(
+                                    activity.applicationContext,
+                                    activity.getString(R.string.toast_guardian_remote_teardown_failed, msg),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        )
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        Timber.tag(TAG).e(e, "Error approving immediate teardown")
+                        val msg = e.localizedMessage ?: activity.getString(R.string.error_unknown)
+                        Toast.makeText(
+                            activity.applicationContext,
+                            activity.getString(R.string.toast_guardian_remote_teardown_failed, msg),
+                            Toast.LENGTH_LONG
+                        ).show()
+                    } finally {
+                        if (!activity.isFinishing && !activity.isDestroyed) {
+                            btnApproveImmediateTeardown?.isEnabled = true
+                            btnRejectBreakout.isEnabled = true
+                        }
+                    }
+                }
+            }
+        }
+
+        btnCancelPendingTeardown?.setOnClickListener {
+            if (activity.isFinishing || activity.isDestroyed) return@setOnClickListener
+            val wardId = wardIdProvider()
+            if (wardId.isBlank()) return@setOnClickListener
+            val wardName = wardNameProvider()
+            teardownUiHelper.showCancelPendingTeardownDialog(activity, wardName) {
+                btnCancelPendingTeardown?.isEnabled = false
+                activity.lifecycleScope.launch {
+                    try {
+                        val accountRepo = AccountabilityRepository.getInstance(activity.applicationContext)
+                        val result = accountRepo.cancelGuardianImmediateTeardown(wardId)
+                        if (activity.isFinishing || activity.isDestroyed) return@launch
+                        result.fold(
+                            onSuccess = {
+                                val updated = policyProvider().copy(
+                                    deactivationStatus = DevicePolicyBundle.DEACTIVATION_STATUS_CANCELLED,
+                                    deactivationRequestedAt = null,
+                                    deactivationUnlockAt = null,
+                                    deactivationHasQr = false,
+                                    remoteTeardownRequestedAt = null
+                                )
+                                onPolicyAcknowledged(updated)
+                                Toast.makeText(
+                                    activity.applicationContext,
+                                    R.string.toast_guardian_remote_teardown_cancelled,
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            },
+                            onFailure = { err ->
+                                if (err is GuardianTeardownAlreadyCompletedException) {
+                                    onTeardownAlreadyCompleted()
+                                } else {
+                                    val msg = err.localizedMessage ?: activity.getString(R.string.error_unknown)
+                                    Toast.makeText(
+                                        activity.applicationContext,
+                                        activity.getString(R.string.toast_guardian_remote_teardown_failed, msg),
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }
+                        )
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        Timber.tag(TAG).e(e, "Error cancelling pending remote teardown")
+                        val msg = e.localizedMessage ?: activity.getString(R.string.error_unknown)
+                        Toast.makeText(
+                            activity.applicationContext,
+                            activity.getString(R.string.toast_guardian_remote_teardown_failed, msg),
+                            Toast.LENGTH_LONG
+                        ).show()
+                    } finally {
+                        if (!activity.isFinishing && !activity.isDestroyed) {
+                            btnCancelPendingTeardown?.isEnabled = true
+                        }
                     }
                 }
             }
@@ -187,18 +346,32 @@ class GuardianAlertsViewBinder(
             cardSelfControlAlertBanner.visibility = View.GONE
         }
 
-        val isDeactivationPending = policy.deactivationStatus == DevicePolicyBundle.DEACTIVATION_STATUS_PENDING && policy.deactivationUnlockAt != null
+        val hasRemoteTeardownTimestamp = (policy.remoteTeardownRequestedAt ?: 0L) > 0L
+        val isGuardianRemoteTeardownPending = policy.deactivationStatus == DevicePolicyBundle.DEACTIVATION_STATUS_PENDING &&
+            hasRemoteTeardownTimestamp
+        val isDeactivationPending = policy.deactivationStatus == DevicePolicyBundle.DEACTIVATION_STATUS_PENDING &&
+            !hasRemoteTeardownTimestamp &&
+            policy.deactivationUnlockAt != null
         val isBreakoutPending = policy.breakoutStatus == DevicePolicyBundle.BREAKOUT_STATUS_PENDING && policy.breakoutUnlockAt != null
 
-        if (isDeactivationPending || isBreakoutPending) {
+        if (isGuardianRemoteTeardownPending) {
             cardBreakoutAlertBanner.visibility = View.VISIBLE
+            tvBreakoutAlertMsg.text = activity.getString(R.string.guardian_remote_teardown_pending_banner, wardName)
+            btnRejectBreakout.visibility = View.GONE
+            btnApproveImmediateTeardown?.visibility = View.GONE
+            btnCancelPendingTeardown?.visibility = View.VISIBLE
+        } else if (isDeactivationPending || isBreakoutPending) {
+            cardBreakoutAlertBanner.visibility = View.VISIBLE
+            btnRejectBreakout.visibility = View.VISIBLE
+            btnCancelPendingTeardown?.visibility = View.GONE
+            btnApproveImmediateTeardown?.visibility = if (isDeactivationPending) View.VISIBLE else View.GONE
             val nowTrusted = TrustedTimeProvider.currentTimeMillis(activity.applicationContext)
             val unlockAt = if (isDeactivationPending) (policy.deactivationUnlockAt ?: 0L) else (policy.breakoutUnlockAt ?: 0L)
             val remainingMs = (unlockAt - nowTrusted).coerceAtLeast(0L)
             val hours = remainingMs / (1000 * 3600)
             val mins = (remainingMs % (1000 * 3600)) / (1000 * 60)
             val timeStr = String.format(Locale.US, "%02d:%02d", hours, mins)
-            
+
             if (isDeactivationPending) {
                 tvBreakoutAlertMsg.text = activity.getString(R.string.guardian_deactivation_alert_msg, wardName, timeStr)
             } else {
@@ -237,6 +410,8 @@ class GuardianAlertsViewBinder(
             }
         } else {
             cardBreakoutAlertBanner.visibility = View.GONE
+            btnApproveImmediateTeardown?.visibility = View.GONE
+            btnCancelPendingTeardown?.visibility = View.GONE
         }
     }
 
@@ -248,6 +423,12 @@ class GuardianAlertsViewBinder(
         btnRevertSelfControlChanges.isEnabled = enabled
         btnDismissSelfControlAlert.isEnabled = enabled
         btnRejectBreakout.isEnabled = enabled
+        btnApproveImmediateTeardown?.isEnabled = enabled
+        btnCancelPendingTeardown?.isEnabled = enabled
+    }
+
+    fun onDestroy() {
+        teardownUiHelper.dismiss()
     }
 
     companion object {

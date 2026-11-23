@@ -129,6 +129,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:ellipsize="end"
+                            android:hint="@string/guardian_timezone_dropdown_label"
                             android:inputType="none"
                             android:maxLines="1"
                             android:textSize="13sp" />
@@ -266,6 +267,96 @@
                         android:textColor="@color/status_red"
                         android:textSize="12sp"
                         android:lineSpacingExtra="2dp" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- Card 4: Guardian Danger Zone (Visible ONLY in Remote Guardian mode) -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/cardGuardianDangerTeardown"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                android:visibility="gone"
+                app:cardBackgroundColor="?attr/colorErrorContainer"
+                app:cardCornerRadius="18dp"
+                app:cardElevation="0dp"
+                app:strokeColor="?attr/colorError"
+                app:strokeWidth="1.5dp"
+                tools:visibility="visible">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="@font/tajawal"
+                        android:text="@string/other_settings_danger_zone_title"
+                        android:textColor="?attr/colorOnErrorContainer"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:fontFamily="@font/tajawal"
+                        android:lineSpacingExtra="2dp"
+                        android:text="@string/other_settings_danger_zone_desc"
+                        android:textColor="?attr/colorOnErrorContainer"
+                        android:textSize="12sp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnRemoteRemoveDeviceOwner"
+                        style="@style/Widget.Material3.Button"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:backgroundTint="?attr/colorError"
+                        android:fontFamily="@font/tajawal"
+                        android:minHeight="48dp"
+                        android:text="@string/btn_remote_remove_device_owner"
+                        android:textColor="?attr/colorOnError"
+                        android:textSize="13sp"
+                        android:textStyle="bold"
+                        app:cornerRadius="12dp" />
+
+                    <LinearLayout
+                        android:id="@+id/layoutPendingRemoteTeardown"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:orientation="vertical"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:id="@+id/tvPendingRemoteTeardownStatus"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:fontFamily="@font/tajawal"
+                            android:lineSpacingExtra="2dp"
+                            android:text="@string/other_settings_remote_teardown_pending_status"
+                            android:textColor="?attr/colorOnErrorContainer"
+                            android:textSize="12sp"
+                            android:textStyle="bold" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnCancelRemoteTeardown"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:fontFamily="@font/tajawal"
+                            android:minHeight="48dp"
+                            android:text="@string/btn_cancel_remote_teardown"
+                            android:textColor="?attr/colorError"
+                            android:textSize="13sp"
+                            app:cornerRadius="12dp"
+                            app:strokeColor="?attr/colorError" />
+                    </LinearLayout>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 

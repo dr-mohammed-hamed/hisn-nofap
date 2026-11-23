@@ -92,4 +92,6 @@ sealed interface GuardianControlEvent {
     data class ShowToastString(val message: String, val isLong: Boolean = false) : GuardianControlEvent
     data class DnsValidationError(val titleRes: Int, val message: String) : GuardianControlEvent
     object SaveSuccess : GuardianControlEvent
+    data object WardTeardownCompleted : GuardianControlEvent
+    data object SupervisionEnded : GuardianControlEvent
 }
