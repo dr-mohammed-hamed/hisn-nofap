@@ -1,12 +1,12 @@
 {
-  "versionCode": 33,
-  "versionName": "1.94",
+  "versionCode": 34,
+  "versionName": "1.95",
   "minSupportedVersion": 1,
   "apkFileName": "antiporn-release.apk",
   "downloadUrl": "https://pub-e568dc85c0ec4f2fb3d1b90e310b4310.r2.dev/antiporn-release.apk",
-  "fileSizeBytes": 28907620,
-  "sha256ApkHash": "46e08c0f9cdbcf5b73e114c6e9a4082f97dd4e13d0b3c565a0959df8e83a134d",
+  "fileSizeBytes": 28985500,
+  "sha256ApkHash": "088f6d07ecdbddf72a2e65d8cbd3b95a3cbb859fb1cba080b9aea26a6d770244",
   "sha256CertificateChecksum": "Cxi7DKn3ddcJXYIuDNXdlKN84EuKu8Bf0L0SkSPCOMk",
-  "releaseNotes": "إصدار 1.94 (كود البناء 33): دعم عالمي وشامل لكافة المعالجات، مع الكشف الذكي عن التطبيقات المزدوجة والمستنسخة وحلها تلقائياً، وتفعيل درع الطوارئ الداخلي لمنع أي تسريب للمواقع أثناء تعارض DoT.",
-  "releaseDate": "2026-11-22"
+  "releaseNotes": "إصدار 1.95 (كود البناء 34): نسخة عالمية لكافة المعالجات مع تحصين كامل لعملية الإنهاء الفوري عن بُعد لمشرف الجهاز (Device Owner)، وتشديد قواعد الأمان السحابية، وتنسيق الحماية والـ VPN لمنع أي تعارض أثناء إلغاء الإشراف.",
+  "releaseDate": "2026-11-23"
 }
