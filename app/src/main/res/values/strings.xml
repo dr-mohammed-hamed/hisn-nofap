@@ -149,18 +149,42 @@
     <string name="shield_dns_unaffiliated_users_notice">درع DNS نشط ومحمي عبر (%1$s). لتغيير الخادم النظامي إلى (%2$s)، يرجى إيقاف المرسل المزدوج أو المجلد الآمن مؤقتاً لتوافق نظام أندرويد.</string>
     <string name="shield_dns_unaffiliated_users_error">تعذر تفعيل درع DNS النظامي لوجود ملفات شخصية ثانوية (مثل المرسل المزدوج أو المجلد الآمن). يرجى إزالتها لتفعيل الحماية.</string>
     <string name="shield_dns_unaffiliated_users_error_with_app">تعذر تفعيل درع DoT لوجود تطبيق منسوخ (%1$s). يرجى إزالته لتفعيل الحماية المباشرة.</string>
-    <string name="shield_dns_emergency_vpn_active_notice">درع الحماية الداخلي (VPN) مفعل لحجب المواقع لوجود تطبيق منسوخ (%1$s). انقر لخيارات الحل وإعادة DoT.</string>
+    <string name="shield_dns_unaffiliated_hostile_dns_error">يوجد خادم DNS مسبق غير عائلي (%1$s) يتجاوز درع الطوارئ، ولا يمكن استبداله تلقائياً لوجود (%2$s). انقر هنا لإزالة النسخة المنسوخة وتفعيل الحماية النظامية فوراً.</string>
+    <string name="shield_dns_emergency_vpn_needs_consent">درع الطوارئ (VPN) بانتظار موافقتك اليدوية للعمل بالتوازي مع السماح بتطبيقات VPN الخارجية. اضغط على الزر أدناه لمنح الموافقة.</string>
+    <string name="btn_grant_emergency_vpn_consent">منح موافقة VPN الطوارئ</string>
+    <string name="toast_emergency_vpn_consent_denied">لم يتم منح موافقة الـ VPN. يرجى الموافقة لتشغيل درع الطوارئ أو إزالة التطبيق المنسوخ.</string>
+    <string name="shield_dns_emergency_vpn_active_notice">درع الطوارئ (VPN) يحمي الهاتف الأساسي حالياً لوجود (%1$s). تنبيه: التطبيقات المنسوخة نفسها خارج نطاق حماية الـ VPN — انقر لإزالتها وتفعيل الحماية النظامية الكاملة.</string>
     <string name="shield_dns_cloned_app_default">تطبيق مستنسخ</string>
-    <string name="dialog_cloned_app_resolution_title">حل تعارض التطبيقات المزدوجة مع درع DoT</string>
+    <string name="shield_dns_unaffiliated_dot_locked_notice">درع DoT النظامي يحمي كافة التطبيقات (بما فيها المنسوخة) عبر (%1$s). ملاحظة: لتغيير خادم DNS أو تفعيل حجب الإعلانات يلزم إزالة البروفايل الثانوي — انقر للخيارات.</string>
+    <string name="profile_type_clone_app">تطبيق مستنسخ</string>
+    <string name="profile_type_work_profile">ملف عمل (Work Profile)</string>
+    <string name="profile_type_private_space">مساحة خاصة (Private Space)</string>
+    <string name="profile_type_secondary_user">مستخدم ثانوي</string>
+    <string name="profile_empty_container_hint">حاوية استنساخ فارغة (بدون تطبيقات ظاهرة)</string>
+    <string name="profile_entry_format">%1$s (مستخدم #%2$d) — %3$s</string>
+    <string name="dialog_cloned_app_resolution_title">إدارة البروفايلات الثانوية وتعارض DoT</string>
+    <string name="dialog_select_profile_title">اختر البروفايل المطلوب معالجته</string>
     <string name="dialog_cloned_app_resolution_msg">تم اكتشاف تطبيق منسوخ على جهازك: (%1$s).\n\nنظام أندرويد يمنع تفعيل خادم DoT المشفر بوجود بروفايلات مستنسخة، وتعمل الحماية حالياً عبر درع الطوارئ الداخلي (VPN).\n\nاختر طريقة الحل المفضلة:</string>
     <string name="btn_open_cloned_app_settings">إلغاء يدوي من إعدادات الهاتف</string>
     <string name="btn_remove_cloned_profile_dpm">إزالة فورية تلقائية (Device Owner)</string>
-    <string name="dialog_confirm_remove_clone_title">تأكيد إزالة التطبيق المنسوخ</string>
+    <string name="btn_remove_selected_profile_dpm">إزالة البروفايل المحدد نهائياً</string>
+    <string name="dialog_confirm_remove_clone_title">تأكيد إزالة البروفايل المحدد</string>
     <string name="dialog_confirm_remove_clone_msg">تحذير: سيتم حذف البروفايل المستنسخ وتطبيق (%1$s) نهائياً مع كافة بياناته ومحادثاته، وسيتم تفعيل درع DoT الأصلي فوراً.\n\nهل أنت متأكد من المتابعة؟</string>
-    <string name="msg_cloned_app_removed_success">تمت إزالة التطبيق المنسوخ بنجاح، وجارٍ تفعيل درع DoT الأصلي.</string>
-    <string name="msg_cloned_app_remove_failed">تعذر إزالة التطبيق المنسوخ تلقائياً. يرجى إيقافه يدوياً من إعدادات الهاتف.</string>
+    <string name="dialog_confirm_remove_clone_single_msg">تحذير شديد: سيتم حذف البروفايل المستنسخ (مستخدم #%2$d) وتطبيق (%1$s) نهائياً مع كافة بياناته ومحادثاته ولا يمكن التراجع عن هذا الإجراء.</string>
+    <string name="dialog_confirm_remove_empty_clone_msg">سيتم حذف حاوية الاستنساخ الفارغة (مستخدم #%1$d) نهائياً لتفعيل درع DoT النظامي الكامل على الهاتف.</string>
+    <string name="dialog_confirm_remove_work_or_private_msg">تحذير شديد لخطورة فقدان البيانات: أنت على وشك حذف «%1$s» (مستخدم #%2$d) نهائياً من الجهاز بكل تطبيقاته وملفاته وحساباته ولا يمكن التراجع عن الحذف.\n\nيُفضّل إزالته يدوياً من إعدادات الهاتف إذا كنت غير متأكد من محتوياته.</string>
+    <string name="dialog_confirm_remove_profile_checkbox">أدرك تماماً أن حذف هذا البروفايل نهائي وسيؤدي لفقدان كل بياناته، وأتحمل مسؤولية الحذف.</string>
+    <string name="msg_cloned_app_removed_success">تمت إزالة البروفايل الثانوي بنجاح، وجارٍ تفعيل درع DoT الأصلي.</string>
+    <string name="msg_profile_removed_more_remaining">تمت إزالة البروفايل المحدد، ولا تزال هناك بروفايلات ثانوية أخرى على النظام.</string>
+    <string name="msg_cloned_app_remove_still_present">لا يزال البروفايل الثانوي موجوداً في النظام. بقي درع الطوارئ مفعلاً — يرجى إزالته يدوياً من إعدادات الهاتف.</string>
+    <string name="msg_cloned_app_remove_failed">تعذر إزالة البروفايل تلقائياً (قيود نظام الشركة المصنعة). يرجى إزالته يدوياً من إعدادات الهاتف.</string>
     <string name="dialog_web_filter_unaffiliated_warning_title">تنبيه بشأن التطبيقات المزدوجة والمجلد الآمن</string>
     <string name="dialog_web_filter_unaffiliated_warning_msg">تنبيه: ميزة حجب الإعلانات والفلاتر المتقدمة تتطلب نظام أندرويد موحداً بدون تطبيقات مزدوجة أو مجلد آمن. الحماية الأساسية ضد المواقع غير اللائقة تعمل بكفاءة عبر الخادم العائلي المشفر.</string>
+    <string name="dialog_web_filter_save_blocked_title">يتعذر تطبيق التغيير حالياً</string>
+    <string name="dialog_web_filter_save_blocked_dns_msg">تم إيقاف الحفظ لتجنب التضليل: نظام أندرويد يقفل Private DNS حالياً على (%2$s) ولا يمكن تغييره إلى (%1$s) لوجود بروفايل ثانوي (مثل التطبيقات المنسوخة) وغياب صلاحية WRITE_SECURE_SETTINGS.\n\nأزل البروفايل الثانوي أولاً لتفعيل تغيير خادم DNS فوراً.</string>
+    <string name="dialog_web_filter_save_blocked_filter_msg">تم إيقاف الحفظ لتجنب التضليل: خادم DoT النظامي المقفول (%1$s) يتجاوز نفق فلترة الإعلانات والمواقع المحلي في أندرويد، ولا يمكن تخفيضه لوجود بروفايل ثانوي وغياب صلاحية WRITE_SECURE_SETTINGS.\n\nأزل البروفايل الثانوي أولاً لتفعيل حجب الإعلانات والفلاتر الكاملة.</string>
+    <string name="dialog_web_filter_save_blocked_hostile_msg">تم إيقاف الحفظ لتجنب التضليل: يوجد خادم DNS مسبق غير عائلي (%1$s) لا يمكن تغييره بسبب وجود بروفايل ثانوي وغياب صلاحية WRITE_SECURE_SETTINGS.\n\nأزل البروفايل الثانوي الآن لحل التعارض واستعادة الحماية الكاملة.</string>
+    <string name="btn_resolve_secondary_profile_now">إدارة / إزالة البروفايل الثانوي</string>
 
     <string name="default_dns_text">تلقائي</string>
 
@@ -766,8 +790,10 @@
     <string name="oem_xiaomi_desc">يشترط نظام شاومي تفعيل خياري: (تصحيح أخطاء USB) و(تصحيح أخطاء USB - إعدادات الأمان) داخل خيارات المطور للمتابعة.</string>
     <string name="oem_samsung_multiuser_title">تنبيه لسامسونج: وُجد مجلد آمن أو مستخدم إضافي</string>
     <string name="oem_samsung_multiuser_desc">تم رصد «المجلد الآمن» (Secure Folder) أو «المرسال المزدوج». يُنصح بإيقافهما مؤقتاً لتجنب تعثر الترقية.</string>
-    <string name="oem_realme_oppo_title">تنبيه لأجهزة ريلمي وأوبو (Realme / OPPO)</string>
-    <string name="oem_realme_oppo_desc">يُوصى بتفعيل خيار «تعطيل مراقبة الأذونات» (Disable permission monitoring) بأسفل خيارات المطور لضمان استقرار الاقتران.</string>
+    <string name="oem_realme_oppo_title">تنبيه هام لأجهزة ريلمي وأوبو وون بلس (OPPO / Realme)</string>
+    <string name="oem_realme_oppo_desc">يجب تفعيل خيار «تعطيل مراقبة الأذونات» (Disable permission monitoring) بأسفل خيارات المطور ثم إعادة تشغيل الهاتف قبل الاقتران، لمنح صلاحية ضبط Private DNS وحماية التطبيقات المنسوخة.</string>
+    <string name="oem_clone_profile_warning_title">تم اكتشاف تطبيق مستنسخ (App Cloner)</string>
+    <string name="oem_clone_profile_warning_desc">وجود تطبيق منسوخ يمنع أندرويد تلقائياً من تغيير Private DNS عبر صلاحية المالك وحدها. لن يتم حذف تطبيقك المنسوخ عند التفعيل، لكن لضمان الحماية الكاملة يجب تفعيل «تعطيل مراقبة الأذونات» في خيارات المطور أو إزالة النسخة المنسوخة.</string>
     <string name="dialog_enable_dev_desc_miui">1. سنفتح لك شاشة "حول الهاتف" (About Phone).\n2. انقر 7 مرات متتالية وسريعة على "إصدار OS / MIUI".\n3. أدخل رمز قفل الشاشة عند طلبه.\n4. بعد ظهور رسالة "أنت الآن مطور"، عُد للتطبيق بنقرة رجوع.</string>
 
 

@@ -523,11 +523,15 @@ internal object CurfewLifecycleHandler {
         requiredMode: CurfewBlackholeVpnService.VpnMode,
         alwaysOnPkg: String?,
         isLockdown: Boolean
-    ): Boolean = when {
-        instantKill -> false
-        requiredMode == CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY ->
-            alwaysOnPkg != context.packageName || isLockdown
-        else -> alwaysOnPkg == context.packageName || (alwaysOnPkg == null && isLockdown)
+    ): Boolean {
+        if (instantKill) return false
+        val targetPkg = CurfewVpnDnsBridge.resolveTargetAlwaysOnPackage(context, requiredMode)
+        return when (requiredMode) {
+            CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY ->
+                alwaysOnPkg != targetPkg || isLockdown
+            else ->
+                alwaysOnPkg == context.packageName || (alwaysOnPkg == null && isLockdown)
+        }
     }
 
     private fun syncNotificationSafely(context: Context, caller: String) {

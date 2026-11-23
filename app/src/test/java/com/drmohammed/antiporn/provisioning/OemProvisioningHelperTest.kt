@@ -115,4 +115,32 @@ class OemProvisioningHelperTest {
             assertFalse(result)
         }
     }
+
+    @Test
+    fun testBuildAllOemWarnings_oppoWithCloneProfileShowsBothWarningsWithoutShadowing() {
+        val warnings = OemProvisioningHelper.buildAllOemWarnings(
+            hasConflictingProfile = true,
+            isSamsung = false,
+            isXiaomi = false,
+            isRealmeOrOppo = true,
+            isOnlyCloneProfile = true
+        )
+        assertEquals("OPPO with cloned app must show BOTH clone warning and permission warning", 2, warnings.size)
+        assertEquals(R.string.oem_clone_profile_warning_title, warnings[0].titleRes)
+        assertEquals(R.string.oem_realme_oppo_title, warnings[1].titleRes)
+    }
+
+    @Test
+    fun testBuildAllOemWarnings_xiaomiWithPrivateSpaceShowsBothWarningsWithoutShadowing() {
+        val warnings = OemProvisioningHelper.buildAllOemWarnings(
+            hasConflictingProfile = true,
+            isSamsung = false,
+            isXiaomi = true,
+            isRealmeOrOppo = false,
+            isOnlyCloneProfile = false
+        )
+        assertEquals("Xiaomi with Private Space must show BOTH private space danger and MIUI permission warning", 2, warnings.size)
+        assertEquals(R.string.dialog_danger_private_space_title, warnings[0].titleRes)
+        assertEquals(R.string.oem_xiaomi_title, warnings[1].titleRes)
+    }
 }

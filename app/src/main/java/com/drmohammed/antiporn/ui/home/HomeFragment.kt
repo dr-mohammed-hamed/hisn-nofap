@@ -1,16 +1,18 @@
 package com.drmohammed.antiporn.ui.home
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.net.VpnService
 import android.os.Bundle
 import android.os.SystemClock
-import android.os.UserManager
 import android.provider.Settings
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
@@ -24,26 +26,28 @@ import com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator
 import com.drmohammed.antiporn.accessibility.ui.AccessibilityOnboardingBottomSheet
 import com.drmohammed.antiporn.banking.BankingCloakManager
 import com.drmohammed.antiporn.core.engine.ProtectionEngine
+import com.drmohammed.antiporn.core.engine.SecondaryProfileDetector
 import com.drmohammed.antiporn.core.model.ShieldStatus
 import com.drmohammed.antiporn.curfew.CurfewForegroundWatcher
 import com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge
 import com.drmohammed.antiporn.curfew.NapController
+import com.drmohammed.antiporn.curfew.UnaffiliatedDnsNoticeState
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.databinding.FragmentHomeBinding
 import com.drmohammed.antiporn.provisioning.ui.ProvisioningWizardActivity
 import com.drmohammed.antiporn.shields.DnsShield
 import com.drmohammed.antiporn.ui.ProtectionUiState
+import com.drmohammed.antiporn.ui.common.SecondaryProfileResolutionDialogHelper
 import com.drmohammed.antiporn.ui.shields.ActiveShieldsBottomSheet
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.koin.androidx.viewmodel.ext.android.viewModel
 import org.koin.android.ext.android.inject
 import com.drmohammed.antiporn.notification.repository.NotificationRepository
 import com.drmohammed.antiporn.ui.notification.NotificationCenterActivity
-import timber.log.Timber
 
 /**
  * Modern Hero Dashboard Fragment.
@@ -72,8 +76,29 @@ class HomeFragment : Fragment() {
     private var lastProvisioningClickTime = 0L
     private var wasStopped = false
     private var napConfirmDialog: AlertDialog? = null
-    private var clonedAppResolutionDialog: AlertDialog? = null
-    private var clonedAppConfirmDialog: AlertDialog? = null
+    private var activeProfileDialog: AlertDialog? = null
+    private var dnsStatusNoticeJob: Job? = null
+
+    private val vpnConsentLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val ctx = context ?: return@registerForActivityResult
+        val appCtx = ctx.applicationContext
+        if (result.resultCode == Activity.RESULT_OK) {
+            homeViewModel.toggleProtection { success, errorMsg ->
+                if (isAdded && _binding != null) {
+                    val message = if (success) {
+                        getString(R.string.toast_enforce_success, DnsShield.getEffectiveDnsHost(appCtx))
+                    } else {
+                        errorMsg ?: getString(R.string.status_need_enforce_desc)
+                    }
+                    Toast.makeText(appCtx, message, Toast.LENGTH_LONG).show()
+                }
+            }
+        } else if (isAdded) {
+            Toast.makeText(appCtx, R.string.toast_emergency_vpn_consent_denied, Toast.LENGTH_LONG).show()
+        }
+    }
 
     override fun onAttach(context: Context) {
         super.onAttach(context)
@@ -262,10 +287,18 @@ class HomeFragment : Fragment() {
             if (now - lastNoticeClickTime < 1000L) return@setOnClickListener
             lastNoticeClickTime = now
 
-            val ctx = context ?: return@setOnClickListener
-            val secondaries = com.drmohammed.antiporn.core.engine.SecondaryProfileDetector.getSecondaryProfiles(ctx)
-            if (secondaries.isNotEmpty()) {
-                showClonedAppResolutionDialog(ctx, secondaries)
+            val appCtx = context?.applicationContext ?: return@setOnClickListener
+            viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+                if (!ProtectionEngine.isDeviceOwner(appCtx)) return@launch
+                val secondaries = SecondaryProfileDetector.getSecondaryProfiles(appCtx)
+                if (secondaries.isNotEmpty()) {
+                    withContext(Dispatchers.Main) {
+                        val uiCtx = context ?: return@withContext
+                        if (isAdded && _binding != null && activity?.isFinishing != true && activity?.isDestroyed != true) {
+                            showSelectiveProfileResolutionDialog(uiCtx, secondaries)
+                        }
+                    }
+                }
             }
         }
 
@@ -281,14 +314,42 @@ class HomeFragment : Fragment() {
             }
 
             val appCtx = ctx.applicationContext
-            homeViewModel.toggleProtection { success, errorMsg ->
-                if (isAdded && _binding != null) {
-                    val message = if (success) {
-                        getString(R.string.toast_enforce_success, DnsShield.getEffectiveDnsHost(appCtx))
-                    } else {
-                        errorMsg ?: getString(R.string.status_need_enforce_desc)
+            viewLifecycleOwner.lifecycleScope.launch {
+                val needsManualConsent = withContext(Dispatchers.IO) {
+                    CurfewVpnDnsBridge.needsManualEmergencyVpnConsent(appCtx)
+                }
+                if (!isAdded || _binding == null) return@launch
+                if (needsManualConsent) {
+                    val uiCtx = context ?: return@launch
+                    val shouldWaitForConsent = try {
+                        val prepareIntent = VpnService.prepare(uiCtx)
+                        if (prepareIntent != null) {
+                            vpnConsentLauncher.launch(prepareIntent)
+                            true
+                        } else {
+                            false
+                        }
+                    } catch (e: Exception) {
+                        Log.w("HomeFragment", "Unable to prepare or launch VpnService consent intent", e)
+                        Toast.makeText(
+                            appCtx,
+                            R.string.toast_emergency_vpn_consent_denied,
+                            Toast.LENGTH_LONG
+                        ).show()
+                        true
                     }
-                    Toast.makeText(appCtx, message, Toast.LENGTH_LONG).show()
+                    if (shouldWaitForConsent) return@launch
+                }
+
+                homeViewModel.toggleProtection { success, errorMsg ->
+                    if (isAdded && _binding != null) {
+                        val message = if (success) {
+                            getString(R.string.toast_enforce_success, DnsShield.getEffectiveDnsHost(appCtx))
+                        } else {
+                            errorMsg ?: getString(R.string.status_need_enforce_desc)
+                        }
+                        Toast.makeText(appCtx, message, Toast.LENGTH_LONG).show()
+                    }
                 }
             }
         }
@@ -324,6 +385,8 @@ class HomeFragment : Fragment() {
 
     fun updateProtectionState(state: ProtectionUiState, isApplying: Boolean = false) {
         if (!isAdded || _binding == null) return
+        dnsStatusNoticeJob?.cancel()
+        dnsStatusNoticeJob = null
 
         val ctx = context ?: return
         when (state) {
@@ -354,18 +417,9 @@ class HomeFragment : Fragment() {
                         status is ShieldStatus.Active || status is ShieldStatus.Unsupported
                     }
                     val allActive = ProtectionEngine.shields.all { isHealthyStatus(state.shields[it.id]) }
+                    val appCtx = ctx.applicationContext
 
                     if (allActive) {
-                        val isUnaffiliatedFallback = CurfewVpnDnsBridge.isPrivateDnsBlockedByUnaffiliatedUsers(ctx)
-                        if (isUnaffiliatedFallback) {
-                            binding.cardHomeNotice.visibility = View.VISIBLE
-                            val cloneSummary = com.drmohammed.antiporn.core.engine.SecondaryProfileDetector.formatClonedAppsSummary(ctx)
-                                ?: getString(R.string.shield_dns_cloned_app_default)
-                            binding.tvHomeNoticeTitle.text = getString(R.string.dialog_cloned_app_resolution_title)
-                            binding.tvHomeNoticeDesc.text = getString(R.string.shield_dns_emergency_vpn_active_notice, cloneSummary)
-                        } else {
-                            binding.cardHomeNotice.visibility = View.GONE
-                        }
                         binding.tvHeroShieldStatus.text = getString(R.string.home_shield_active)
                         binding.tvHeroShieldStatus.setTextColor(ContextCompat.getColor(ctx, R.color.shield_emerald_radiant))
                         binding.tvHeroShieldStatus.setBackgroundResource(R.drawable.bg_shield_status_badge)
@@ -396,6 +450,54 @@ class HomeFragment : Fragment() {
                         binding.tvHeroShieldStatus.setTextColor(ContextCompat.getColor(ctx, R.color.shield_amber_calm))
                         binding.tvHeroShieldStatus.setBackgroundResource(R.drawable.bg_shield_status_badge_amber)
                         binding.frameHeroShieldGlow.setBackgroundResource(R.drawable.bg_hero_shield_inactive)
+                    }
+
+                    dnsStatusNoticeJob = viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+                        val needsManualVpnConsent = if (canEnforce) {
+                            CurfewVpnDnsBridge.needsManualEmergencyVpnConsent(appCtx)
+                        } else {
+                            false
+                        }
+                        val noticeState = if (allActive) {
+                            CurfewVpnDnsBridge.evaluateUnaffiliatedDnsNoticeState(appCtx)
+                        } else {
+                            UnaffiliatedDnsNoticeState.NONE
+                        }
+                        val cloneSummary = if (noticeState == UnaffiliatedDnsNoticeState.EMERGENCY_VPN_ACTIVE) {
+                            SecondaryProfileDetector.formatClonedAppsSummary(appCtx)
+                        } else {
+                            null
+                        }
+                        val currentGlobalHost = if (noticeState == UnaffiliatedDnsNoticeState.DOT_LOCKED_NO_CUSTOMIZE) {
+                            Settings.Global.getString(appCtx.contentResolver, "private_dns_specifier")
+                        } else {
+                            null
+                        }
+                        withContext(Dispatchers.Main) {
+                            if (!isAdded || _binding == null) return@withContext
+                            if (canEnforce && needsManualVpnConsent) {
+                                binding.btnEnforceNow.setText(R.string.btn_grant_emergency_vpn_consent)
+                            }
+                            if (allActive) {
+                                when (noticeState) {
+                                    UnaffiliatedDnsNoticeState.EMERGENCY_VPN_ACTIVE -> {
+                                        binding.cardHomeNotice.visibility = View.VISIBLE
+                                        val resolvedSummary = cloneSummary ?: getString(R.string.profile_empty_container_hint)
+                                        binding.tvHomeNoticeTitle.text = getString(R.string.dialog_cloned_app_resolution_title)
+                                        binding.tvHomeNoticeDesc.text = getString(R.string.shield_dns_emergency_vpn_active_notice, resolvedSummary)
+                                    }
+                                    UnaffiliatedDnsNoticeState.DOT_LOCKED_NO_CUSTOMIZE -> {
+                                        binding.cardHomeNotice.visibility = View.VISIBLE
+                                        val activeHost = currentGlobalHost?.takeIf { it.isNotBlank() } ?: DnsShield.DEFAULT_DNS_HOST
+                                        binding.tvHomeNoticeTitle.text = getString(R.string.dialog_cloned_app_resolution_title)
+                                        binding.tvHomeNoticeDesc.text = getString(R.string.shield_dns_unaffiliated_dot_locked_notice, activeHost)
+                                    }
+                                    UnaffiliatedDnsNoticeState.NONE -> {
+                                        binding.cardHomeNotice.visibility = View.GONE
+                                    }
+                                }
+                            }
+                        }
                     }
                 } else {
                     binding.cardAdbHelp.visibility = View.VISIBLE
@@ -513,89 +615,49 @@ class HomeFragment : Fragment() {
         b.btnGrantUsageAccess.visibility = if (isUsageRequired && !hasUsage) View.VISIBLE else View.GONE
     }
 
-    private fun showClonedAppResolutionDialog(
+    private fun showSelectiveProfileResolutionDialog(
         ctx: Context,
-        secondaries: List<com.drmohammed.antiporn.core.engine.SecondaryProfileDetector.UnaffiliatedProfileInfo>
+        secondaries: List<SecondaryProfileDetector.UnaffiliatedProfileInfo>
     ) {
         if (secondaries.isEmpty()) return
-        val appSummary = secondaries.flatMap { it.clonedAppNames }.distinct().takeIf { it.isNotEmpty() }?.joinToString(", ")
-            ?: getString(R.string.shield_dns_cloned_app_default)
-
-        clonedAppResolutionDialog?.dismiss()
-        clonedAppResolutionDialog = MaterialAlertDialogBuilder(ctx)
-            .setTitle(R.string.dialog_cloned_app_resolution_title)
-            .setMessage(getString(R.string.dialog_cloned_app_resolution_msg, appSummary))
-            .setPositiveButton(R.string.btn_open_cloned_app_settings) { _, _ ->
+        activeProfileDialog?.dismiss()
+        SecondaryProfileResolutionDialogHelper.showProfileSelectionDialog(
+            context = ctx,
+            secondaries = secondaries,
+            onOpenSettings = {
                 try {
-                    val intent = com.drmohammed.antiporn.core.engine.SecondaryProfileDetector.resolveCloneSettingsIntent(ctx)
+                    val intent = SecondaryProfileDetector.resolveCloneSettingsIntent(ctx)
                     startActivity(intent)
                 } catch (e: Exception) {
                     Toast.makeText(ctx.applicationContext, R.string.toast_open_settings_failed, Toast.LENGTH_SHORT).show()
                 }
-            }
-            .setNeutralButton(R.string.btn_remove_cloned_profile_dpm) { _, _ ->
-                confirmAndRemoveClonedProfile(ctx, secondaries, appSummary)
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
-    }
-
-    private fun confirmAndRemoveClonedProfile(
-        ctx: Context,
-        secondaries: List<com.drmohammed.antiporn.core.engine.SecondaryProfileDetector.UnaffiliatedProfileInfo>,
-        appSummary: String
-    ) {
-        clonedAppConfirmDialog?.dismiss()
-        clonedAppConfirmDialog = MaterialAlertDialogBuilder(ctx)
-            .setTitle(R.string.dialog_confirm_remove_clone_title)
-            .setMessage(getString(R.string.dialog_confirm_remove_clone_msg, appSummary))
-            .setPositiveButton(R.string.btn_remove_cloned_profile_dpm) { _, _ ->
+            },
+            onConfirmRemoveSingleProfile = { selectedProfile ->
                 val appCtx = ctx.applicationContext
-                viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
-                    var anyRemoved = false
-                    for (profile in secondaries) {
-                        if (com.drmohammed.antiporn.core.engine.SecondaryProfileDetector.removeSecondaryProfile(appCtx, profile.userHandle)) {
-                            anyRemoved = true
+                homeViewModel.removeSecondaryProfile(selectedProfile) { removedTarget, allCleared ->
+                    if (isAdded && _binding != null) {
+                        val msgRes = when {
+                            allCleared -> R.string.msg_cloned_app_removed_success
+                            removedTarget -> R.string.msg_profile_removed_more_remaining
+                            else -> R.string.msg_cloned_app_remove_failed
                         }
-                    }
-                    if (anyRemoved) {
-                        val userManager = appCtx.getSystemService(Context.USER_SERVICE) as? UserManager
-                        val deadline = SystemClock.elapsedRealtime() + 1500L
-                        while (SystemClock.elapsedRealtime() < deadline) {
-                            val count = try {
-                                userManager?.userProfiles?.size ?: 1
-                            } catch (e: Exception) {
-                                Timber.tag("HomeFragment").w(e, "Failed checking userProfiles size after removeUser")
-                                1
-                            }
-                            if (count <= 1) break
-                            delay(100L)
-                        }
-                        CurfewVpnDnsBridge.updatePrivateDnsBlockedByUnaffiliatedUsers(appCtx, false)
-                    }
-                    withContext(Dispatchers.Main) {
-                        if (isAdded && _binding != null) {
-                            if (anyRemoved) {
-                                Toast.makeText(appCtx, R.string.msg_cloned_app_removed_success, Toast.LENGTH_LONG).show()
-                                homeViewModel.toggleProtection { _, _ -> }
-                            } else {
-                                Toast.makeText(appCtx, R.string.msg_cloned_app_remove_failed, Toast.LENGTH_LONG).show()
-                            }
-                        }
+                        Toast.makeText(appCtx, msgRes, Toast.LENGTH_LONG).show()
                     }
                 }
+            },
+            onActiveDialogChanged = { dialog ->
+                activeProfileDialog = dialog
             }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
+        )
     }
 
     override fun onDestroyView() {
+        dnsStatusNoticeJob?.cancel()
+        dnsStatusNoticeJob = null
         napConfirmDialog?.dismiss()
         napConfirmDialog = null
-        clonedAppResolutionDialog?.dismiss()
-        clonedAppResolutionDialog = null
-        clonedAppConfirmDialog?.dismiss()
-        clonedAppConfirmDialog = null
+        activeProfileDialog?.dismiss()
+        activeProfileDialog = null
         super.onDestroyView()
         _binding = null
     }

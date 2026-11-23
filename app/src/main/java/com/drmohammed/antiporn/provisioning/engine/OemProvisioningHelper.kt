@@ -4,7 +4,10 @@ import android.content.Context
 import android.os.Build
 import android.os.UserManager
 import androidx.annotation.StringRes
+import androidx.annotation.VisibleForTesting
 import com.drmohammed.antiporn.R
+import com.drmohammed.antiporn.core.engine.SecondaryProfileDetector
+import com.drmohammed.antiporn.telemetry.SafeDpmGateway
 import timber.log.Timber
 import java.util.Locale
 
@@ -59,7 +62,14 @@ object OemProvisioningHelper {
         return try {
             val userManager = context.getSystemService(Context.USER_SERVICE) as? UserManager
             val profiles = userManager?.userProfiles ?: emptyList()
-            profiles.size > 1
+            if (profiles.size > 1) {
+                return true
+            }
+            if (SafeDpmGateway.isDeviceOwner(context)) {
+                SecondaryProfileDetector.countSecondaryUsersAndProfiles(context).count > 0
+            } else {
+                false
+            }
         } catch (e: Exception) {
             Timber.tag(TAG).w(e, "Failed inspecting user profiles: ${e.message}")
             false
@@ -92,7 +102,76 @@ object OemProvisioningHelper {
     )
 
     /**
-     * Returns the OEM-specific pre-flight guidance warning, if applicable.
+     * Returns all applicable OEM pre-flight warnings without letting conflicting-profile
+     * warnings shadow OPPO/Realme or Xiaomi permission-monitoring requirements.
+     */
+    fun getAllOemWarnings(context: Context): List<OemWarning> {
+        val hasConflict = hasConflictingProfile(context)
+        val isOnlyClone = if (hasConflict) {
+            try {
+                val profiles = SecondaryProfileDetector.getSecondaryProfiles(context)
+                profiles.isNotEmpty() && profiles.all { it.profileType == SecondaryProfileDetector.ProfileType.CLONE_APP }
+            } catch (_: Exception) {
+                false
+            }
+        } else {
+            false
+        }
+        return buildAllOemWarnings(
+            hasConflictingProfile = hasConflict,
+            isSamsung = isSamsung(),
+            isXiaomi = isXiaomi(),
+            isRealmeOrOppo = isRealmeOrOppo(),
+            isOnlyCloneProfile = isOnlyClone
+        )
+    }
+
+    @VisibleForTesting
+    internal fun buildAllOemWarnings(
+        hasConflictingProfile: Boolean,
+        isSamsung: Boolean,
+        isXiaomi: Boolean,
+        isRealmeOrOppo: Boolean,
+        isOnlyCloneProfile: Boolean = false
+    ): List<OemWarning> {
+        val warnings = mutableListOf<OemWarning>()
+        if (hasConflictingProfile) {
+            warnings.add(
+                when {
+                    isSamsung -> OemWarning(
+                        titleRes = R.string.oem_samsung_multiuser_title,
+                        descRes = R.string.oem_samsung_multiuser_desc
+                    )
+                    isOnlyCloneProfile -> OemWarning(
+                        titleRes = R.string.oem_clone_profile_warning_title,
+                        descRes = R.string.oem_clone_profile_warning_desc
+                    )
+                    else -> OemWarning(
+                        titleRes = R.string.dialog_danger_private_space_title,
+                        descRes = R.string.dialog_danger_private_space_desc
+                    )
+                }
+            )
+        }
+        when {
+            isXiaomi -> warnings.add(
+                OemWarning(
+                    titleRes = R.string.oem_xiaomi_title,
+                    descRes = R.string.oem_xiaomi_desc
+                )
+            )
+            isRealmeOrOppo -> warnings.add(
+                OemWarning(
+                    titleRes = R.string.oem_realme_oppo_title,
+                    descRes = R.string.oem_realme_oppo_desc
+                )
+            )
+        }
+        return warnings
+    }
+
+    /**
+     * Returns the primary OEM-specific pre-flight guidance warning, if applicable.
      */
     fun getOemWarning(context: Context): OemWarning? {
         if (hasConflictingProfile(context)) {

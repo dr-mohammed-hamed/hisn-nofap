@@ -7,10 +7,12 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.engine.ProtectionEngine
+import com.drmohammed.antiporn.core.engine.SecondaryProfileDetector
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.curfew.CurfewEnforcer
 import com.drmohammed.antiporn.curfew.CurfewForegroundWatcher
 import com.drmohammed.antiporn.curfew.CurfewScheduler
+import com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge
 import com.drmohammed.antiporn.curfew.NapController
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.ui.ProtectionUiState
@@ -237,6 +239,33 @@ class HomeViewModel(
             _uiState.update { it.copy(isApplying = false) }
             refreshProtectionStateInternal(isEnforcing = false, force = true)
             callbacks.forEach { it.invoke(allSuccess, errorMsg) }
+        }
+    }
+
+    /**
+     * Removes a single user-selected secondary/unaffiliated profile via Device Owner
+     * [android.app.admin.DevicePolicyManager.removeUser] and polls Android until that profile is removed
+     * before re-evaluating whether all secondary profiles are gone.
+     */
+    fun removeSecondaryProfile(
+        profile: SecondaryProfileDetector.UnaffiliatedProfileInfo,
+        onComplete: (removedTarget: Boolean, allCleared: Boolean) -> Unit
+    ) {
+        val app = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = SecondaryProfileDetector.removeSecondaryProfileAndAwait(app, profile)
+            if (result.allSecondariesCleared) {
+                CurfewVpnDnsBridge.updatePrivateDnsBlockedByUnaffiliatedUsers(app, false)
+            }
+
+            withContext(Dispatchers.Main) {
+                onComplete(result.removedTarget, result.allSecondariesCleared)
+                if (result.allSecondariesCleared) {
+                    toggleProtection { _, _ -> }
+                } else if (result.removedTarget) {
+                    refreshProtectionState(isEnforcing = false, force = true)
+                }
+            }
         }
     }
 

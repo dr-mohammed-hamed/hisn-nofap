@@ -64,14 +64,27 @@ object ActiveShieldsEvaluator {
         // 2. AntiPorn DNS Shield
         val isDnsActive = systemStatuses[DnsShield.id] is ShieldStatus.Active
         val effectiveHost = DnsShield.getEffectiveDnsHost(appContext)
-        val isAdultBlockingDns = isHostAdultFiltering(effectiveHost)
         val isLocalVpnFiltering = com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService.isServiceOrTunnelActive() &&
             com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService.currentMode == com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY
+        val actualOsDnsHost = if (!isLocalVpnFiltering && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                val gMode = android.provider.Settings.Global.getString(appContext.contentResolver, "private_dns_mode")
+                val gSpec = android.provider.Settings.Global.getString(appContext.contentResolver, "private_dns_specifier")
+                if (gMode == "hostname" && !gSpec.isNullOrBlank()) gSpec else null
+            } catch (_: Exception) {
+                null
+            }
+        } else {
+            null
+        }
+        val displayedHost = actualOsDnsHost ?: effectiveHost
+        val isAdultBlockingDns = isHostAdultFiltering(displayedHost) ||
+            (policy?.dnsHost?.isNotBlank() == true && displayedHost.equals(policy.dnsHost.trim(), ignoreCase = true))
         if (isDnsActive && (isAdultBlockingDns || isLocalVpnFiltering)) {
             val desc = if (isLocalVpnFiltering) {
                 context.getString(R.string.shield_dns_local_filter_active)
             } else {
-                context.getString(R.string.shield_active_dns_desc, effectiveHost)
+                context.getString(R.string.shield_active_dns_desc, displayedHost)
             }
             activeList.add(
                 ActiveShieldInfo(

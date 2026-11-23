@@ -319,11 +319,7 @@ class CurfewBlackholeVpnService : VpnService() {
                     if (SafeDpmGateway.isDeviceOwner(appContext)) {
                         val alwaysOnPkg = SafeDpmGateway.getAlwaysOnVpnPackageBlocking(appContext, recordSuccess = false).getOrNull()
                         val isLockdown = SafeDpmGateway.isAlwaysOnVpnLockdownEnabledBlocking(appContext, recordSuccess = false).getOrNull() == true
-                        val policy = try {
-                            com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(appContext).getCurrentPolicy()
-                        } catch (_: Exception) { null }
-                        val shouldBlockExternalVpn = policy?.isBlockExternalVpnEnabled ?: true
-                        val targetAlwaysOnPkg = if (shouldBlockExternalVpn) packageName else null
+                        val targetAlwaysOnPkg = CurfewVpnDnsBridge.resolveTargetAlwaysOnPackage(appContext, targetMode)
 
                         if (alwaysOnPkg != targetAlwaysOnPkg || isLockdown) {
                             SafeDpmGateway.setAlwaysOnVpnPackageBlocking(
@@ -807,11 +803,15 @@ class CurfewBlackholeVpnService : VpnService() {
                 return VpnMode.CURFEW_BLACKHOLE
             }
             val isDnsFilterRequired = try {
-                val policy = PolicyRepository.getInstance(context).getCurrentPolicy()
-                (policy.isFullSystemFilteringEnabled && policy.browserFilterMode != DevicePolicyBundle.BROWSER_FILTER_OFF) ||
-                    policy.isAdBlockingEnabled ||
-                    DnsResilienceManager.isLocalVpnFallbackActive() ||
-                    CurfewVpnDnsBridge.isDoTLeakingAndUnaffiliatedBlocked(context)
+                if (CurfewVpnDnsBridge.hasUnclearableHostilePrivateDns(context)) {
+                    false
+                } else {
+                    val policy = PolicyRepository.getInstance(context).getCurrentPolicy()
+                    (policy.isFullSystemFilteringEnabled && policy.browserFilterMode != DevicePolicyBundle.BROWSER_FILTER_OFF) ||
+                        policy.isAdBlockingEnabled ||
+                        DnsResilienceManager.isLocalVpnFallbackActive() ||
+                        CurfewVpnDnsBridge.isDoTLeakingAndUnaffiliatedBlocked(context)
+                }
             } catch (e: Exception) {
                 Timber.tag(TAG).w(e, "Failed reading policy for VPN mode evaluation; preserving safe fallback=$fallbackOnFailure")
                 return if (fallbackOnFailure != VpnMode.IDLE) fallbackOnFailure else VpnMode.IDLE

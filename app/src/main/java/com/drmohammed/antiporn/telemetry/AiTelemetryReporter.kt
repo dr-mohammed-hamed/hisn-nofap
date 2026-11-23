@@ -5,6 +5,7 @@ import android.content.Intent
 import android.util.Log
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.engine.ProtectionEngine
+import com.drmohammed.antiporn.core.engine.SecondaryProfileDetector
 import com.drmohammed.antiporn.core.model.ShieldStatus
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
 import com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService
@@ -335,19 +336,64 @@ object AiTelemetryReporter {
         } catch (_: Exception) {
             emptyList()
         }
-        val profilesCount = userProfilesList.size.coerceAtLeast(1)
-        val profileIds = try {
-            userProfilesList.map { user ->
-                user.hashCode()
+        val secondaryCountResult = try {
+            SecondaryProfileDetector.countSecondaryUsersAndProfiles(appContext)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed counting secondary users/profiles for telemetry report", e)
+            null
+        }
+        val secondaryProfiles = try {
+            SecondaryProfileDetector.getSecondaryProfiles(appContext)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed querying secondary profiles for telemetry report", e)
+            emptyList()
+        }
+        val combinedProfileIds = linkedSetOf<Int>()
+        try {
+            for (user in userProfilesList) {
+                combinedProfileIds.add(SecondaryProfileDetector.extractUserId(user))
             }
         } catch (_: Exception) {
-            emptyList<Int>()
+            // Fall through safely
+        }
+        if (secondaryProfiles.isNotEmpty() && combinedProfileIds.isEmpty()) {
+            combinedProfileIds.add(0)
+        }
+        for (profile in secondaryProfiles) {
+            combinedProfileIds.add(profile.userId)
+        }
+        val fallbackSecondaryCount = (userProfilesList.size - 1).coerceAtLeast(0)
+        val secondaryCount = maxOf(
+            secondaryCountResult?.count ?: 0,
+            secondaryProfiles.size,
+            fallbackSecondaryCount
+        )
+        val totalProfilesCount = 1 + secondaryCount
+        val detectedProfileTypes = secondaryProfiles
+            .map { "${it.userId}:${it.profileType.name}" }
+            .distinct()
+        val reliabilityNote = if (secondaryCountResult == null || !secondaryCountResult.reliable) {
+            ", Unverified"
+        } else {
+            ""
+        }
+        val profilesStatusLabel = when {
+            totalProfilesCount > 1 && detectedProfileTypes.isNotEmpty() ->
+                "Multi-Profile / Secondary Detected: ${detectedProfileTypes.joinToString(", ")}$reliabilityNote"
+            totalProfilesCount > 1 ->
+                "Multi-Profile / Clone Detected$reliabilityNote"
+            else ->
+                "Single Profile$reliabilityNote"
         }
         val canWriteSecure = com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator.canWriteSecureSettings(appContext)
         val isDnsBlockedUnaffiliated = com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge.isPrivateDnsBlockedByUnaffiliatedUsers(appContext)
-        val profilesCountDisplay = if (profileIds.isNotEmpty()) "$profilesCount $profileIds" else "$profilesCount"
+        val profilesCountDisplay = if (combinedProfileIds.isNotEmpty()) {
+            "$totalProfilesCount ${combinedProfileIds.toList()}"
+        } else {
+            "$totalProfilesCount"
+        }
         sb.appendLine("| **Active Watchdog Host** | `${watchdogHost} (Running=${watchdogRunning}, Bound=${isDeviceAdminBound})` |")
-        sb.appendLine("| **User Profiles Count** | `$profilesCountDisplay (${if (profilesCount > 1) "Multi-Profile / Clone Detected" else "Single Profile"})` |")
+        sb.appendLine("| **User Profiles Count** | `${sanitizeMarkdownCell("$profilesCountDisplay ($profilesStatusLabel)")}` |")
         sb.appendLine("| **WRITE_SECURE_SETTINGS** | `${if (canWriteSecure) "[GRANTED]" else "[DENIED]"}` |")
         sb.appendLine("| **DNS Blocked by Unaffiliated Users** | `${if (isDnsBlockedUnaffiliated) "[YES]" else "[NO]"}` |")
         sb.appendLine("| **Total Logged Events in Black Box** | `${if (totalEventsCount >= 0) totalEventsCount else "READ_ERROR"}` |")

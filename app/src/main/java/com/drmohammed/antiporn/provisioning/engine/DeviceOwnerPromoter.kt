@@ -4,9 +4,13 @@ import android.accounts.AccountManager
 import android.content.ComponentName
 import android.content.Context
 import android.os.SystemClock
+import androidx.annotation.VisibleForTesting
 import com.drmohammed.antiporn.AdminReceiver
 import com.drmohammed.antiporn.R
+import com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator
+import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.provisioning.service.AdbPairingNotificationService
+import com.drmohammed.antiporn.shields.DnsShield
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import io.github.rhythmcache.adb.AdbClient
 import io.github.rhythmcache.adb.FileKeyProvider
@@ -44,7 +48,26 @@ object DeviceOwnerPromoter {
 
     private const val TAG = "AntiPorn_Promoter"
     private const val LOCALHOST = "127.0.0.1"
+    private const val MAX_DNS_HOST_LENGTH = 253
+    private val DNS_LABEL_REGEX = Regex("^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$")
     private val promotionMutex = Mutex()
+
+    @VisibleForTesting
+    internal fun sanitizeDnsHostForAdb(rawHost: String?): String {
+        val candidate = rawHost?.trim().orEmpty()
+        if (candidate.isBlank() ||
+            candidate.length > MAX_DNS_HOST_LENGTH ||
+            !candidate.contains('.') ||
+            candidate.contains("..") ||
+            candidate.startsWith('.') ||
+            candidate.endsWith('.')
+        ) {
+            return DevicePolicyBundle.CLOUDFLARE_FAMILY_DNS_HOST
+        }
+        val labels = candidate.split('.')
+        val allLabelsValid = labels.size >= 2 && labels.all { DNS_LABEL_REGEX.matches(it) }
+        return if (allLabelsValid) candidate else DevicePolicyBundle.CLOUDFLARE_FAMILY_DNS_HOST
+    }
 
     suspend fun pairAndPromote(
         context: Context,
@@ -246,22 +269,72 @@ object DeviceOwnerPromoter {
     ): PromotionResult {
         val appContext = context.applicationContext
         try {
-            client.shell("pm grant ${appContext.packageName} android.permission.WRITE_SECURE_SETTINGS")
+            val grantRes = client.shell("pm grant ${appContext.packageName} android.permission.WRITE_SECURE_SETTINGS")
+            val rawGrantOutput = (grantRes.stdoutText + "\n" + grantRes.stderrText).trim()
+            val sanitizedGrantOutput = sanitizeShellOutput(rawGrantOutput)
+            val granted = AccessibilitySelfActivator.canWriteSecureSettings(appContext)
+            if (granted) {
+                Timber.tag(TAG).i("Verified WRITE_SECURE_SETTINGS granted via ADB")
+                BlackBoxRecorder.recordPairing(
+                    appContext,
+                    "ADB_WRITE_SECURE_SETTINGS_GRANT",
+                    isSuccess = true,
+                    details = sanitizedGrantOutput.ifBlank { "granted=true" }
+                )
+            } else {
+                val oemHint = if (OemProvisioningHelper.isRealmeOrOppo()) {
+                    "Disable permission monitoring required on OPPO/Realme"
+                } else {
+                    null
+                }
+                val details = listOfNotNull(
+                    oemHint,
+                    sanitizedGrantOutput.takeIf { it.isNotBlank() } ?: "canWriteSecureSettings=false"
+                ).joinToString(" | ")
+                Timber.tag(TAG).w("WRITE_SECURE_SETTINGS grant via ADB did not take effect: $details")
+                BlackBoxRecorder.recordPairing(
+                    appContext,
+                    "ADB_WRITE_SECURE_SETTINGS_GRANT",
+                    isSuccess = false,
+                    error = details
+                )
+            }
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            val oemHint = if (OemProvisioningHelper.isRealmeOrOppo()) {
+                "Disable permission monitoring required on OPPO/Realme"
+            } else {
+                null
+            }
+            val details = listOfNotNull(
+                oemHint,
+                sanitizeShellOutput("${e.javaClass.simpleName}: ${e.message ?: "Unknown error"}")
+            ).joinToString(" | ")
             Timber.tag(TAG).w(e, "Failed granting WRITE_SECURE_SETTINGS permission via ADB")
+            BlackBoxRecorder.recordPairing(
+                appContext,
+                "ADB_WRITE_SECURE_SETTINGS_GRANT",
+                isSuccess = false,
+                error = details
+            )
         }
         try {
             client.shell("appops set ${appContext.packageName} ACCESS_RESTRICTED_SETTINGS allow")
             Timber.tag(TAG).i("Granted ACCESS_RESTRICTED_SETTINGS allow via ADB")
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Timber.tag(TAG).w(e, "Failed setting ACCESS_RESTRICTED_SETTINGS via ADB")
         }
         try {
             client.shell("dumpsys deviceidle whitelist +${appContext.packageName}")
             Timber.tag(TAG).i("Whitelisted package in deviceidle via ADB")
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Timber.tag(TAG).w(e, "Failed adding to deviceidle whitelist via ADB")
         }
+
+        // Provision Private DNS via ADB before Device Owner promotion / restriction lock and before disabling wireless ADB
+        provisionPrivateDnsViaAdb(appContext, client)
 
         val sdkVerStr = client.shell("getprop ro.build.version.sdk").stdoutText.trim()
         val sdkVersion = sdkVerStr.toIntOrNull() ?: android.os.Build.VERSION.SDK_INT
@@ -331,6 +404,122 @@ object DeviceOwnerPromoter {
         } catch (e: Exception) {
             Timber.tag(TAG).w(e, "Failed disabling adb_wifi_enabled after promotion")
         }
+    }
+
+    /**
+     * Provisions Private DNS directly via ADB Shell before Device Owner promotion locks
+     * `DISALLOW_CONFIG_PRIVATE_DNS` and before wireless ADB is disabled.
+     *
+     * CRITICAL INVARIANT: Never sets `private_dns_mode=hostname` unless `private_dns_specifier`
+     * has been verified via read-back to match the validated target hostname, preventing any
+     * risk of breaking device internet connectivity.
+     */
+    private suspend fun provisionPrivateDnsViaAdb(appContext: Context, client: AdbClient) {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) return
+
+        var targetHost = DevicePolicyBundle.CLOUDFLARE_FAMILY_DNS_HOST
+        try {
+            val rawHost = try {
+                DnsShield.getEffectiveDnsHost(appContext).trim()
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                Timber.tag(TAG).w(e, "Failed reading effective DNS host; falling back to default")
+                ""
+            }
+            val safeHost = sanitizeDnsHostForAdb(rawHost)
+            targetHost = safeHost
+
+            // Step 1: Write private_dns_specifier
+            val specRes = client.shell("settings put global private_dns_specifier $safeHost")
+            val specOutput = (specRes.stdoutText + "\n" + specRes.stderrText).trim()
+            if (hasShellError(specOutput)) {
+                val err = "specifier write failed: ${sanitizeShellOutput(specOutput)}"
+                Timber.tag(TAG).w("ADB Private DNS provisioning aborted at Step 1 ($safeHost): $err")
+                BlackBoxRecorder.recordPairing(
+                    appContext,
+                    "ADB_PRIVATE_DNS_PROVISION",
+                    isSuccess = false,
+                    details = "host=$safeHost",
+                    error = err
+                )
+                return
+            }
+
+            // Step 2: Strict read-back verification before enabling hostname mode
+            val verifySpecRes = client.shell("settings get global private_dns_specifier")
+            val verifySpec = verifySpecRes.stdoutText.trim()
+            if (!verifySpec.equals(safeHost, ignoreCase = true)) {
+                val err = "specifier read-back mismatch: expected=$safeHost, actual=${sanitizeShellOutput(verifySpec)}"
+                Timber.tag(TAG).w("ADB Private DNS provisioning aborted at Step 2: $err")
+                BlackBoxRecorder.recordPairing(
+                    appContext,
+                    "ADB_PRIVATE_DNS_PROVISION",
+                    isSuccess = false,
+                    details = "host=$safeHost",
+                    error = err
+                )
+                return
+            }
+
+            // Step 3: Activate hostname mode and verify read-back
+            val modeRes = client.shell("settings put global private_dns_mode hostname")
+            val modeOutput = (modeRes.stdoutText + "\n" + modeRes.stderrText).trim()
+            if (hasShellError(modeOutput)) {
+                val err = "mode write failed: ${sanitizeShellOutput(modeOutput)}"
+                Timber.tag(TAG).w("ADB Private DNS provisioning failed at Step 3 ($safeHost): $err")
+                BlackBoxRecorder.recordPairing(
+                    appContext,
+                    "ADB_PRIVATE_DNS_PROVISION",
+                    isSuccess = false,
+                    details = "host=$safeHost",
+                    error = err
+                )
+                return
+            }
+
+            val verifyMode = client.shell("settings get global private_dns_mode").stdoutText.trim()
+            val modeVerified = verifyMode.equals("hostname", ignoreCase = true)
+            if (modeVerified) {
+                Timber.tag(TAG).i("Successfully provisioned Private DNS via ADB (mode=hostname, specifier=$safeHost)")
+                BlackBoxRecorder.recordPairing(
+                    appContext,
+                    "ADB_PRIVATE_DNS_PROVISION",
+                    isSuccess = true,
+                    details = "host=$safeHost, mode=hostname"
+                )
+            } else {
+                val err = "mode read-back mismatch: expected=hostname, actual=${sanitizeShellOutput(verifyMode)}"
+                Timber.tag(TAG).w("ADB Private DNS mode verification failed ($safeHost): $err")
+                BlackBoxRecorder.recordPairing(
+                    appContext,
+                    "ADB_PRIVATE_DNS_PROVISION",
+                    isSuccess = false,
+                    details = "host=$safeHost",
+                    error = err
+                )
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            val err = sanitizeShellOutput("${e.javaClass.simpleName}: ${e.message ?: "Unknown error"}")
+            Timber.tag(TAG).w(e, "Failed provisioning Private DNS via ADB for host=$targetHost")
+            BlackBoxRecorder.recordPairing(
+                appContext,
+                "ADB_PRIVATE_DNS_PROVISION",
+                isSuccess = false,
+                details = "host=$targetHost",
+                error = err
+            )
+        }
+    }
+
+    private fun hasShellError(output: String): Boolean {
+        return output.contains("Exception", ignoreCase = true) ||
+            output.contains("Error", ignoreCase = true) ||
+            output.contains("Permission Denial", ignoreCase = true)
+    }
+
+    private fun sanitizeShellOutput(raw: String): String {
+        return raw.replace(Regex("\\s+"), " ").trim().take(300)
     }
 
     private suspend fun executeSetupBypassPromotion(

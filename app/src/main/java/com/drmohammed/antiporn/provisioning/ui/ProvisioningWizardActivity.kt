@@ -72,6 +72,9 @@ class ProvisioningWizardActivity : AppCompatActivity() {
     private lateinit var cardOemWarning: MaterialCardView
     private lateinit var tvOemWarningTitle: TextView
     private lateinit var tvOemWarningDesc: TextView
+    private lateinit var cardOemPermissionWarning: MaterialCardView
+    private lateinit var tvOemPermissionWarningTitle: TextView
+    private lateinit var tvOemPermissionWarningDesc: TextView
 
     // Split-Screen Auto-Pilot Views
     private lateinit var layoutStandardWizard: View
@@ -183,6 +186,9 @@ class ProvisioningWizardActivity : AppCompatActivity() {
         cardOemWarning = findViewById(R.id.cardOemWarning)
         tvOemWarningTitle = findViewById(R.id.tvOemWarningTitle)
         tvOemWarningDesc = findViewById(R.id.tvOemWarningDesc)
+        cardOemPermissionWarning = findViewById(R.id.cardOemPermissionWarning)
+        tvOemPermissionWarningTitle = findViewById(R.id.tvOemPermissionWarningTitle)
+        tvOemPermissionWarningDesc = findViewById(R.id.tvOemPermissionWarningDesc)
 
         // Split-Screen Auto-Pilot Views
         layoutStandardWizard = findViewById(R.id.layoutStandardWizard)
@@ -461,13 +467,23 @@ class ProvisioningWizardActivity : AppCompatActivity() {
             cardNotificationTip.visibility = View.VISIBLE
         }
 
-        val warning = OemProvisioningHelper.getOemWarning(this)
-        if (warning != null) {
+        val warnings = OemProvisioningHelper.getAllOemWarnings(this)
+        val primaryWarning = warnings.getOrNull(0)
+        if (primaryWarning != null) {
             cardOemWarning.visibility = View.VISIBLE
-            tvOemWarningTitle.setText(warning.titleRes)
-            tvOemWarningDesc.setText(warning.descRes)
+            tvOemWarningTitle.setText(primaryWarning.titleRes)
+            tvOemWarningDesc.setText(primaryWarning.descRes)
         } else {
             cardOemWarning.visibility = View.GONE
+        }
+
+        val secondaryWarning = warnings.getOrNull(1)
+        if (secondaryWarning != null) {
+            cardOemPermissionWarning.visibility = View.VISIBLE
+            tvOemPermissionWarningTitle.setText(secondaryWarning.titleRes)
+            tvOemPermissionWarningDesc.setText(secondaryWarning.descRes)
+        } else {
+            cardOemPermissionWarning.visibility = View.GONE
         }
     }
 

@@ -111,14 +111,17 @@ internal class PolicyEnforcementHandler(
                 }
                 if (isDeviceOwner) {
                     val requiredVpnMode = CurfewBlackholeVpnService.evaluateRequiredMode(appContext)
-                    if (requiredVpnMode != CurfewBlackholeVpnService.VpnMode.IDLE &&
-                        !CurfewVpnDnsBridge.isVpnConsentGranted(appContext)
-                    ) {
+                    val targetAlwaysOnPkg = CurfewVpnDnsBridge.resolveTargetAlwaysOnPackage(
+                        context = appContext,
+                        requiredMode = requiredVpnMode,
+                        shouldBlockExternalVpn = bundle.isBlockExternalVpnEnabled
+                    )
+                    if (targetAlwaysOnPkg != null && !CurfewVpnDnsBridge.isVpnConsentGranted(appContext)) {
                         val lockdown = (requiredVpnMode == CurfewBlackholeVpnService.VpnMode.CURFEW_BLACKHOLE)
                         val bypassed = if (lockdown) CurfewConfig.getVpnBypassedPackages(appContext) else null
                         SafeDpmGateway.setAlwaysOnVpnPackageBlocking(
                             context = appContext,
-                            vpnPackage = appContext.packageName,
+                            vpnPackage = targetAlwaysOnPkg,
                             lockdown = lockdown,
                             bypassedPackages = bypassed
                         )

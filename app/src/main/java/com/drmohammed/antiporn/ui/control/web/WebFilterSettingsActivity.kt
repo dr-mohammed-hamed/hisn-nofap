@@ -22,11 +22,15 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.engine.ProtectionEngine
+import com.drmohammed.antiporn.core.engine.SecondaryProfileDetector
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.core.network.DnsFilteringValidator
 import com.drmohammed.antiporn.core.util.BrowserUrlSanitizer
+import com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge
+import com.drmohammed.antiporn.curfew.WebFilterCapabilityResult
 import com.drmohammed.antiporn.data.repository.AccountabilityRepository
 import com.drmohammed.antiporn.data.repository.PolicyRepository
+import com.drmohammed.antiporn.ui.common.SecondaryProfileResolutionDialogHelper
 import com.drmohammed.antiporn.ui.control.gate.SelfControlAccessGateRegistry
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
@@ -103,6 +107,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
 
     private var isSaving = false
     private var isProgrammaticSwitchChange = false
+    private var isUnaffiliatedBlockedCached = false
     private var pendingVpnConsentSource: VpnConsentSource? = null
     private var activeDialog: androidx.appcompat.app.AlertDialog? = null
 
@@ -268,6 +273,20 @@ class WebFilterSettingsActivity : AppCompatActivity() {
             finish()
             return
         }
+        refreshUnaffiliatedBlockedCacheAsync()
+    }
+
+    private fun refreshUnaffiliatedBlockedCacheAsync() {
+        if (isRemote) return
+        val appCtx = applicationContext
+        lifecycleScope.launch(Dispatchers.IO) {
+            val blocked = CurfewVpnDnsBridge.isPrivateDnsBlockedByUnaffiliatedUsers(appCtx)
+            withContext(Dispatchers.Main) {
+                if (!isFinishing && !isDestroyed) {
+                    isUnaffiliatedBlockedCached = blocked
+                }
+            }
+        }
     }
 
     private fun applyWindowInsets() {
@@ -431,7 +450,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
                 showWhitelistFullSystemWarningDialog()
             } else if (isChecked && !isBlockExternalVpn) {
                 showExternalVpnCoexistenceDialog()
-            } else if (isChecked && com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge.isPrivateDnsBlockedByUnaffiliatedUsers(this)) {
+            } else if (isChecked && !isRemote && isUnaffiliatedBlockedCached) {
                 showUnaffiliatedUsersFilterWarningDialog()
             }
             updateSaveButtonState()
@@ -445,7 +464,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
                 }
             }
             isAdBlocking = isChecked
-            if (isChecked && !isFullSystemFiltering && com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge.isPrivateDnsBlockedByUnaffiliatedUsers(this)) {
+            if (isChecked && !isFullSystemFiltering && !isRemote && isUnaffiliatedBlockedCached) {
                 showUnaffiliatedUsersFilterWarningDialog()
             }
             updateSaveButtonState()
@@ -771,6 +790,25 @@ class WebFilterSettingsActivity : AppCompatActivity() {
                     else -> DevicePolicyBundle.BROWSER_FILTER_OFF
                 }
 
+                if (!isRemote) {
+                    val wantsLocalVpnFiltering = (snapFullSystem && filterMode != DevicePolicyBundle.BROWSER_FILTER_OFF) || snapAdBlocking
+                    val capability = CurfewVpnDnsBridge.evaluateWebFilterCapability(
+                        context = applicationContext,
+                        initialDnsHost = initialPolicy.dnsHost,
+                        requestedDnsHost = dnsToSave,
+                        wantsLocalVpnFiltering = wantsLocalVpnFiltering
+                    )
+                    if (capability !is WebFilterCapabilityResult.Allowed) {
+                        withContext(Dispatchers.Main) {
+                            if (isFinishing || isDestroyed) return@withContext
+                            isSaving = false
+                            updateSaveButtonState()
+                            showWebFilterSaveBlockedDialog(capability)
+                        }
+                        return@launch
+                    }
+                }
+
                 val pushedPolicy: DevicePolicyBundle? = withContext(Dispatchers.IO + NonCancellable) {
                     if (isRemote) {
                         policyRepository.mergeAndPushRemotePolicyPatch(
@@ -888,6 +926,95 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         dialog.setOnDismissListener { if (activeDialog === dialog) activeDialog = null }
         activeDialog = dialog
         dialog.show()
+    }
+
+    private fun showWebFilterSaveBlockedDialog(capability: WebFilterCapabilityResult) {
+        if (isFinishing || isDestroyed) return
+        val message = when (capability) {
+            is WebFilterCapabilityResult.BlockedDnsHostChange ->
+                getString(R.string.dialog_web_filter_save_blocked_dns_msg, capability.requestedHost, capability.lockedHost)
+            is WebFilterCapabilityResult.BlockedLocalFilterByLockedDot ->
+                getString(R.string.dialog_web_filter_save_blocked_filter_msg, capability.lockedHost)
+            is WebFilterCapabilityResult.BlockedHostilePrivateDns ->
+                getString(R.string.dialog_web_filter_save_blocked_hostile_msg, capability.hostileHost)
+            is WebFilterCapabilityResult.Allowed -> return
+        }
+
+        activeDialog?.dismiss()
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.dialog_web_filter_save_blocked_title)
+            .setMessage(message)
+            .setPositiveButton(R.string.btn_resolve_secondary_profile_now) { _, _ ->
+                openSelectiveProfileResolutionFromWebFilter()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .create()
+        dialog.setOnDismissListener { if (activeDialog === dialog) activeDialog = null }
+        activeDialog = dialog
+        dialog.show()
+    }
+
+    private fun openSelectiveProfileResolutionFromWebFilter() {
+        val appCtx = applicationContext
+        lifecycleScope.launch(Dispatchers.IO) {
+            val secondaries = SecondaryProfileDetector.getSecondaryProfiles(appCtx)
+            withContext(Dispatchers.Main) {
+                if (isFinishing || isDestroyed) return@withContext
+                if (secondaries.isEmpty()) {
+                    try {
+                        startActivity(SecondaryProfileDetector.resolveCloneSettingsIntent(this@WebFilterSettingsActivity))
+                    } catch (_: Exception) {
+                        Toast.makeText(appCtx, R.string.toast_open_settings_failed, Toast.LENGTH_SHORT).show()
+                    }
+                    return@withContext
+                }
+                activeDialog?.dismiss()
+                SecondaryProfileResolutionDialogHelper.showProfileSelectionDialog(
+                    context = this@WebFilterSettingsActivity,
+                    secondaries = secondaries,
+                    onOpenSettings = {
+                        try {
+                            startActivity(SecondaryProfileDetector.resolveCloneSettingsIntent(this@WebFilterSettingsActivity))
+                        } catch (_: Exception) {
+                            Toast.makeText(appCtx, R.string.toast_open_settings_failed, Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onConfirmRemoveSingleProfile = { selectedProfile ->
+                        executeSingleProfileRemovalFromWebFilter(selectedProfile)
+                    },
+                    onActiveDialogChanged = { dialog ->
+                        activeDialog = dialog
+                    }
+                )
+            }
+        }
+    }
+
+    private fun executeSingleProfileRemovalFromWebFilter(
+        profile: SecondaryProfileDetector.UnaffiliatedProfileInfo
+    ) {
+        val appCtx = applicationContext
+        lifecycleScope.launch {
+            val (result, updatedBlocked) = withContext(Dispatchers.IO + NonCancellable) {
+                val removal = SecondaryProfileDetector.removeSecondaryProfileAndAwait(appCtx, profile)
+                if (removal.allSecondariesCleared) {
+                    CurfewVpnDnsBridge.updatePrivateDnsBlockedByUnaffiliatedUsers(appCtx, false)
+                }
+                if (removal.removedTarget) {
+                    ProtectionEngine.applyAll(appCtx)
+                }
+                val blocked = CurfewVpnDnsBridge.isPrivateDnsBlockedByUnaffiliatedUsers(appCtx)
+                removal to blocked
+            }
+            if (isFinishing || isDestroyed) return@launch
+            isUnaffiliatedBlockedCached = updatedBlocked
+            val msgRes = when {
+                result.allSecondariesCleared -> R.string.msg_cloned_app_removed_success
+                result.removedTarget -> R.string.msg_profile_removed_more_remaining
+                else -> R.string.msg_cloned_app_remove_failed
+            }
+            Toast.makeText(appCtx, msgRes, Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun showUnaffiliatedUsersFilterWarningDialog() {

@@ -1,6 +1,8 @@
 package com.drmohammed.antiporn.provisioning
 
+import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.provisioning.engine.AdbMdnsDiscovery
+import com.drmohammed.antiporn.provisioning.engine.DeviceOwnerPromoter
 import com.drmohammed.antiporn.provisioning.engine.OemProvisioningHelper
 import com.drmohammed.antiporn.provisioning.receiver.PairingCodeReceiver
 import org.junit.Assert.assertEquals
@@ -80,5 +82,46 @@ class ProvisioningFlowUnitTest {
         val manufacturer = OemProvisioningHelper.manufacturer
         // Just verify it doesn't throw and returns lower case
         assertEquals(manufacturer.lowercase(), manufacturer)
+    }
+
+    @Test
+    fun testSanitizeDnsHostForAdb_acceptsValidHostsAndRejectsMalformedOrInjectionPayloads() {
+        val fallback = DevicePolicyBundle.CLOUDFLARE_FAMILY_DNS_HOST
+
+        // Valid hostnames (including leading/trailing whitespace trimming)
+        assertEquals("family.cloudflare-dns.com", DeviceOwnerPromoter.sanitizeDnsHostForAdb("family.cloudflare-dns.com"))
+        assertEquals(
+            "family-filter-dns.cleanbrowsing.org",
+            DeviceOwnerPromoter.sanitizeDnsHostForAdb("  family-filter-dns.cleanbrowsing.org  ")
+        )
+        assertEquals("a.b", DeviceOwnerPromoter.sanitizeDnsHostForAdb("a.b"))
+
+        // Malformed & shell-injection payloads must fall back safely
+        val invalidInputs = listOf(
+            null,
+            "",
+            "   ",
+            "localhost",
+            ".family.cloudflare-dns.com",
+            "family.cloudflare-dns.com.",
+            "-bad.example.com",
+            "bad-.example.com",
+            "foo..bar.com",
+            "foo.-bar.com",
+            "family.cloudflare-dns.com; rm -rf /",
+            "family.cloudflare-dns.com && id",
+            "$(whoami).example.com",
+            "`id`.example.com",
+            "bad host.example.com",
+            "${"a".repeat(64)}.example.com",
+            ("${"a".repeat(50)}.").repeat(6) + "com"
+        )
+        for (invalid in invalidInputs) {
+            assertEquals(
+                "Invalid host '$invalid' must fall back to Cloudflare Family DNS",
+                fallback,
+                DeviceOwnerPromoter.sanitizeDnsHostForAdb(invalid)
+            )
+        }
     }
 }
