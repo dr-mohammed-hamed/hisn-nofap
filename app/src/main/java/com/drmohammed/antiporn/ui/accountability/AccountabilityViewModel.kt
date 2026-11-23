@@ -11,6 +11,8 @@ import com.drmohammed.antiporn.data.local.db.entity.PartnerEntity
 import com.drmohammed.antiporn.data.repository.AccountabilityRepository
 import com.drmohammed.antiporn.data.repository.ApprovalRepository
 import com.drmohammed.antiporn.data.repository.PolicyRepository
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -22,6 +24,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
@@ -32,21 +36,37 @@ import kotlinx.coroutines.withContext
 class AccountabilityViewModel(
     application: Application,
     private val accountabilityRepo: AccountabilityRepository = AccountabilityRepository.getInstance(application),
-    private val approvalRepo: ApprovalRepository = ApprovalRepository.getInstance(application),
-    private val googleAuthManager: GoogleAuthManager = GoogleAuthManager.getInstance(application),
-    private val policyRepository: PolicyRepository = PolicyRepository.getInstance(application)
+    private val approvalRepo: ApprovalRepository? = ApprovalRepository.getInstance(application),
+    private val googleAuthManager: GoogleAuthManager? = GoogleAuthManager.getInstance(application),
+    private val policyRepository: PolicyRepository? = PolicyRepository.getInstance(application),
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
+    private val policyProvider: suspend () -> DevicePolicyBundle = {
+        policyRepository?.getCurrentPolicy() ?: DevicePolicyBundle.defaultPolicy()
+    },
+    private val startFirestoreSyncAction: () -> Unit = {
+        policyRepository?.startFirestoreSync()
+    },
+    private val rollbackCloudSyncAction: suspend (Application) -> Unit = {
+        com.drmohammed.antiporn.cloud.CloudSyncManager.checkAndAutoRollbackIfUnsupervisedSuspend(it)
+    },
+    autoObserve: Boolean = true
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(AccountabilityUiState())
     val uiState: StateFlow<AccountabilityUiState> = _uiState.asStateFlow()
 
+    private val pairingSessionMutex = Mutex()
+    private var loadPairingCodeJob: Job? = null
     private var breakoutCountdownJob: Job? = null
     private var pairingCountdownJob: Job? = null
 
     init {
-        observePolicyFlow()
-        observeCloudSyncFlow()
-        refreshAll()
+        if (autoObserve) {
+            observePolicyFlow()
+            observeCloudSyncFlow()
+            refreshAll()
+        }
     }
 
     private fun observeCloudSyncFlow() {
@@ -62,8 +82,9 @@ class AccountabilityViewModel(
     }
 
     private fun observePolicyFlow() {
-        viewModelScope.launch {
-            policyRepository.currentPolicyFlow.collect { policy ->
+        val repo = policyRepository ?: return
+        viewModelScope.launch(mainDispatcher) {
+            repo.currentPolicyFlow.collect { policy ->
                 _uiState.update { current ->
                     current.copy(
                         isSupervised = policy.isSupervised,
@@ -99,8 +120,8 @@ class AccountabilityViewModel(
     }
 
     fun updateGoogleSecurityState() {
-        val isLinked = googleAuthManager.isLinkedWithGoogle()
-        val email = googleAuthManager.getLinkedEmail()
+        val isLinked = googleAuthManager?.isLinkedWithGoogle() ?: false
+        val email = googleAuthManager?.getLinkedEmail()
         _uiState.update { current ->
             current.copy(
                 isGoogleLinked = isLinked,
@@ -110,119 +131,174 @@ class AccountabilityViewModel(
     }
 
     fun loadPairingCode() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val app = getApplication<Application>()
-            val isCloudEnabled = com.drmohammed.antiporn.cloud.CloudSyncManager.isCloudSyncEnabled(app)
-            val activeSession = com.drmohammed.antiporn.cloud.CloudSyncManager.getActivePairingSession()
+        loadPairingCodeJob?.cancel()
+        loadPairingCodeJob = viewModelScope.launch(ioDispatcher) {
+            pairingSessionMutex.withLock {
+                val app = getApplication<Application>()
+                val isCloudEnabled = com.drmohammed.antiporn.cloud.CloudSyncManager.isCloudSyncEnabled(app)
+                val activeSession = com.drmohammed.antiporn.cloud.CloudSyncManager.getActivePairingSession(app)
 
-            withContext(Dispatchers.Main) {
-                _uiState.update {
-                    it.copy(
-                        isCloudSyncEnabled = isCloudEnabled,
-                        isTemporaryPairingActive = activeSession != null,
-                        pairingExpiresAt = activeSession?.expiresAt ?: 0L
-                    )
-                }
-            }
-
-            if (activeSession != null) {
-                startPairingTicker(activeSession.expiresAt)
-                withContext(Dispatchers.Main) {
-                    _uiState.update { it.copy(myPairingCode = activeSession.code) }
-                }
-                return@launch
-            }
-
-            // Zero-Cloud by Default: If cloud sync is not enabled, do not generate code in Firestore!
-            if (!isCloudEnabled) {
-                withContext(Dispatchers.Main) {
-                    _uiState.update { it.copy(myPairingCode = "") }
-                }
-                return@launch
-            }
-
-            try {
-                val currentPolicy = policyRepository.getCurrentPolicy()
-                if (currentPolicy.isSupervised) {
-                    withContext(Dispatchers.Main) {
-                        _uiState.update { it.copy(isPairingCodeLocked = true, myPairingCode = "------") }
+                if (activeSession != null) {
+                    withContext(mainDispatcher) {
+                        _uiState.update {
+                            it.copy(
+                                isCloudSyncEnabled = isCloudEnabled,
+                                isTemporaryPairingActive = true,
+                                myPairingCode = activeSession.code,
+                                pairingExpiresAt = activeSession.expiresAt
+                            )
+                        }
+                        startPairingTicker(activeSession.expiresAt)
                     }
-                    return@launch
+                    return@withLock
                 }
 
-                // If user is a guardian with active wards, do not auto-generate a ward pairing code
-                val wards = accountabilityRepo.getWards()
-                if (wards.isNotEmpty()) {
-                    withContext(Dispatchers.Main) {
-                        _uiState.update { it.copy(myPairingCode = "") }
+                // Zero-Cloud by Default: If cloud sync is not enabled, do not generate code in Firestore!
+                if (!isCloudEnabled) {
+                    withContext(mainDispatcher) {
+                        _uiState.update {
+                            it.copy(
+                                isCloudSyncEnabled = false,
+                                isTemporaryPairingActive = false,
+                                myPairingCode = "",
+                                pairingExpiresAt = 0L,
+                                pairingRemainingMs = 0L
+                            )
+                        }
                     }
-                    return@launch
+                    return@withLock
                 }
 
-                val code = accountabilityRepo.getOrCreateMyPairingCode()
-                withContext(Dispatchers.Main) {
-                    val isLocked = (code == AccountabilityRepository.CODE_LOCKED)
-                    _uiState.update {
-                        it.copy(
-                            myPairingCode = code,
-                            isPairingCodeLocked = isLocked
-                        )
+                try {
+                    val currentPolicy = policyProvider()
+                    if (currentPolicy.isSupervised) {
+                        withContext(mainDispatcher) {
+                            _uiState.update {
+                                it.copy(
+                                    isCloudSyncEnabled = isCloudEnabled,
+                                    isPairingCodeLocked = true,
+                                    myPairingCode = "------"
+                                )
+                            }
+                        }
+                        return@withLock
                     }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed loading pairing code", e)
-                withContext(Dispatchers.Main) {
-                    _uiState.update { it.copy(myPairingCode = "------") }
+
+                    // If user is a guardian with active wards, do not auto-generate a ward pairing code
+                    val wards = accountabilityRepo.getWards()
+                    if (wards.isNotEmpty()) {
+                        withContext(mainDispatcher) {
+                            _uiState.update {
+                                it.copy(
+                                    isCloudSyncEnabled = isCloudEnabled,
+                                    isTemporaryPairingActive = false,
+                                    myPairingCode = "",
+                                    pairingExpiresAt = 0L,
+                                    pairingRemainingMs = 0L
+                                )
+                            }
+                        }
+                        return@withLock
+                    }
+
+                    val code = accountabilityRepo.getOrCreateMyPairingCode()
+                    val session = com.drmohammed.antiporn.cloud.CloudSyncManager.getActivePairingSession(app)
+                    withContext(mainDispatcher) {
+                        val isLocked = (code == AccountabilityRepository.CODE_LOCKED)
+                        _uiState.update {
+                            it.copy(
+                                isCloudSyncEnabled = isCloudEnabled,
+                                myPairingCode = code,
+                                isPairingCodeLocked = isLocked,
+                                isTemporaryPairingActive = session != null,
+                                pairingExpiresAt = session?.expiresAt ?: 0L
+                            )
+                        }
+                        if (session != null) {
+                            startPairingTicker(session.expiresAt)
+                        }
+                    }
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    safeLogError("Failed loading pairing code", e)
+                    withContext(mainDispatcher) {
+                        _uiState.update {
+                            it.copy(
+                                isCloudSyncEnabled = isCloudEnabled,
+                                myPairingCode = "------"
+                            )
+                        }
+                    }
                 }
             }
         }
     }
 
     fun startTemporaryPairingSession(onComplete: (Result<String>) -> Unit) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
+        loadPairingCodeJob?.cancel()
+        viewModelScope.launch(ioDispatcher) {
+            pairingSessionMutex.withLock {
                 val app = getApplication<Application>()
-                com.drmohammed.antiporn.cloud.CloudSyncManager.setCloudSyncEnabled(app, true)
-                policyRepository.startFirestoreSync()
-                val code = accountabilityRepo.getOrCreateMyPairingCode()
-                val session = com.drmohammed.antiporn.cloud.CloudSyncManager.getActivePairingSession(app)
-                val expiresAt = session?.expiresAt ?: (TrustedTimeProvider.currentTimeMillis(app) + 15 * 60 * 1000L)
-                withContext(Dispatchers.Main) {
-                    _uiState.update {
-                        it.copy(
-                            isCloudSyncEnabled = true,
-                            isTemporaryPairingActive = true,
-                            myPairingCode = code,
-                            pairingExpiresAt = expiresAt
-                        )
+                try {
+                    com.drmohammed.antiporn.cloud.CloudSyncManager.setCloudSyncEnabled(app, true)
+                    startFirestoreSyncAction()
+                    val code = accountabilityRepo.getOrCreateMyPairingCode()
+                    val session = com.drmohammed.antiporn.cloud.CloudSyncManager.getActivePairingSession(app)
+                    val expiresAt = session?.expiresAt ?: (TrustedTimeProvider.currentTimeMillis(app) + 15 * 60 * 1000L)
+                    withContext(mainDispatcher) {
+                        _uiState.update {
+                            it.copy(
+                                isCloudSyncEnabled = true,
+                                isTemporaryPairingActive = true,
+                                myPairingCode = code,
+                                pairingExpiresAt = expiresAt
+                            )
+                        }
+                        startPairingTicker(expiresAt)
+                        onComplete(Result.success(code))
                     }
-                    startPairingTicker(expiresAt)
-                    onComplete(Result.success(code))
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed starting temporary pairing session", e)
-                withContext(Dispatchers.Main) {
-                    onComplete(Result.failure(e))
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    safeLogError("Failed starting temporary pairing session", e)
+                    rollbackCloudSyncAction(app)
+                    val cloudStillEnabled = com.drmohammed.antiporn.cloud.CloudSyncManager.isCloudSyncEnabled(app)
+                    withContext(mainDispatcher) {
+                        _uiState.update {
+                            it.copy(
+                                isTemporaryPairingActive = false,
+                                myPairingCode = "",
+                                pairingExpiresAt = 0L,
+                                pairingRemainingMs = 0L,
+                                isCloudSyncEnabled = cloudStillEnabled
+                            )
+                        }
+                        onComplete(Result.failure(e))
+                    }
                 }
             }
         }
     }
 
     fun cancelTemporaryPairingSession(onComplete: (() -> Unit)? = null) {
+        loadPairingCodeJob?.cancel()
         pairingCountdownJob?.cancel()
         pairingCountdownJob = null
-        viewModelScope.launch(Dispatchers.IO) {
-            accountabilityRepo.cancelMyPairingCode()
-            withContext(Dispatchers.Main) {
-                _uiState.update {
-                    it.copy(
-                        isTemporaryPairingActive = false,
-                        myPairingCode = "",
-                        pairingRemainingMs = 0L,
-                        isCloudSyncEnabled = com.drmohammed.antiporn.cloud.CloudSyncManager.isCloudSyncEnabled(getApplication())
-                    )
+        viewModelScope.launch(ioDispatcher) {
+            pairingSessionMutex.withLock {
+                accountabilityRepo.cancelMyPairingCode()
+                val cloudStillEnabled = com.drmohammed.antiporn.cloud.CloudSyncManager.isCloudSyncEnabled(getApplication())
+                withContext(mainDispatcher) {
+                    _uiState.update {
+                        it.copy(
+                            isTemporaryPairingActive = false,
+                            myPairingCode = "",
+                            pairingExpiresAt = 0L,
+                            pairingRemainingMs = 0L,
+                            isCloudSyncEnabled = cloudStillEnabled
+                        )
+                    }
+                    onComplete?.invoke()
                 }
-                onComplete?.invoke()
             }
         }
     }
@@ -230,7 +306,7 @@ class AccountabilityViewModel(
     private fun startPairingTicker(expiresAt: Long) {
         pairingCountdownJob?.cancel()
         val app = getApplication<Application>()
-        pairingCountdownJob = viewModelScope.launch {
+        pairingCountdownJob = viewModelScope.launch(mainDispatcher) {
             while (isActive) {
                 val remainingMs = (expiresAt - TrustedTimeProvider.currentTimeMillis(app)).coerceAtLeast(0L)
                 _uiState.update { it.copy(pairingRemainingMs = remainingMs) }
@@ -435,9 +511,19 @@ class AccountabilityViewModel(
 
     override fun onCleared() {
         stopBreakoutTicker()
+        loadPairingCodeJob?.cancel()
+        loadPairingCodeJob = null
         pairingCountdownJob?.cancel()
         pairingCountdownJob = null
         super.onCleared()
+    }
+
+    private fun safeLogError(message: String, throwable: Throwable? = null) {
+        try {
+            Log.e(TAG, message, throwable)
+        } catch (_: Throwable) {
+            // JVM unit test fallback when android.util.Log is not mocked
+        }
     }
 
     companion object {

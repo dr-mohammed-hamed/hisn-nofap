@@ -109,6 +109,18 @@
                 android:textSize="13sp" />
         </LinearLayout>
 
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnGeneratePairingCodeForMe"
+            style="@style/Widget.Material3.Button.TonalButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:minHeight="48dp"
+            android:text="@string/btn_generate_pairing_code_for_me"
+            android:textSize="13sp"
+            android:visibility="gone"
+            app:cornerRadius="12dp" />
+
         <!-- Card: Offline Local Mode (Shown when cloud sync is disabled and not in temporary pairing) -->
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/cardOfflineLocalMode"

@@ -480,6 +480,8 @@
     <string name="label_pairing_countdown">صالح لمدة: %s دقيقة</string>
     <string name="pairing_session_cancelled">تم إلغاء جلسة الاقتران وإغلاق الاتصال السحابي بنجاح.</string>
     <string name="pairing_session_expired">انتهت مهلة الـ 15 دقيقة لرمز الاقتران، وتم الرجوع للوضع المحلي.</string>
+    <string name="btn_generate_pairing_code_for_me">توليد رمز اقتران لحماية جهازي</string>
+    <string name="error_pairing_code_publish_failed">تعذر الاتصال بالسحابة لتوليد رمز الاقتران. تحقق من الاتصال بالإنترنت وحاول مجدداً.</string>
 
     <string name="partner_default_name">صديق المساءلة</string>
 

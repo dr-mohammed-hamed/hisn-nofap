@@ -332,6 +332,8 @@
     <string name="label_pairing_countdown">Expires in: %s min</string>
     <string name="pairing_session_cancelled">Pairing session cancelled; cloud connection closed.</string>
     <string name="pairing_session_expired">Pairing session expired (15 min limit); returned to local offline mode.</string>
+    <string name="btn_generate_pairing_code_for_me">Generate Pairing Code for My Device</string>
+    <string name="error_pairing_code_publish_failed">Unable to connect to the cloud to generate a pairing code. Check your internet connection and try again.</string>
     <string name="toast_partner_delete_failed">Failed to delete partner: %1$s</string>
     <string name="dialog_revoke_ward_title">Revoke Supervision &amp; Release Protection</string>
     <string name="error_ward_already_has_guardian">This device is already linked to another supervisor and cannot be paired!</string>

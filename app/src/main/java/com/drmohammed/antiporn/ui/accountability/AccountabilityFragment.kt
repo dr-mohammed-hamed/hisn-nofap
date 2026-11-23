@@ -67,6 +67,7 @@ class AccountabilityFragment : Fragment() {
     private var lastSecureAccountClickTime = 0L
     private var lastCancelBreakoutClickTime = 0L
     private var lastCompleteBreakoutClickTime = 0L
+    private var lastGenerateCodeClickTime = 0L
     private var isPairingInProgress = false
 
     // Smooth ticker references to avoid full-tree re-render jitter
@@ -140,17 +141,21 @@ class AccountabilityFragment : Fragment() {
         if (state.isSupervised || state.isPairingCodeLocked || state.myPairingCode == AccountabilityRepository.CODE_LOCKED) {
             binding.cardMyPairingCode.visibility = View.GONE
             binding.cardOfflineLocalMode.visibility = View.GONE
+            binding.btnGeneratePairingCodeForMe.visibility = View.GONE
         } else if (!state.isCloudSyncEnabled && !state.isTemporaryPairingActive) {
             // Full Local Offline Mode: Cloud is 100% dormant
             binding.cardOfflineLocalMode.visibility = View.VISIBLE
             binding.cardMyPairingCode.visibility = View.GONE
+            binding.btnGeneratePairingCodeForMe.visibility = View.GONE
         } else if (state.wards.isNotEmpty() && !state.isTemporaryPairingActive) {
-            // Active Guardian with wards: do not show ward pairing card unless actively initiated
+            // Active Guardian with wards: show explicit button to generate pairing code for own device
             binding.cardOfflineLocalMode.visibility = View.GONE
             binding.cardMyPairingCode.visibility = View.GONE
+            binding.btnGeneratePairingCodeForMe.visibility = View.VISIBLE
         } else {
             // Cloud Sync Enabled or Temporary Pairing Session Active
             binding.cardOfflineLocalMode.visibility = View.GONE
+            binding.btnGeneratePairingCodeForMe.visibility = View.GONE
             binding.cardMyPairingCode.visibility = View.VISIBLE
             binding.tvMyPairingCode.text = state.myPairingCode.ifEmpty { "------" }
             binding.btnCopyCode.visibility = if (state.myPairingCode.isNotEmpty()) View.VISIBLE else View.GONE
@@ -226,6 +231,22 @@ class AccountabilityFragment : Fragment() {
                 binding.btnEnableSupervisionWard.isEnabled = true
                 if (result.isFailure) {
                     val msg = result.exceptionOrNull()?.message ?: getString(R.string.error_unknown)
+                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+
+        binding.btnGeneratePairingCodeForMe.setOnClickListener {
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastGenerateCodeClickTime < 800L) return@setOnClickListener
+            lastGenerateCodeClickTime = now
+            binding.btnGeneratePairingCodeForMe.isEnabled = false
+            viewModel.startTemporaryPairingSession { result ->
+                if (!isAdded || _binding == null) return@startTemporaryPairingSession
+                binding.btnGeneratePairingCodeForMe.isEnabled = true
+                if (result.isFailure) {
+                    val msg = result.exceptionOrNull()?.message
+                        ?: getString(R.string.error_pairing_code_publish_failed)
                     Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                 }
             }
@@ -630,13 +651,15 @@ class AccountabilityFragment : Fragment() {
         nameRow.addView(editIcon)
         container.addView(nameRow)
 
-        val codeView = TextView(ctx).apply {
-            text = getString(R.string.partner_pairing_code_label, partner.pairingCode)
-            textSize = 12f
-            setTextColor(MaterialColors.getColor(ctx, com.google.android.material.R.attr.colorOnSurfaceVariant, Color.GRAY))
-            setPadding(0, (2 * density).toInt(), 0, 0)
+        if (partner.pairingCode.isNotBlank() && partner.pairingCode != AccountabilityRepository.CODE_LOCKED) {
+            val codeView = TextView(ctx).apply {
+                text = getString(R.string.partner_pairing_code_label, partner.pairingCode)
+                textSize = 12f
+                setTextColor(MaterialColors.getColor(ctx, com.google.android.material.R.attr.colorOnSurfaceVariant, Color.GRAY))
+                setPadding(0, (2 * density).toInt(), 0, 0)
+            }
+            container.addView(codeView)
         }
-        container.addView(codeView)
 
         val statusPill = TextView(ctx).apply {
             textSize = 11f

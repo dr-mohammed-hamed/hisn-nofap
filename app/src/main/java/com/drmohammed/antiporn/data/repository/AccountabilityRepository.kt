@@ -33,7 +33,7 @@ import java.util.Locale
  * and managing Guardian / Ward relationships both locally in SQLite and in Cloud Firestore.
  * Implements strict single-guardian enforcement and automated revocation recovery.
  */
-class AccountabilityRepository(
+open class AccountabilityRepository(
     context: Context,
     internal val partnerDao: PartnerDao = HisnRoomDatabase.getInstance(context).partnerDao(),
     internal val policyDao: DevicePolicyDao = HisnRoomDatabase.getInstance(context).devicePolicyDao()
@@ -176,26 +176,22 @@ class AccountabilityRepository(
      * If the device is currently supervised, returns LOCKED and hides code from cloud discovery.
      * Automatically resolves collisions and self-heals permissions if the code belongs to another UID.
      */
-    suspend fun getOrCreateMyPairingCode(): String = withContext(Dispatchers.IO) {
+    open suspend fun getOrCreateMyPairingCode(): String = withContext(Dispatchers.IO) {
         val currentPolicy = policyDao.getDevicePolicyBlocking()?.toBundle() ?: DevicePolicyBundle.defaultPolicy()
         if (currentPolicy.isSupervised) {
             return@withContext CODE_LOCKED
         }
 
         val uid = getOrCreateCurrentUid()
-        if (uid.startsWith("dev_") && auth.currentUser == null) {
-            Log.w(TAG, "Device currently unauthenticated; skipping pairing code cloud publication")
-            var offlineCode = prefs.getString(KEY_MY_PAIRING_CODE, null)
-            if (offlineCode.isNullOrBlank()) {
-                offlineCode = generateRandomCode()
-                prefs.edit().putString(KEY_MY_PAIRING_CODE, offlineCode).apply()
-            }
-            return@withContext offlineCode
+        if (auth.currentUser == null) {
+            Log.w(TAG, "Device currently unauthenticated; cannot publish pairing code to cloud")
+            throw IllegalStateException(appContext.getString(R.string.error_pairing_code_publish_failed))
         }
 
         var code = prefs.getString(KEY_MY_PAIRING_CODE, null)
         var registered = false
         var attempts = 0
+        var lastError: Exception? = null
         val deviceName = getMyDisplayName()
 
         while (!registered && attempts < 3) {
@@ -260,6 +256,7 @@ class AccountabilityRepository(
                 AppInventoryManager.getInstance(appContext).syncInventoryToCloudAsync()
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
+                lastError = e
                 if (e is FirebaseFirestoreException && e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
                     Log.w(TAG, "Permission denied for pairing code ${com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(code)} (stale or conflicting ownership). Rotating...")
                     prefs.edit().remove(KEY_MY_PAIRING_CODE).apply()
@@ -271,7 +268,13 @@ class AccountabilityRepository(
             }
         }
 
-        code ?: (prefs.getString(KEY_MY_PAIRING_CODE, null) ?: generateRandomCode())
+        if (!registered || code.isNullOrBlank()) {
+            throw IllegalStateException(
+                appContext.getString(R.string.error_pairing_code_publish_failed),
+                lastError
+            )
+        }
+        code
     }
 
     /**
@@ -698,19 +701,19 @@ class AccountabilityRepository(
 
     suspend fun syncPartnersFromCloud(): Result<List<PartnerEntity>> = syncPartnersFromCloudInternal()
 
-    suspend fun getGuardians(): List<PartnerEntity> = getGuardiansInternal()
+    open suspend fun getGuardians(): List<PartnerEntity> = getGuardiansInternal()
 
-    suspend fun getWards(): List<PartnerEntity> = getWardsInternal()
+    open suspend fun getWards(): List<PartnerEntity> = getWardsInternal()
 
     suspend fun deletePartner(partnerId: String): Result<Unit> = deletePartnerInternal(partnerId)
 
-    fun getMyDisplayName(): String = getMyDisplayNameInternal()
+    open fun getMyDisplayName(): String = getMyDisplayNameInternal()
 
     suspend fun setMyDisplayName(newName: String): Result<Unit> = setMyDisplayNameInternal(newName)
 
     suspend fun renamePartner(partnerId: String, newName: String): Result<Unit> = renamePartnerInternal(partnerId, newName)
 
-    suspend fun cancelMyPairingCode(): Result<Unit> = withContext(Dispatchers.IO) {
+    open suspend fun cancelMyPairingCode(): Result<Unit> = withContext(Dispatchers.IO) {
         val code = prefs.getString(KEY_MY_PAIRING_CODE, null)
         prefs.edit().remove(KEY_MY_PAIRING_CODE).apply()
         if (!code.isNullOrBlank()) {
