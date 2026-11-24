@@ -520,6 +520,7 @@
     <string name="card_device_owner_inactive">Not activated. (Tap to activate)</string>
     <string name="toast_device_owner_already_active">Device Owner is active and your shield is fully operational</string>
     <string name="card_dns_active">%1$s (Enforced &amp; Locked)</string>
+    <string name="card_dns_active_prearmed_pending_dpm">%1$s (Pre-armed locally; pending DPM sync on next network)</string>
     <string name="card_dns_pending">Current host: %1$s (Updating to %2$s)</string>
     <string name="card_dns_inactive">DNS server is not set.</string>
     <string name="card_dns_unlocked">DNS settings are unlocked.</string>

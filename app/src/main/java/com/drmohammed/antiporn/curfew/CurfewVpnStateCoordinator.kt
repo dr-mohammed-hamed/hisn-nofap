@@ -144,6 +144,7 @@ internal object CurfewVpnStateCoordinator {
             if (CurfewVpnDnsBridge.hasUnclearableHostilePrivateDns(context)) {
                 false
             } else {
+                DnsResilienceManager.ensureHydrated(context)
                 val policy = PolicyRepository.getInstance(context).getCurrentPolicy()
                 (policy.isFullSystemFilteringEnabled && policy.browserFilterMode != DevicePolicyBundle.BROWSER_FILTER_OFF) ||
                     policy.isAdBlockingEnabled ||

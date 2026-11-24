@@ -97,7 +97,7 @@ internal object DeviceOwnerUnwindHelper {
             CurfewEnforcer.clearSnooze(appContext)
             NapController.clearNapForTeardown(appContext)
             CurfewConfig.clearTransientFlagsForTeardown(appContext)
-            DnsResilienceManager.resetStateSync()
+            DnsResilienceManager.resetStateSync(appContext)
         }
         runStepSafely("teardownWaqfa") {
             val waqfaRepo = WaqfaRepository.getInstance(appContext)

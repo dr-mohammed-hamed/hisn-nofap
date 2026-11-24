@@ -1,26 +1,26 @@
 package com.drmohammed.antiporn.core.network.dns
 
+import android.content.Context
 import android.net.VpnService
 import android.os.SystemClock
+import androidx.annotation.VisibleForTesting
+import com.drmohammed.antiporn.core.network.PhysicalNetworkResolver
 import timber.log.Timber
-import java.io.ByteArrayOutputStream
-import java.io.DataInputStream
-import java.io.DataOutputStream
-import java.io.EOFException
-import java.io.IOException
-import java.net.InetSocketAddress
+import java.net.ConnectException
+import java.net.NoRouteToHostException
 import java.net.Socket
-import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
-import javax.net.ssl.HttpsURLConnection
-import javax.net.ssl.SNIHostName
-import javax.net.ssl.SSLSocket
-import javax.net.ssl.SSLSocketFactory
+import java.util.concurrent.Executors
+
+data class LinkIpFamilies(
+    val hasIpv4: Boolean,
+    val hasIpv6: Boolean
+)
 
 /**
  * RFC 8484 DNS-over-HTTPS (DoH on TCP 443) upstream client protected via [VpnService.protect].
- * Connects directly to static high-availability Family DNS IPv4 addresses with TLS SNI,
- * eliminating any bootstrap DNS dependency and bypassing network-level DoT (Port 853) blocks.
+ * Connects directly to static high-availability dual-stack Family DNS IPv4/IPv6 addresses with
+ * TLS SNI, eliminating any bootstrap DNS dependency and bypassing network-level DoT (Port 853) blocks.
  */
 class DohUpstreamClient(
     private val vpnService: VpnService,
@@ -31,6 +31,7 @@ class DohUpstreamClient(
             System.nanoTime() / 1_000_000L
         }
     },
+    private val linkFamiliesProvider: (() -> LinkIpFamilies)? = null,
     private val exchangeExecutor: (suspend (endpoint: DohEndpoint, rawPayload: ByteArray, timeoutMs: Int) -> ByteArray?)? = null
 ) {
 
@@ -46,10 +47,8 @@ class DohUpstreamClient(
         const val DEFAULT_DOH_TIMEOUT_MS = 2_000
         private const val CIRCUIT_FAILURE_THRESHOLD = 3
         private const val CIRCUIT_COOLDOWN_MS = 30_000L
-        private const val MAX_HTTP_HEADER_BYTES = 8_192
-        private const val MAX_DOH_RESPONSE_BYTES = 4_096
 
-        private val handshakeWatchdog = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { runnable ->
+        private val handshakeWatchdog = Executors.newSingleThreadScheduledExecutor { runnable ->
             Thread(runnable, "AntiPorn-DohHandshakeWatchdog").apply { isDaemon = true }
         }
 
@@ -61,12 +60,30 @@ class DohUpstreamClient(
         val CLEANBROWSING_FAMILY_PRIMARY = DohEndpoint("185.228.168.168", "doh.cleanbrowsing.org", "/doh/family-filter/")
         val CLEANBROWSING_FAMILY_SECONDARY = DohEndpoint("185.228.169.168", "doh.cleanbrowsing.org", "/doh/family-filter/")
 
+        // Static Family Endpoints (Direct IPv6 with SNI for IPv6-only / Dual-Stack networks)
+        val CLOUDFLARE_FAMILY_V6_PRIMARY = DohEndpoint("2606:4700:4700::1113", "family.cloudflare-dns.com", "/dns-query")
+        val CLOUDFLARE_FAMILY_V6_SECONDARY = DohEndpoint("2606:4700:4700::1003", "family.cloudflare-dns.com", "/dns-query")
+        val ADGUARD_FAMILY_V6_PRIMARY = DohEndpoint("2a10:50c0::bad1:ff", "family.adguard-dns.com", "/dns-query")
+        val ADGUARD_FAMILY_V6_SECONDARY = DohEndpoint("2a10:50c0::bad2:ff", "family.adguard-dns.com", "/dns-query")
+        val CLEANBROWSING_FAMILY_V6_PRIMARY = DohEndpoint("2a0d:2a00:1::", "doh.cleanbrowsing.org", "/doh/family-filter/")
+        val CLEANBROWSING_FAMILY_V6_SECONDARY = DohEndpoint("2a0d:2a00:2::", "doh.cleanbrowsing.org", "/doh/family-filter/")
+
         val DEFAULT_ENDPOINTS = listOf(
             CLOUDFLARE_FAMILY_PRIMARY,
             ADGUARD_FAMILY_PRIMARY,
             CLOUDFLARE_FAMILY_SECONDARY,
             CLEANBROWSING_FAMILY_PRIMARY
         )
+
+        val DEFAULT_V6_ENDPOINTS = listOf(
+            CLOUDFLARE_FAMILY_V6_PRIMARY,
+            ADGUARD_FAMILY_V6_PRIMARY,
+            CLOUDFLARE_FAMILY_V6_SECONDARY,
+            CLEANBROWSING_FAMILY_V6_PRIMARY
+        )
+
+        internal fun detectActivePhysicalLinkFamilies(context: Context): LinkIpFamilies =
+            PhysicalNetworkResolver.detectActivePhysicalLinkFamilies(context)
     }
 
     private data class CircuitState(
@@ -75,6 +92,11 @@ class DohUpstreamClient(
     )
 
     private val circuits = ConcurrentHashMap<String, CircuitState>()
+    private val activeSockets: MutableSet<Socket> = ConcurrentHashMap.newKeySet()
+    private val wireExchange = DohHttpWireExchange(vpnService, clockMs, handshakeWatchdog, activeSockets)
+
+    @Volatile
+    private var cachedLinkFamilies: LinkIpFamilies? = null
 
     fun isCircuitOpen(endpoint: DohEndpoint): Boolean {
         val state = circuits[endpoint.ip] ?: return false
@@ -90,7 +112,25 @@ class DohUpstreamClient(
         }
     }
 
-    private fun recordFailure(endpoint: DohEndpoint, reason: String) {
+    private fun isNoRouteOrTeardownFailure(error: Throwable?, reason: String): Boolean {
+        if (DnsResilienceManager.isRestoringPrimaryNow()) return true
+        val looksLikeNoRoute = error is NoRouteToHostException ||
+            (error is ConnectException && (
+                error.message?.contains("ENETUNREACH", ignoreCase = true) == true ||
+                    error.message?.contains("EHOSTUNREACH", ignoreCase = true) == true ||
+                    error.message?.contains("Network is unreachable", ignoreCase = true) == true
+                )) ||
+            reason.contains("ENETUNREACH", ignoreCase = true) ||
+            reason.contains("Network is unreachable", ignoreCase = true)
+        if (!looksLikeNoRoute) return false
+        return PhysicalNetworkResolver.isDevicePhysicallyOffline(vpnService)
+    }
+
+    private fun recordFailure(endpoint: DohEndpoint, reason: String, error: Throwable? = null) {
+        if (isNoRouteOrTeardownFailure(error, reason)) {
+            Timber.tag(TAG).d("Suppressing DoH circuit breaker on offline/teardown error for ${endpoint.ip}: $reason")
+            return
+        }
         val state = circuits.computeIfAbsent(endpoint.ip) { CircuitState() }
         synchronized(state) {
             state.failures++
@@ -105,6 +145,10 @@ class DohUpstreamClient(
 
     fun resetState() {
         circuits.clear()
+        cachedLinkFamilies = null
+        val snapshot = activeSockets.toList()
+        activeSockets.clear()
+        snapshot.forEach { wireExchange.closeQuietly(it) }
     }
 
     fun onNetworkChanged() {
@@ -113,6 +157,12 @@ class DohUpstreamClient(
 
     fun clearAll() {
         resetState()
+    }
+
+    private fun resolveLinkFamilies(): LinkIpFamilies {
+        linkFamiliesProvider?.let { return it() }
+        cachedLinkFamilies?.let { return it }
+        return detectActivePhysicalLinkFamilies(vpnService).also { cachedLinkFamilies = it }
     }
 
     /**
@@ -124,7 +174,7 @@ class DohUpstreamClient(
         timeoutMs: Int = DEFAULT_DOH_TIMEOUT_MS,
         preferredHost: String? = null
     ): ByteArray? {
-        if (rawPayload.size !in DnsPacketParser.DNS_HEADER_LEN..MAX_DOH_RESPONSE_BYTES) return null
+        if (rawPayload.size !in DnsPacketParser.DNS_HEADER_LEN..4_096) return null
 
         val orderedEndpoints = getPrioritizedEndpoints(preferredHost)
         val queryDeadlineMs = clockMs() + timeoutMs
@@ -143,10 +193,10 @@ class DohUpstreamClient(
                 if (exchangeExecutor != null) {
                     exchangeExecutor.invoke(endpoint, rawPayload, epTimeout)
                 } else {
-                    executeDohHttp(endpoint, rawPayload, epTimeout)
+                    wireExchange.execute(endpoint, rawPayload, epTimeout)
                 }
             } catch (e: Exception) {
-                recordFailure(endpoint, e.message ?: e.javaClass.simpleName)
+                recordFailure(endpoint, e.message ?: e.javaClass.simpleName, e)
                 null
             }
 
@@ -158,205 +208,33 @@ class DohUpstreamClient(
         return null
     }
 
-    private fun getPrioritizedEndpoints(preferredHost: String?): List<DohEndpoint> {
-        if (preferredHost.isNullOrBlank()) return DEFAULT_ENDPOINTS
-        val clean = preferredHost.lowercase().trim()
-        val preferred = when {
+    @VisibleForTesting
+    internal fun getPrioritizedEndpoints(
+        preferredHost: String?,
+        families: LinkIpFamilies = resolveLinkFamilies()
+    ): List<DohEndpoint> {
+        val clean = preferredHost?.lowercase()?.trim().orEmpty()
+        val v4Preferred = when {
             clean.contains("adguard") -> listOf(ADGUARD_FAMILY_PRIMARY, ADGUARD_FAMILY_SECONDARY)
             clean.contains("cleanbrowsing") -> listOf(CLEANBROWSING_FAMILY_PRIMARY, CLEANBROWSING_FAMILY_SECONDARY)
             clean.contains("cloudflare") -> listOf(CLOUDFLARE_FAMILY_PRIMARY, CLOUDFLARE_FAMILY_SECONDARY)
             else -> emptyList()
         }
-        return (preferred + DEFAULT_ENDPOINTS).distinctBy { it.ip }
-    }
-
-    /**
-     * Sends an RFC 8484 binary POST request to the target DoH endpoint over a protected TLS socket.
-     */
-    private fun executeDohHttp(endpoint: DohEndpoint, rawPayload: ByteArray, timeoutMs: Int): ByteArray? {
-        var baseSocket: Socket? = null
-        var sslSocket: SSLSocket? = null
-        val deadlineMs = clockMs() + timeoutMs
-
-        try {
-            baseSocket = Socket()
-            baseSocket.tcpNoDelay = true
-            // CRITICAL: Protect socket so it bypasses our local VPN TUN interface and routes via physical network
-            if (!vpnService.protect(baseSocket)) {
-                baseSocket.close()
-                throw IOException("VpnService.protect() failed for DoH socket to ${endpoint.ip}")
-            }
-
-            val connectTimeout = (deadlineMs - clockMs()).toInt().coerceIn(100, timeoutMs)
-            baseSocket.soTimeout = connectTimeout
-            baseSocket.connect(InetSocketAddress(endpoint.ip, DOH_PORT), connectTimeout)
-
-            val sslFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
-            val wrapped = sslFactory.createSocket(baseSocket, endpoint.host, DOH_PORT, true) as SSLSocket
-            sslSocket = wrapped
-
-            val sslParams = wrapped.sslParameters
-            sslParams.serverNames = listOf(SNIHostName(endpoint.host))
-            sslParams.endpointIdentificationAlgorithm = "HTTPS"
-            wrapped.sslParameters = sslParams
-
-            val handshakeTimeout = (deadlineMs - clockMs()).toInt().coerceIn(100, timeoutMs)
-            wrapped.soTimeout = handshakeTimeout
-
-            val handshakeDeadlineTask = handshakeWatchdog.schedule(
-                {
-                    try {
-                        wrapped.close()
-                    } catch (_: Exception) {}
-                    try {
-                        baseSocket.close()
-                    } catch (_: Exception) {}
-                },
-                handshakeTimeout.toLong(),
-                java.util.concurrent.TimeUnit.MILLISECONDS
-            )
-
-            try {
-                wrapped.startHandshake()
-            } finally {
-                handshakeDeadlineTask.cancel(false)
-            }
-
-            if (!HttpsURLConnection.getDefaultHostnameVerifier().verify(endpoint.host, wrapped.session)) {
-                throw IOException("TLS certificate hostname verification failed for ${endpoint.host}")
-            }
-
-            val readTimeout = (deadlineMs - clockMs()).toInt().coerceAtLeast(100)
-            wrapped.soTimeout = readTimeout
-
-            val outStream = DataOutputStream(wrapped.outputStream)
-            val inStream = DataInputStream(wrapped.inputStream)
-
-            // RFC 8484 POST Request
-            val requestHeader = "POST ${endpoint.path} HTTP/1.1\r\n" +
-                "Host: ${endpoint.host}\r\n" +
-                "User-Agent: AntiPorn-DoH\r\n" +
-                "Accept: application/dns-message\r\n" +
-                "Content-Type: application/dns-message\r\n" +
-                "Content-Length: ${rawPayload.size}\r\n" +
-                "Connection: close\r\n\r\n"
-
-            outStream.write(requestHeader.toByteArray(Charsets.US_ASCII))
-            outStream.write(rawPayload)
-            outStream.flush()
-
-            // Read HTTP Response Status Line
-            val statusLine = readLineAscii(inStream, deadlineMs) ?: throw IOException("Empty HTTP response from DoH server")
-            val statusParts = statusLine.split(" ")
-            if (statusParts.size < 2 || statusParts[1] != "200") {
-                throw IOException("DoH server returned non-200 HTTP status: $statusLine")
-            }
-
-            // Read Headers
-            var contentLength = -1
-            var isChunked = false
-
-            while (true) {
-                val headerLine = readLineAscii(inStream, deadlineMs) ?: break
-                if (headerLine.isEmpty()) break // End of headers
-
-                val colonIdx = headerLine.indexOf(':')
-                if (colonIdx > 0) {
-                    val name = headerLine.substring(0, colonIdx).trim().lowercase()
-                    val value = headerLine.substring(colonIdx + 1).trim()
-                    when (name) {
-                        "content-length" -> contentLength = value.toIntOrNull() ?: -1
-                        "transfer-encoding" -> isChunked = value.contains("chunked", ignoreCase = true)
-                    }
-                }
-            }
-
-            // Read Body
-            val responseBody = when {
-                contentLength in 0..MAX_DOH_RESPONSE_BYTES -> {
-                    val buf = ByteArray(contentLength)
-                    inStream.readFully(buf)
-                    buf
-                }
-                isChunked -> {
-                    readChunkedBody(inStream, deadlineMs)
-                }
-                contentLength > MAX_DOH_RESPONSE_BYTES -> {
-                    throw IOException("DoH response body too large: $contentLength bytes")
-                }
-                else -> {
-                    readBodyUntilEof(inStream, deadlineMs)
-                }
-            }
-
-            if (responseBody.size < DnsPacketParser.DNS_HEADER_LEN) {
-                throw IOException("DoH response body too short: ${responseBody.size} bytes")
-            }
-            if (!DnsWireValidator.isValidDnsResponse(responseBody, responseBody.size, rawPayload)) {
-                throw IOException("DoH response failed wire validation for ${endpoint.host}")
-            }
-            return responseBody
-        } finally {
-            try {
-                sslSocket?.close()
-            } catch (_: Exception) {}
-            try {
-                baseSocket?.close()
-            } catch (_: Exception) {}
+        val v6Preferred = when {
+            clean.contains("adguard") -> listOf(ADGUARD_FAMILY_V6_PRIMARY, ADGUARD_FAMILY_V6_SECONDARY)
+            clean.contains("cleanbrowsing") -> listOf(CLEANBROWSING_FAMILY_V6_PRIMARY, CLEANBROWSING_FAMILY_V6_SECONDARY)
+            clean.contains("cloudflare") -> listOf(CLOUDFLARE_FAMILY_V6_PRIMARY, CLOUDFLARE_FAMILY_V6_SECONDARY)
+            else -> emptyList()
         }
-    }
 
-    private fun readLineAscii(inStream: DataInputStream, deadlineMs: Long): String? {
-        val sb = StringBuilder(64)
-        while (sb.length < MAX_HTTP_HEADER_BYTES) {
-            val remaining = (deadlineMs - clockMs()).toInt()
-            if (remaining <= 0) throw SocketTimeoutException("DoH header read deadline exceeded")
-            val b = inStream.read()
-            if (b == -1) {
-                return if (sb.isEmpty()) null else sb.toString()
-            }
-            val c = b.toChar()
-            if (c == '\n') {
-                return sb.toString().trimEnd('\r')
-            }
-            sb.append(c)
+        val ordered = when {
+            families.hasIpv6 && !families.hasIpv4 ->
+                v6Preferred + DEFAULT_V6_ENDPOINTS + v4Preferred + DEFAULT_ENDPOINTS
+            families.hasIpv6 && families.hasIpv4 ->
+                v4Preferred + v6Preferred + DEFAULT_ENDPOINTS + DEFAULT_V6_ENDPOINTS
+            else ->
+                v4Preferred + DEFAULT_ENDPOINTS
         }
-        throw IOException("HTTP header line exceeded maximum length")
-    }
-
-    private fun readChunkedBody(inStream: DataInputStream, deadlineMs: Long): ByteArray {
-        val out = ByteArrayOutputStream()
-        while (true) {
-            val hexLenStr = readLineAscii(inStream, deadlineMs) ?: throw EOFException("Unexpected EOF reading chunk length")
-            val cleanHex = hexLenStr.substringBefore(';').trim()
-            val chunkSize = cleanHex.toIntOrNull(16) ?: throw IOException("Invalid chunk length: $hexLenStr")
-            if (chunkSize <= 0) {
-                // Read trailing empty line
-                readLineAscii(inStream, deadlineMs)
-                break
-            }
-            if (out.size() + chunkSize > MAX_DOH_RESPONSE_BYTES) {
-                throw IOException("Chunked DoH body exceeded maximum size")
-            }
-            val chunkBuf = ByteArray(chunkSize)
-            inStream.readFully(chunkBuf)
-            out.write(chunkBuf)
-            // Consume trailing \r\n or \n after chunk data using readLineAscii
-            readLineAscii(inStream, deadlineMs)
-        }
-        return out.toByteArray()
-    }
-
-    private fun readBodyUntilEof(inStream: DataInputStream, deadlineMs: Long): ByteArray {
-        val out = ByteArrayOutputStream()
-        val buf = ByteArray(1024)
-        while (out.size() <= MAX_DOH_RESPONSE_BYTES) {
-            val remaining = (deadlineMs - clockMs()).toInt()
-            if (remaining <= 0) break
-            val count = inStream.read(buf)
-            if (count == -1) break
-            out.write(buf, 0, count)
-        }
-        return out.toByteArray()
+        return ordered.distinctBy { it.ip }
     }
 }

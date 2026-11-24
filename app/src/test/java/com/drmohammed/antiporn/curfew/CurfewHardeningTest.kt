@@ -403,6 +403,26 @@ class CurfewHardeningTest {
     }
 
     @Test
+    fun testCurfewConfig_pendingDpmPrivateDnsSyncPersistenceAndTeardownClear() {
+        val prefs = InMemoryPrefs()
+        val context = object : ContextWrapper(null) {
+            override fun getSharedPreferences(name: String?, mode: Int): SharedPreferences = prefs
+            override fun getApplicationContext(): Context = this
+        }
+
+        assertFalse(CurfewConfig.isPendingDpmPrivateDnsSync(context))
+        assertEquals(null, CurfewConfig.getPendingDpmPrivateDnsHost(context))
+
+        CurfewConfig.setPendingDpmPrivateDnsSync(context, true, "family.adguard-dns.com")
+        assertTrue(CurfewConfig.isPendingDpmPrivateDnsSync(context))
+        assertEquals("family.adguard-dns.com", CurfewConfig.getPendingDpmPrivateDnsHost(context))
+
+        CurfewConfig.clearTransientFlagsForTeardown(context)
+        assertFalse(CurfewConfig.isPendingDpmPrivateDnsSync(context))
+        assertEquals(null, CurfewConfig.getPendingDpmPrivateDnsHost(context))
+    }
+
+    @Test
     fun testWatchdog_localVpnWithUnaffiliatedFamilyDoT_suppressesDesync() {
         val mode: String? = "hostname"
         val specifier = "family.cloudflare-dns.com"

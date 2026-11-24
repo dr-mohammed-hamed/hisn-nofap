@@ -1,7 +1,7 @@
 package com.drmohammed.antiporn.curfew
 
 import android.content.Context
-import android.util.Log
+import timber.log.Timber
 import com.drmohammed.antiporn.core.policy.AppPolicyRegistry
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
 import java.util.Calendar
@@ -36,14 +36,10 @@ object CurfewConfig {
     }
 
     private fun safeLogFallback(isError: Boolean, message: String, throwable: Throwable) {
-        try {
-            if (isError) {
-                Log.e("AntiPorn_CurfewConfig", message, throwable)
-            } else {
-                Log.w("AntiPorn_CurfewConfig", message, throwable)
-            }
-        } catch (e: RuntimeException) {
-            if (e.message?.contains("not mocked") != true) throw e
+        if (isError) {
+            Timber.tag("AntiPorn_CurfewConfig").e(throwable, message)
+        } else {
+            Timber.tag("AntiPorn_CurfewConfig").w(throwable, message)
         }
     }
 
@@ -184,6 +180,8 @@ object CurfewConfig {
     private const val KEY_LAST_BLOCK_ENFORCED = "last_block_enforced"
     private const val KEY_DNS_RESTORE_PENDING = "curfew_dns_restore_pending"
     private const val KEY_PRIVATE_DNS_BLOCKED_UNAFFILIATED = "curfew_private_dns_blocked_unaffiliated"
+    private const val KEY_PENDING_DPM_PRIVATE_DNS_SYNC = "pending_dpm_private_dns_sync"
+    private const val KEY_PENDING_DPM_PRIVATE_DNS_HOST = "pending_dpm_private_dns_host"
     const val ACTION_CURFEW_SNOOZE = "com.drmohammed.antiporn.ACTION_CURFEW_SNOOZE"
     const val ACTION_CURFEW_SNOOZE_END = "com.drmohammed.antiporn.ACTION_CURFEW_SNOOZE_END"
 
@@ -215,6 +213,43 @@ object CurfewConfig {
     fun setPrivateDnsBlockedByUnaffiliatedUsers(context: Context, blocked: Boolean) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit().putBoolean(KEY_PRIVATE_DNS_BLOCKED_UNAFFILIATED, blocked).commit()
+    }
+
+    fun isPendingDpmPrivateDnsSync(context: Context): Boolean {
+        return try {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.getBoolean(KEY_PENDING_DPM_PRIVATE_DNS_SYNC, false)
+        } catch (e: Exception) {
+            Timber.tag("AntiPorn_CurfewConfig").w(e, "Failed reading KEY_PENDING_DPM_PRIVATE_DNS_SYNC")
+            false
+        }
+    }
+
+    fun getPendingDpmPrivateDnsHost(context: Context): String? {
+        return try {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.getString(KEY_PENDING_DPM_PRIVATE_DNS_HOST, null)?.takeIf { it.isNotBlank() }
+        } catch (e: Exception) {
+            Timber.tag("AntiPorn_CurfewConfig").w(e, "Failed reading KEY_PENDING_DPM_PRIVATE_DNS_HOST")
+            null
+        }
+    }
+
+    fun setPendingDpmPrivateDnsSync(context: Context, pending: Boolean, host: String? = null) {
+        try {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val editor = prefs.edit().putBoolean(KEY_PENDING_DPM_PRIVATE_DNS_SYNC, pending)
+            if (pending && !host.isNullOrBlank()) {
+                editor.putString(KEY_PENDING_DPM_PRIVATE_DNS_HOST, host.trim())
+            } else if (!pending) {
+                editor.remove(KEY_PENDING_DPM_PRIVATE_DNS_HOST)
+            }
+            if (!editor.commit()) {
+                Timber.tag("AntiPorn_CurfewConfig").w("SharedPreferences commit() returned false in setPendingDpmPrivateDnsSync")
+            }
+        } catch (e: Exception) {
+            Timber.tag("AntiPorn_CurfewConfig").w(e, "Failed updating KEY_PENDING_DPM_PRIVATE_DNS_SYNC")
+        }
     }
 
     fun getTrackedSuspendedPackages(context: Context): Set<String> {
@@ -265,6 +300,8 @@ object CurfewConfig {
             .putBoolean(KEY_LAST_BLOCK_ENFORCED, false)
             .putBoolean(KEY_DNS_RESTORE_PENDING, false)
             .putBoolean(KEY_PRIVATE_DNS_BLOCKED_UNAFFILIATED, false)
+            .putBoolean(KEY_PENDING_DPM_PRIVATE_DNS_SYNC, false)
+            .remove(KEY_PENDING_DPM_PRIVATE_DNS_HOST)
             .remove(KEY_CURFEW_SUSPENDED_PACKAGES)
             .remove(KEY_CURFEW_SNOOZE_END_WALL)
             .commit()
@@ -284,7 +321,7 @@ object CurfewConfig {
                 .getCurrentPolicy()
             policy.curfewVpnBypassPackages to policy.customBlacklistPackages
         } catch (e: Exception) {
-            Log.w("AntiPorn_CurfewConfig", "Failed to retrieve policy curfew VPN bypass packages, falling back to prefs", e)
+            Timber.tag("AntiPorn_CurfewConfig").w(e, "Failed to retrieve policy curfew VPN bypass packages, falling back to prefs")
             null to emptySet()
         }
         val effectivePackages = (policyPackages ?: custom).filterNot { pkg ->

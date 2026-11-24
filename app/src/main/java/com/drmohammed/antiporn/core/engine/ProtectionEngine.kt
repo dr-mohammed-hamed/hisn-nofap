@@ -1,9 +1,8 @@
 package com.drmohammed.antiporn.core.engine
 
-import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
-import android.util.Log
+import timber.log.Timber
 import com.drmohammed.antiporn.AdminReceiver
 import com.drmohammed.antiporn.DnsWatchdogService
 import com.drmohammed.antiporn.watchdog.WatchdogOrchestrator
@@ -89,7 +88,7 @@ object ProtectionEngine {
 
             if (!isEnforcing.compareAndSet(false, true)) {
                 needsRerun = true
-                Log.i(TAG, "Enforcement in progress, queued callback and scheduled rerun for completion notification")
+                Timber.tag(TAG).i("Enforcement in progress, queued callback and scheduled rerun for completion notification")
                 return
             }
             needsRerun = false
@@ -104,7 +103,7 @@ object ProtectionEngine {
                         applyAllSync(appContext)
                     } catch (t: Throwable) {
                         if (t is kotlinx.coroutines.CancellationException) throw t
-                        Log.e(TAG, "Fatal error executing applyAllSync", t)
+                        Timber.tag(TAG).e(t, "Fatal error executing applyAllSync")
                         listOf(
                             ShieldResult(
                                 shieldId = "engine",
@@ -133,7 +132,7 @@ object ProtectionEngine {
                                 try {
                                     cb.invoke(results)
                                 } catch (e: Exception) {
-                                    Log.e(TAG, "Error invoking completion callback", e)
+                                    Timber.tag(TAG).e(e, "Error invoking completion callback")
                                 }
                             }
                         }
@@ -167,7 +166,7 @@ object ProtectionEngine {
 
             if (!isDnsFastEnforcing.compareAndSet(false, true)) {
                 needsDnsFastRerun = true
-                Log.d(TAG, "DNS fast-path enforcement in progress, conflated request and scheduled rerun")
+                Timber.tag(TAG).d("DNS fast-path enforcement in progress, conflated request and scheduled rerun")
                 return
             }
             needsDnsFastRerun = false
@@ -182,7 +181,7 @@ object ProtectionEngine {
                         applyDnsShieldFastSync(appContext)
                     } catch (t: Throwable) {
                         if (t is kotlinx.coroutines.CancellationException) throw t
-                        Log.e(TAG, "Fatal error executing applyDnsShieldFastSync", t)
+                        Timber.tag(TAG).e(t, "Fatal error executing applyDnsShieldFastSync")
                         ShieldResult(
                             shieldId = DnsShield.id,
                             success = false,
@@ -210,7 +209,7 @@ object ProtectionEngine {
                                     try {
                                         cb.invoke(result)
                                     } catch (e: Exception) {
-                                        Log.e(TAG, "Error invoking DNS fast-path completion callback", e)
+                                        Timber.tag(TAG).e(e, "Error invoking DNS fast-path completion callback")
                                     }
                                 }
                             }
@@ -243,7 +242,7 @@ object ProtectionEngine {
     private fun applyDnsShieldFastSync(context: Context): ShieldResult {
         val appContext = context.applicationContext ?: context
         if (ProtectionTransitionGuard.isTeardownInProgress) {
-            Log.d(TAG, "Skipping applyDnsShieldFastSync because teardown is in progress")
+            Timber.tag(TAG).d("Skipping applyDnsShieldFastSync because teardown is in progress")
             return ShieldResult(
                 shieldId = DnsShield.id,
                 success = false,
@@ -251,15 +250,17 @@ object ProtectionEngine {
             )
         }
         if (ProtectionTransitionGuard.hasActiveTransitions()) {
-            Log.d(TAG, "Skipping applyDnsShieldFastSync because an internal transition is already active")
+            Timber.tag(TAG).d("Skipping applyDnsShieldFastSync because an internal transition is already active")
             return ShieldResult(
                 shieldId = DnsShield.id,
                 success = false,
                 message = appContext.getString(R.string.card_dns_inactive)
             )
         }
-        if (com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge.isLocalVpnExpectedActive(appContext)) {
-            Log.d(TAG, "Skipping applyDnsShieldFastSync because local VPN mode is expected active")
+        if (com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge.isLocalVpnExpectedActive(appContext) ||
+            com.drmohammed.antiporn.core.network.dns.DnsResilienceManager.isEvaluationOrDohFallbackActive()
+        ) {
+            Timber.tag(TAG).d("Skipping applyDnsShieldFastSync because local VPN or DoH resilience evaluation is active")
             return ShieldResult(
                 shieldId = DnsShield.id,
                 success = true,
@@ -267,7 +268,7 @@ object ProtectionEngine {
             )
         }
         if (!isDeviceOwner(appContext)) {
-            Log.w(TAG, "App is not Device/Profile Owner. Cannot run DNS fast-path enforcement.")
+            Timber.tag(TAG).w("App is not Device/Profile Owner. Cannot run DNS fast-path enforcement.")
             return ShieldResult(
                 shieldId = DnsShield.id,
                 success = false,
@@ -298,12 +299,12 @@ object ProtectionEngine {
     fun applyAllSync(context: Context): List<ShieldResult> {
         val appContext = context.applicationContext ?: context
         if (ProtectionTransitionGuard.isTeardownInProgress) {
-            Log.d(TAG, "Skipping applyAllSync because Device Owner teardown is in progress")
+            Timber.tag(TAG).d("Skipping applyAllSync because Device Owner teardown is in progress")
             return emptyList()
         }
         return ProtectionTransitionGuard.runInternalTransition {
             if (!isDeviceOwner(appContext)) {
-                Log.w(TAG, "App is not Device/Profile Owner. Cannot apply shields.")
+                Timber.tag(TAG).w("App is not Device/Profile Owner. Cannot apply shields.")
                 return@runInternalTransition listOf(
                     ShieldResult(
                         shieldId = "engine",
@@ -322,15 +323,15 @@ object ProtectionEngine {
                 val results = mutableListOf<ShieldResult>()
                 for (shield in shields) {
                     if (ProtectionTransitionGuard.isTeardownInProgress) {
-                        Log.i(TAG, "Aborting remaining shields mid-loop due to Device Owner teardown")
+                        Timber.tag(TAG).i("Aborting remaining shields mid-loop due to Device Owner teardown")
                         break
                     }
                     try {
                         val res = shield.apply(appContext, dpm, admin)
                         results.add(res)
-                        Log.d(TAG, "Applied shield [${shield.id}]: success=${res.success}")
+                        Timber.tag(TAG).d("Applied shield [${shield.id}]: success=${res.success}")
                     } catch (e: Exception) {
-                        Log.e(TAG, "Exception applying shield [${shield.id}]", e)
+                        Timber.tag(TAG).e(e, "Exception applying shield [${shield.id}]")
                         results.add(
                             ShieldResult(
                                 shieldId = shield.id,
@@ -364,7 +365,7 @@ object ProtectionEngine {
                 try {
                     WatchdogOrchestrator.ensureActive(appContext)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed ensuring watchdog active in ProtectionEngine", e)
+                    Timber.tag(TAG).e(e, "Failed ensuring watchdog active in ProtectionEngine")
                 }
             }
 
@@ -393,7 +394,7 @@ object ProtectionEngine {
                 val status = try {
                     shield.checkStatus(appContext, dpm, admin)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error checking status for shield [${shield.id}]", e)
+                    Timber.tag(TAG).e(e, "Error checking status for shield [${shield.id}]")
                     ShieldStatus.NeedsEnforcement(appContext.getString(R.string.card_device_owner_inactive))
                 }
                 statusMap[shield.id] = status

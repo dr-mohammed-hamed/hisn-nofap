@@ -30,6 +30,7 @@ object DnsShield : ProtectionShield {
 
     fun getEffectiveDnsHost(context: Context): String {
         return try {
+            com.drmohammed.antiporn.core.network.dns.DnsResilienceManager.ensureHydrated(context)
             val policy = PolicyRepository.getInstance(context).getCurrentPolicy()
             val host = policy.dnsHost.takeIf { it.isNotBlank() } ?: DEFAULT_DNS_HOST
             com.drmohammed.antiporn.core.network.dns.DnsResilienceManager.getEffectiveRuntimeDnsHost(host)

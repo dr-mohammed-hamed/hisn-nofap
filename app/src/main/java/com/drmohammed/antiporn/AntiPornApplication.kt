@@ -104,6 +104,9 @@ class AntiPornApplication : Application(), Configuration.Provider {
         // Initialize PolicyRepository on cold boot so local policies load into memory immediately
         PolicyRepository.getInstance(this)
 
+        // Hydrate persisted DNS resilience state synchronously BEFORE any Always-On VPN bind/receiver can race
+        com.drmohammed.antiporn.core.network.dns.DnsResilienceManager.ensureHydrated(this)
+
         // Initialize central Notification Channels
         com.drmohammed.antiporn.notification.manager.AppNotificationManager.getInstance(this).createNotificationChannels()
 

@@ -67,6 +67,8 @@
 
     <string name="card_dns_active">%1$s (مفروض ومقفل)</string>
 
+    <string name="card_dns_active_prearmed_pending_dpm">%1$s (محمي ومجهز محلياً؛ بانتظار مزامنة النظام عند اتصال الشبكة)</string>
+
     <string name="card_dns_pending">المضيف الحالي: %1$s (سيتم التحديث إلى %2$s)</string>
 
     <string name="card_dns_inactive">غير مفروض</string>

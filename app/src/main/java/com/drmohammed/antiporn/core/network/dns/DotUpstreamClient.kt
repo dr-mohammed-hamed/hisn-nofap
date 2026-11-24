@@ -2,14 +2,17 @@ package com.drmohammed.antiporn.core.network.dns
 
 import android.net.VpnService
 import android.os.SystemClock
+import com.drmohammed.antiporn.core.network.PhysicalNetworkResolver
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withTimeoutOrNull
 import timber.log.Timber
 import java.io.IOException
+import java.net.ConnectException
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.NoRouteToHostException
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.concurrent.Executors
@@ -44,6 +47,8 @@ internal class DotUpstreamClient(
         private const val DEFAULT_DOT_TIMEOUT_MS = 1_500
         private const val CIRCUIT_FAILURE_THRESHOLD = 3
         private const val CIRCUIT_COOLDOWN_MS = 30_000L
+        private const val CIRCUIT_COOLDOWN_STEP_2_MS = 120_000L
+        private const val CIRCUIT_COOLDOWN_STEP_3_MS = 300_000L
         private const val TELEMETRY_DEBOUNCE_MS = 60_000L
 
         internal const val MAX_POOL_SIZE = 4
@@ -108,7 +113,9 @@ internal class DotUpstreamClient(
     )
 
     private val circuitLock = Any()
+    private var circuitGeneration = -1L
     private var consecutiveFailures = 0
+    private var consecutiveBreakerTripsInGen = 0
     @Volatile
     private var circuitOpenUntilMs = Long.MIN_VALUE
     private val lastFailureTelemetryMs = AtomicLong(-TELEMETRY_DEBOUNCE_MS)
@@ -117,7 +124,9 @@ internal class DotUpstreamClient(
 
     fun resetState() {
         val detached = synchronized(circuitLock) {
+            circuitGeneration = -1L
             consecutiveFailures = 0
+            consecutiveBreakerTripsInGen = 0
             circuitOpenUntilMs = Long.MIN_VALUE
             pool.detachAllForInvalidation()
         }
@@ -253,8 +262,8 @@ internal class DotUpstreamClient(
                 if (isCurrentGen && wasReused && !forceFresh && remainingAfterError >= MIN_RETRY_BUDGET_MS) {
                     forceFresh = true
                 } else {
-                    if (recordFailures) {
-                        recordFailure(cleanHost, e.message, generation)
+                    if (!wasReused && recordFailures) {
+                        recordFailure(cleanHost, e.message, generation, e)
                     }
                     return null
                 }
@@ -266,14 +275,14 @@ internal class DotUpstreamClient(
                     forceFresh = true
                 } else {
                     if (!wasReused && recordFailures) {
-                        recordFailure(cleanHost, e.message, generation)
+                        recordFailure(cleanHost, e.message, generation, e)
                     }
                     return null
                 }
             } catch (e: Exception) {
                 Timber.tag(TAG).d(e, "DoT upstream query failed (reused=$wasReused)")
                 if (recordFailures) {
-                    recordFailure(cleanHost, e.message, generation)
+                    recordFailure(cleanHost, e.message, generation, e)
                 }
                 return null
             } finally {
@@ -396,21 +405,62 @@ internal class DotUpstreamClient(
     private fun resetFailureCountIfGenerationMatches(expectedGeneration: Long) {
         synchronized(circuitLock) {
             if (pool.currentGeneration() == expectedGeneration) {
+                circuitGeneration = expectedGeneration
                 consecutiveFailures = 0
+                consecutiveBreakerTripsInGen = 0
             }
         }
     }
 
-    private fun recordFailure(cleanHost: String, errorDetails: String?, expectedGeneration: Long) {
+    private fun isNoRouteOrTeardownFailure(error: Throwable?, errorDetails: String?): Boolean {
+        if (DnsResilienceManager.isRestoringPrimaryNow()) return true
+        val looksLikeNoRoute = error is NoRouteToHostException ||
+            (error is ConnectException && (error.message?.contains("ENETUNREACH", ignoreCase = true) == true ||
+                error.message?.contains("EHOSTUNREACH", ignoreCase = true) == true ||
+                error.message?.contains("Network is unreachable", ignoreCase = true) == true)) ||
+            errorDetails?.contains("ENETUNREACH", ignoreCase = true) == true ||
+            errorDetails?.contains("Network is unreachable", ignoreCase = true) == true
+        if (!looksLikeNoRoute) return false
+        return PhysicalNetworkResolver.isDevicePhysicallyOffline(vpnService)
+    }
+
+    private fun recordFailure(
+        cleanHost: String,
+        errorDetails: String?,
+        expectedGeneration: Long,
+        error: Throwable? = null
+    ) {
+        if (isNoRouteOrTeardownFailure(error, errorDetails)) {
+            Timber.tag(TAG).d("Suppressing DoT circuit breaker & failure telemetry on offline/teardown route error ($cleanHost: $errorDetails)")
+            return
+        }
         val now = clockMs()
         val failures: Int
+        val trips: Int
         synchronized(circuitLock) {
             if (pool.currentGeneration() != expectedGeneration) return
+            if (circuitGeneration != expectedGeneration) {
+                circuitGeneration = expectedGeneration
+                consecutiveFailures = 0
+                consecutiveBreakerTripsInGen = 0
+            }
             consecutiveFailures += 1
             failures = consecutiveFailures
-            if (failures >= CIRCUIT_FAILURE_THRESHOLD) {
-                circuitOpenUntilMs = now + CIRCUIT_COOLDOWN_MS
+            if (consecutiveFailures >= CIRCUIT_FAILURE_THRESHOLD) {
+                consecutiveBreakerTripsInGen += 1
+                consecutiveFailures = 0
+                val cooldownMs = when (consecutiveBreakerTripsInGen) {
+                    1 -> CIRCUIT_COOLDOWN_MS
+                    2 -> CIRCUIT_COOLDOWN_STEP_2_MS
+                    else -> CIRCUIT_COOLDOWN_STEP_3_MS
+                }
+                circuitOpenUntilMs = now + cooldownMs
+                Timber.tag(TAG).w(
+                    "DoT circuit tripped (#$consecutiveBreakerTripsInGen in gen=$expectedGeneration) " +
+                        "for ${cooldownMs}ms on host=$cleanHost"
+                )
             }
+            trips = consecutiveBreakerTripsInGen
         }
         val prev = lastFailureTelemetryMs.get()
         if (now - prev >= TELEMETRY_DEBOUNCE_MS && lastFailureTelemetryMs.compareAndSet(prev, now)) {
@@ -421,7 +471,7 @@ internal class DotUpstreamClient(
                     actionName = "DOT_UPSTREAM_FAILURE",
                     isSuccess = false,
                     errorDetails = errorDetails ?: "DoT failure",
-                    metadata = "host=$cleanHost, failures=$failures"
+                    metadata = "host=$cleanHost, failures=$failures, breakerTrips=$trips"
                 )
             } catch (e: Exception) {
                 Timber.tag(TAG).d(e, "Skipped BlackBoxRecorder telemetry for DoT failure")

@@ -981,4 +981,98 @@ class PrivateDnsFastPathTest {
             )
         )
     }
+
+    @Test
+    fun testApplyStandaloneDot_offlineHostNotServing_preArmsSettingsGlobalAndMarksPendingDpmSync() {
+        val executionLog = mutableListOf<String>()
+        var pendingDpmState: Boolean? = null
+        var clearPendingCalls = 0
+
+        val (resCode, usedFallback) = CurfewVpnDnsBridge.applyStandaloneDotInternal(
+            targetHost = expectedHost,
+            currentDpmMode = DevicePolicyManager.PRIVATE_DNS_MODE_OPPORTUNISTIC,
+            currentDpmHost = null,
+            globalMode = "opportunistic",
+            globalHost = "",
+            isDeviceOwner = true,
+            markInternalMutation = { executionLog.add("markInternalMutation") },
+            writeGlobal = { key, value ->
+                executionLog.add("writeGlobal:$key=$value")
+                true
+            },
+            setDpmPrivateDns = { host ->
+                executionLog.add("setDpm:$host")
+                true to DevicePolicyManager.PRIVATE_DNS_SET_ERROR_HOST_NOT_SERVING
+            },
+            clearDnsRestorePending = { clearPendingCalls++ },
+            isDeviceOffline = true,
+            markPendingDpmSync = { pending ->
+                pendingDpmState = pending
+                executionLog.add("markPendingDpm=$pending")
+            }
+        )
+
+        assertEquals(DevicePolicyManager.PRIVATE_DNS_SET_ERROR_HOST_NOT_SERVING, resCode)
+        assertTrue("Offline HOST_NOT_SERVING must pre-arm via Settings.Global", usedFallback)
+        assertEquals(true, pendingDpmState)
+        assertEquals(1, clearPendingCalls)
+        assertEquals(
+            listOf(
+                "markInternalMutation",
+                "setDpm:$expectedHost",
+                "writeGlobal:private_dns_specifier=$expectedHost",
+                "writeGlobal:private_dns_mode=hostname",
+                "markPendingDpm=true"
+            ),
+            executionLog
+        )
+
+        // When online later and DPM succeeds, pending DPM sync must be cleared cleanly
+        val (onlineRes, onlineFallback) = CurfewVpnDnsBridge.applyStandaloneDotInternal(
+            targetHost = expectedHost,
+            currentDpmMode = DevicePolicyManager.PRIVATE_DNS_MODE_OPPORTUNISTIC,
+            currentDpmHost = null,
+            globalMode = "hostname",
+            globalHost = expectedHost,
+            isDeviceOwner = true,
+            markInternalMutation = {},
+            writeGlobal = { _, _ -> true },
+            setDpmPrivateDns = { _ -> true to DevicePolicyManager.PRIVATE_DNS_SET_NO_ERROR },
+            clearDnsRestorePending = {},
+            isDeviceOffline = false,
+            markPendingDpmSync = { pending -> pendingDpmState = pending }
+        )
+
+        assertEquals(DevicePolicyManager.PRIVATE_DNS_SET_NO_ERROR, onlineRes)
+        assertFalse(onlineFallback)
+        assertEquals(false, pendingDpmState)
+    }
+
+    @Test
+    fun testIsStandaloneDnsStateConsistent_offlinePreArmedReportsConsistent_onlineRequiresDpmConvergence() {
+        assertTrue(
+            "Offline pre-armed state must report consistent/ACTIVE without false tamper alarm",
+            CurfewVpnDnsBridge.isStandaloneDnsStateConsistent(
+                dpmMode = DevicePolicyManager.PRIVATE_DNS_MODE_OPPORTUNISTIC,
+                dpmHost = null,
+                globalMode = "hostname",
+                globalHost = expectedHost,
+                targetHost = expectedHost,
+                isUnaffiliatedBlocked = false,
+                isOfflinePreArmedPendingDpm = true
+            )
+        )
+        assertFalse(
+            "Online state with un-converged DPM must require sync until DPM succeeds",
+            CurfewVpnDnsBridge.isStandaloneDnsStateConsistent(
+                dpmMode = DevicePolicyManager.PRIVATE_DNS_MODE_OPPORTUNISTIC,
+                dpmHost = null,
+                globalMode = "hostname",
+                globalHost = expectedHost,
+                targetHost = expectedHost,
+                isUnaffiliatedBlocked = false,
+                isOfflinePreArmedPendingDpm = false
+            )
+        )
+    }
 }
