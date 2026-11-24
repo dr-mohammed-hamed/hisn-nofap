@@ -24,7 +24,13 @@ object ProtectionTransitionGuard {
     internal val nextToken = AtomicLong(0L)
     @PublishedApi
     @Volatile
-    internal var elapsedRealtimeProvider: () -> Long = { SystemClock.elapsedRealtime() }
+    internal var elapsedRealtimeProvider: () -> Long = {
+        try {
+            SystemClock.elapsedRealtime()
+        } catch (_: RuntimeException) {
+            System.currentTimeMillis()
+        }
+    }
     private val lastInternalDnsMutationElapsed = AtomicLong(0L)
 
     @Volatile
@@ -54,6 +60,18 @@ object ProtectionTransitionGuard {
         } finally {
             activeTransitions.remove(token)
         }
+    }
+
+    @VisibleForTesting
+    internal fun acquireTransitionToken(reason: String = ""): Long {
+        val token = nextToken.incrementAndGet()
+        activeTransitions[token] = elapsedRealtimeProvider()
+        return token
+    }
+
+    @VisibleForTesting
+    internal fun releaseTransitionToken(token: Long) {
+        activeTransitions.remove(token)
     }
 
     /**
@@ -108,7 +126,13 @@ object ProtectionTransitionGuard {
         activeTransitions.clear()
         lastInternalDnsMutationElapsed.set(0L)
         isTeardownInProgress = false
-        elapsedRealtimeProvider = { SystemClock.elapsedRealtime() }
+        elapsedRealtimeProvider = {
+            try {
+                SystemClock.elapsedRealtime()
+            } catch (_: RuntimeException) {
+                System.currentTimeMillis()
+            }
+        }
     }
 
     /**

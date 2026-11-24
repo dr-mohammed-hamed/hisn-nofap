@@ -75,7 +75,12 @@ class AppSuspensionShieldTest {
             "com.alohamobile.browser",
             "com.alohamobile.browser.lite",
             "com.UCMobile.intl",
-            "com.uc.browser.en"
+            "com.uc.browser.en",
+            "com.opera.mini.native",
+            "org.mozilla.focus",
+            "com.opera.gx",
+            "com.opera.browser.beta",
+            "com.yandex.browser"
         )
 
         for (pkg in browsers) {
@@ -182,7 +187,7 @@ class AppSuspensionShieldTest {
     fun testPackageCountsAndCategoryIntegrity() {
         assertEquals(11, AppSuspensionShield.TELEGRAM_PACKAGES.size)
         assertEquals(11, AppSuspensionShield.OPEN_SOCIAL_NETWORKS.size)
-        assertEquals(14, AppSuspensionShield.PROXY_BROWSERS.size)
+        assertEquals(19, AppSuspensionShield.PROXY_BROWSERS.size)
         assertEquals(8, AppSuspensionShield.RANDOM_CHAT_APPS.size)
         assertEquals(7, AppSuspensionShield.TIKTOK_PACKAGES.size)
         assertEquals(7, AppSuspensionShield.LOCAL_ADB_TOOLS.size)
@@ -194,7 +199,7 @@ class AppSuspensionShieldTest {
             AppSuspensionShield.TIKTOK_PACKAGES.size +
             AppSuspensionShield.LOCAL_ADB_TOOLS.size
 
-        assertEquals(58, totalExpected)
+        assertEquals(63, totalExpected)
         assertTrue("BLACKLISTED_PACKAGES must be empty under Unified Zero-Trust", AppSuspensionShield.BLACKLISTED_PACKAGES.isEmpty())
         assertEquals(0, AppSuspensionShield.BLACKLISTED_PACKAGES.size)
     }

@@ -323,4 +323,50 @@ class DnsPolicyEvaluatorTest {
         val blockedAction = DnsPolicyEvaluator.evaluate(mockQuery("randomunallowedwebsite.com"), policy, emptySet())
         assertTrue("Non-allowed domain must be blocked by custom rule in Whitelist mode", blockedAction is DnsPolicyEvaluator.PolicyAction.BlockCustom)
     }
+
+    @Test
+    fun testTier5DohBypassDomains_expandedListBlocked() {
+        val policy = DevicePolicyBundle.defaultPolicy()
+        val hardenedDomains = listOf(
+            "dns9.quad9.net",
+            "dns10.quad9.net",
+            "dns11.quad9.net",
+            "doh.umbrella.com",
+            "unfiltered.adguard-dns.com",
+            "dns-unfiltered.adguard.com",
+            "p0.freedns.controld.com",
+            "p1.freedns.controld.com",
+            "p2.freedns.controld.com",
+            "uncensored.freedns.controld.com",
+            "base.dns.mullvad.net",
+            "doh.pub",
+            "dns.alidns.com",
+            "dns.switch.ch",
+            "doh.applied-privacy.net",
+            "dns.digitale-gesellschaft.ch",
+            "common.dot.dns.yandex.net"
+        )
+        for (domain in hardenedDomains) {
+            assertTrue("Domain $domain must be in DOH_BYPASS_DOMAINS", DnsPolicyEvaluator.DOH_BYPASS_DOMAINS.contains(domain))
+            val action = DnsPolicyEvaluator.evaluate(mockQuery(domain), policy, emptySet())
+            assertEquals("DoH bypass domain $domain must result in BlockDohBypass", DnsPolicyEvaluator.PolicyAction.BlockDohBypass, action)
+        }
+    }
+
+    @Test
+    fun testTier5DohBypassDomains_exemptsConfiguredPolicyDnsHost() {
+        val policy = DevicePolicyBundle.defaultPolicy().copy(dnsHost = "1bb7e3.dns.nextdns.io")
+        assertEquals(
+            DnsPolicyEvaluator.PolicyAction.Pass,
+            DnsPolicyEvaluator.evaluate(mockQuery("1bb7e3.dns.nextdns.io"), policy, emptySet())
+        )
+        assertEquals(
+            DnsPolicyEvaluator.PolicyAction.BlockDohBypass,
+            DnsPolicyEvaluator.evaluate(mockQuery("dns.nextdns.io"), policy, emptySet())
+        )
+        assertEquals(
+            DnsPolicyEvaluator.PolicyAction.BlockDohBypass,
+            DnsPolicyEvaluator.evaluate(mockQuery("other.dns.nextdns.io"), policy, emptySet())
+        )
+    }
 }

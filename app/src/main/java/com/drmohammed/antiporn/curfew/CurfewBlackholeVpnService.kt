@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
+import androidx.annotation.VisibleForTesting
 import com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.core.network.dns.BinaryDomainFilter
@@ -17,8 +18,10 @@ import com.drmohammed.antiporn.core.network.dns.DnsUpstreamForwarder
 import com.drmohammed.antiporn.curfew.notification.ProtectionNotificationCoordinator
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.notification.registry.NotificationRegistry
+import com.drmohammed.antiporn.shields.DnsShield
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import com.drmohammed.antiporn.telemetry.SafeDpmGateway
+import com.drmohammed.antiporn.watchdog.ProtectionWatchdogRuntime
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -35,6 +38,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.lang.ref.WeakReference
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Unified 24/7 Protection VPN Service coordinating daytime Local DNS Sinkhole
@@ -63,6 +67,7 @@ class CurfewBlackholeVpnService : VpnService() {
     internal val commandChannel = Channel<VpnCommand>(Channel.UNLIMITED)
     private val tunnelMutex = Mutex()
     internal var dnsWorkerJob: Job? = null
+    private val failClosedArmedOnStop = AtomicBoolean(false)
 
     private var physicalNetworkMonitor: PhysicalNetworkMonitor? = null
     private val networkChangeCoalescer = NetworkChangeCoalescer(
@@ -104,6 +109,7 @@ class CurfewBlackholeVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        failClosedArmedOnStop.set(false)
         val appContext = applicationContext ?: this
         synchronized(CurfewVpnStateCoordinator.companionStateLock) {
             CurfewVpnStateCoordinator.activeService = WeakReference(this)
@@ -517,6 +523,8 @@ class CurfewBlackholeVpnService : VpnService() {
     override fun onRevoke() {
         Timber.tag(TAG).w("Protection VPN revoked by system or user")
         isServiceRevoked = true
+        val appContext = applicationContext ?: this
+        ensureFailClosedOnUnexpectedStop(appContext, wasRevoked = true)
         physicalNetworkMonitor?.unregister()
         CurfewVpnStateCoordinator.completeTunnelWaiters(false)
         if (tunnelMutex.tryLock()) {
@@ -540,8 +548,54 @@ class CurfewBlackholeVpnService : VpnService() {
         networkChangeCoalescer.notify(reason)
     }
 
+    @VisibleForTesting
+    internal fun ensureFailClosedOnUnexpectedStop(appContext: Context, wasRevoked: Boolean) {
+        if (ProtectionTransitionGuard.hasActiveTransitions()) {
+            if (wasRevoked) {
+                ProtectionWatchdogRuntime.scheduleCheck(500L)
+            }
+            return
+        }
+        if (!failClosedArmedOnStop.compareAndSet(false, true)) {
+            return
+        }
+        appFailClosedScope.launch {
+            try {
+                if (ProtectionTransitionGuard.hasActiveTransitions() || !SafeDpmGateway.isDeviceOwner(appContext)) {
+                    return@launch
+                }
+                if (CurfewVpnStateCoordinator.evaluateRequiredMode(appContext) != VpnMode.IDLE) {
+                    if (wasRevoked || !CurfewVpnDnsBridge.isVpnConsentGranted(appContext)) {
+                        ProtectionTransitionGuard.runInternalTransition {
+                            if (ProtectionTransitionGuard.isTeardownInProgress ||
+                                CurfewVpnStateCoordinator.isTunnelHealthy() ||
+                                (CurfewVpnStateCoordinator.isServiceOrTunnelActive() &&
+                                    CurfewVpnDnsBridge.isVpnConsentGranted(appContext))
+                            ) {
+                                return@runInternalTransition
+                            }
+                            CurfewVpnDnsBridge.preArmStandaloneDotFailClosed(
+                                appContext,
+                                DnsShield.getEffectiveDnsHost(appContext)
+                            )
+                        }
+                    }
+                    ProtectionWatchdogRuntime.scheduleCheck(500L)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.tag(TAG).w(e, "Error pre-arming Standalone DoT fail-closed on unexpected stop")
+            }
+        }
+    }
+
     override fun onDestroy() {
         isServiceDestroyed = true
+        val appContext = applicationContext ?: this
+        if (currentMode != VpnMode.IDLE && !ProtectionTransitionGuard.isTeardownInProgress) {
+            ensureFailClosedOnUnexpectedStop(appContext, wasRevoked = isServiceRevoked)
+        }
         physicalNetworkMonitor?.unregister()
         physicalNetworkMonitor = null
         val ownsActiveState = synchronized(CurfewVpnStateCoordinator.companionStateLock) {
@@ -583,6 +637,7 @@ class CurfewBlackholeVpnService : VpnService() {
 
     companion object {
         private const val TAG = "AntiPorn_UnifiedVpn"
+        private val appFailClosedScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         const val CHANNEL_ID = NotificationRegistry.CHANNEL_ID_PROTECTION_VPN
         const val NOTIFICATION_ID = NotificationRegistry.FGS_CURFEW_VPN_ID
 

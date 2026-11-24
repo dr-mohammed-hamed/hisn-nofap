@@ -2,6 +2,7 @@ package com.drmohammed.antiporn.core.network.dns
 
 import android.net.VpnService
 import android.os.SystemClock
+import androidx.annotation.VisibleForTesting
 import timber.log.Timber
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
@@ -61,17 +62,50 @@ class DohUpstreamClient(
         val CLEANBROWSING_FAMILY_PRIMARY = DohEndpoint("185.228.168.168", "doh.cleanbrowsing.org", "/doh/family-filter/")
         val CLEANBROWSING_FAMILY_SECONDARY = DohEndpoint("185.228.169.168", "doh.cleanbrowsing.org", "/doh/family-filter/")
 
+        val CLOUDFLARE_FAMILY_V6_PRIMARY = DohEndpoint("2606:4700:4700::1113", "family.cloudflare-dns.com", "/dns-query")
+        val CLOUDFLARE_FAMILY_V6_SECONDARY = DohEndpoint("2606:4700:4700::1003", "family.cloudflare-dns.com", "/dns-query")
+        val ADGUARD_FAMILY_V6_PRIMARY = DohEndpoint("2a10:50c0::bad1:ff", "family.adguard-dns.com", "/dns-query")
+        val ADGUARD_FAMILY_V6_SECONDARY = DohEndpoint("2a10:50c0::bad2:ff", "family.adguard-dns.com", "/dns-query")
+        val CLEANBROWSING_FAMILY_V6_PRIMARY = DohEndpoint("2a0d:2a00:1::", "doh.cleanbrowsing.org", "/doh/family-filter/")
+        val CLEANBROWSING_FAMILY_V6_SECONDARY = DohEndpoint("2a0d:2a00:2::", "doh.cleanbrowsing.org", "/doh/family-filter/")
+
+        // Official Anycast Constants for NextDNS and Control D
+        const val NEXTDNS_IPV4_PRIMARY = "45.90.28.0"
+        const val NEXTDNS_IPV4_SECONDARY = "45.90.30.0"
+        const val NEXTDNS_IPV6_PRIMARY = "2a07:a8c0::"
+        const val NEXTDNS_IPV6_SECONDARY = "2a07:a8c1::"
+        const val NEXTDNS_HOST = "dns.nextdns.io"
+
+        const val CONTROLD_FREEDNS_IPV4_PRIMARY = "76.76.2.11"
+        const val CONTROLD_FREEDNS_IPV4_SECONDARY = "76.76.10.11"
+        const val CONTROLD_FREEDNS_IPV6_PRIMARY = "2606:1a40::11"
+        const val CONTROLD_FREEDNS_IPV6_SECONDARY = "2606:1a40:1::11"
+        const val CONTROLD_FREEDNS_HOST = "freedns.controld.com"
+
+        const val CONTROLD_CUSTOM_IPV4_PRIMARY = "76.76.2.22"
+        const val CONTROLD_CUSTOM_IPV4_SECONDARY = "76.76.10.22"
+        const val CONTROLD_CUSTOM_IPV6_PRIMARY = "2606:1a40::22"
+        const val CONTROLD_CUSTOM_IPV6_SECONDARY = "2606:1a40:1::22"
+        const val CONTROLD_CUSTOM_HOST = "dns.controld.com"
+
         val DEFAULT_ENDPOINTS = listOf(
             CLOUDFLARE_FAMILY_PRIMARY,
             ADGUARD_FAMILY_PRIMARY,
             CLOUDFLARE_FAMILY_SECONDARY,
             CLEANBROWSING_FAMILY_PRIMARY
         )
+
+        val DEFAULT_V6_ENDPOINTS = listOf(
+            CLOUDFLARE_FAMILY_V6_PRIMARY,
+            ADGUARD_FAMILY_V6_PRIMARY,
+            CLOUDFLARE_FAMILY_V6_SECONDARY,
+            CLEANBROWSING_FAMILY_V6_PRIMARY
+        )
     }
 
     private data class CircuitState(
         var failures: Int = 0,
-        var openUntilMs: Long = Long.MIN_VALUE
+        @Volatile var openUntilMs: Long = Long.MIN_VALUE
     )
 
     private val circuits = ConcurrentHashMap<String, CircuitState>()
@@ -122,11 +156,12 @@ class DohUpstreamClient(
     suspend fun query(
         rawPayload: ByteArray,
         timeoutMs: Int = DEFAULT_DOH_TIMEOUT_MS,
-        preferredHost: String? = null
+        preferredHost: String? = null,
+        families: LinkIpFamilies = LinkIpFamilies(hasIpv4 = true, hasIpv6 = false)
     ): ByteArray? {
         if (rawPayload.size !in DnsPacketParser.DNS_HEADER_LEN..MAX_DOH_RESPONSE_BYTES) return null
 
-        val orderedEndpoints = getPrioritizedEndpoints(preferredHost)
+        val orderedEndpoints = getPrioritizedEndpoints(preferredHost, families)
         val queryDeadlineMs = clockMs() + timeoutMs
 
         for (endpoint in orderedEndpoints) {
@@ -158,16 +193,111 @@ class DohUpstreamClient(
         return null
     }
 
-    private fun getPrioritizedEndpoints(preferredHost: String?): List<DohEndpoint> {
-        if (preferredHost.isNullOrBlank()) return DEFAULT_ENDPOINTS
-        val clean = preferredHost.lowercase().trim()
-        val preferred = when {
-            clean.contains("adguard") -> listOf(ADGUARD_FAMILY_PRIMARY, ADGUARD_FAMILY_SECONDARY)
-            clean.contains("cleanbrowsing") -> listOf(CLEANBROWSING_FAMILY_PRIMARY, CLEANBROWSING_FAMILY_SECONDARY)
-            clean.contains("cloudflare") -> listOf(CLOUDFLARE_FAMILY_PRIMARY, CLOUDFLARE_FAMILY_SECONDARY)
-            else -> emptyList()
+    @VisibleForTesting
+    internal fun buildDynamicCustomDohEndpoints(preferredHost: String?): Pair<List<DohEndpoint>, List<DohEndpoint>> {
+        val clean = preferredHost?.lowercase()?.trim()?.trimEnd('.').orEmpty()
+        if (clean.isBlank()) return emptyList<DohEndpoint>() to emptyList<DohEndpoint>()
+
+        // NextDNS Case
+        if (clean.endsWith(".dns.nextdns.io")) {
+            val prefix = clean.removeSuffix(".dns.nextdns.io")
+            if (prefix.length in 4..128 && !prefix.startsWith('-') && !prefix.endsWith('-') && prefix.matches(Regex("^[a-z0-9-]+$"))) {
+                val path = if (!prefix.contains('-')) {
+                    "/$prefix"
+                } else {
+                    val profileId = prefix.substringAfterLast('-')
+                    val deviceLabel = prefix.substringBeforeLast('-')
+                    if (profileId.matches(Regex("^[a-f0-9]{4,12}$")) && deviceLabel.isNotBlank()) {
+                        "/$profileId/$deviceLabel"
+                    } else {
+                        "/$prefix"
+                    }
+                }
+                val v4 = listOf(
+                    DohEndpoint(NEXTDNS_IPV4_PRIMARY, NEXTDNS_HOST, path),
+                    DohEndpoint(NEXTDNS_IPV4_SECONDARY, NEXTDNS_HOST, path)
+                )
+                val v6 = listOf(
+                    DohEndpoint(NEXTDNS_IPV6_PRIMARY, NEXTDNS_HOST, path),
+                    DohEndpoint(NEXTDNS_IPV6_SECONDARY, NEXTDNS_HOST, path)
+                )
+                return v4 to v6
+            }
         }
-        return (preferred + DEFAULT_ENDPOINTS).distinctBy { it.ip }
+
+        // Control D FreeDNS Case
+        if (clean.endsWith(".freedns.controld.com")) {
+            val filterSlug = clean.removeSuffix(".freedns.controld.com")
+            if (filterSlug.length in 1..128 && !filterSlug.startsWith('-') && !filterSlug.endsWith('-') && filterSlug.matches(Regex("^[a-z0-9-]+$"))) {
+                val path = "/$filterSlug"
+                val v4 = listOf(
+                    DohEndpoint(CONTROLD_FREEDNS_IPV4_PRIMARY, CONTROLD_FREEDNS_HOST, path),
+                    DohEndpoint(CONTROLD_FREEDNS_IPV4_SECONDARY, CONTROLD_FREEDNS_HOST, path)
+                )
+                val v6 = listOf(
+                    DohEndpoint(CONTROLD_FREEDNS_IPV6_PRIMARY, CONTROLD_FREEDNS_HOST, path),
+                    DohEndpoint(CONTROLD_FREEDNS_IPV6_SECONDARY, CONTROLD_FREEDNS_HOST, path)
+                )
+                return v4 to v6
+            }
+        }
+
+        // Control D Paid/Custom Case
+        if (clean.endsWith(".dns.controld.com")) {
+            val resolverId = clean.removeSuffix(".dns.controld.com")
+            if (resolverId.length in 2..64 && !resolverId.startsWith('-') && !resolverId.endsWith('-') && resolverId.matches(Regex("^[a-z0-9-]+$"))) {
+                val path = "/$resolverId"
+                val v4 = listOf(
+                    DohEndpoint(CONTROLD_CUSTOM_IPV4_PRIMARY, CONTROLD_CUSTOM_HOST, path),
+                    DohEndpoint(CONTROLD_CUSTOM_IPV4_SECONDARY, CONTROLD_CUSTOM_HOST, path)
+                )
+                val v6 = listOf(
+                    DohEndpoint(CONTROLD_CUSTOM_IPV6_PRIMARY, CONTROLD_CUSTOM_HOST, path),
+                    DohEndpoint(CONTROLD_CUSTOM_IPV6_SECONDARY, CONTROLD_CUSTOM_HOST, path)
+                )
+                return v4 to v6
+            }
+        }
+
+        return emptyList<DohEndpoint>() to emptyList<DohEndpoint>()
+    }
+
+    @VisibleForTesting
+    internal fun getPrioritizedEndpoints(
+        preferredHost: String?,
+        families: LinkIpFamilies = LinkIpFamilies(hasIpv4 = true, hasIpv6 = false)
+    ): List<DohEndpoint> {
+        val (dynV4, dynV6) = buildDynamicCustomDohEndpoints(preferredHost)
+        val clean = preferredHost?.lowercase()?.trim()?.trimEnd('.').orEmpty()
+
+        val (v4Preferred, v6Preferred) = if (dynV4.isNotEmpty() || dynV6.isNotEmpty()) {
+            dynV4 to dynV6
+        } else {
+            when {
+                clean.contains("adguard") -> listOf(ADGUARD_FAMILY_PRIMARY, ADGUARD_FAMILY_SECONDARY) to listOf(ADGUARD_FAMILY_V6_PRIMARY, ADGUARD_FAMILY_V6_SECONDARY)
+                clean.contains("cleanbrowsing") -> listOf(CLEANBROWSING_FAMILY_PRIMARY, CLEANBROWSING_FAMILY_SECONDARY) to listOf(CLEANBROWSING_FAMILY_V6_PRIMARY, CLEANBROWSING_FAMILY_V6_SECONDARY)
+                clean.contains("cloudflare") -> listOf(CLOUDFLARE_FAMILY_PRIMARY, CLOUDFLARE_FAMILY_SECONDARY) to listOf(CLOUDFLARE_FAMILY_V6_PRIMARY, CLOUDFLARE_FAMILY_V6_SECONDARY)
+                else -> emptyList<DohEndpoint>() to emptyList<DohEndpoint>()
+            }
+        }
+
+        val prioritized = mutableListOf<DohEndpoint>()
+        val fallbacks = mutableListOf<DohEndpoint>()
+
+        if (families.hasIpv4) {
+            prioritized.addAll(v4Preferred)
+            fallbacks.addAll(DEFAULT_ENDPOINTS)
+        }
+        if (families.hasIpv6) {
+            prioritized.addAll(v6Preferred)
+            fallbacks.addAll(DEFAULT_V6_ENDPOINTS)
+        }
+        if (!families.hasIpv4 && !families.hasIpv6) {
+            prioritized.addAll(v4Preferred)
+            fallbacks.addAll(DEFAULT_ENDPOINTS)
+        }
+
+        return (prioritized + fallbacks).distinctBy { it.ip }
     }
 
     /**
@@ -191,8 +321,10 @@ class DohUpstreamClient(
             baseSocket.soTimeout = connectTimeout
             baseSocket.connect(InetSocketAddress(endpoint.ip, DOH_PORT), connectTimeout)
 
-            val sslFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
-            val wrapped = sslFactory.createSocket(baseSocket, endpoint.host, DOH_PORT, true) as SSLSocket
+            val sslFactory = SSLSocketFactory.getDefault() as? SSLSocketFactory
+                ?: throw IOException("Default SSLSocketFactory unavailable")
+            val wrapped = sslFactory.createSocket(baseSocket, endpoint.host, DOH_PORT, true) as? SSLSocket
+                ?: throw IOException("Failed to wrap socket with SSLSocket")
             sslSocket = wrapped
 
             val sslParams = wrapped.sslParameters
@@ -350,11 +482,14 @@ class DohUpstreamClient(
     private fun readBodyUntilEof(inStream: DataInputStream, deadlineMs: Long): ByteArray {
         val out = ByteArrayOutputStream()
         val buf = ByteArray(1024)
-        while (out.size() <= MAX_DOH_RESPONSE_BYTES) {
+        while (true) {
             val remaining = (deadlineMs - clockMs()).toInt()
-            if (remaining <= 0) break
+            if (remaining <= 0) throw SocketTimeoutException("DoH response read deadline exceeded")
             val count = inStream.read(buf)
             if (count == -1) break
+            if (out.size() + count > MAX_DOH_RESPONSE_BYTES) {
+                throw IOException("DoH response body exceeded maximum size ($MAX_DOH_RESPONSE_BYTES bytes)")
+            }
             out.write(buf, 0, count)
         }
         return out.toByteArray()

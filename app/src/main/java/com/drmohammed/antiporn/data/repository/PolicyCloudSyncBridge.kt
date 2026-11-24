@@ -46,6 +46,9 @@ internal class PolicyCloudSyncBridge(
     @Volatile
     private var lastSyncedCloudVersion: Long = 0L
 
+    @Volatile
+    private var lastUnchangedLoggedSignature: String? = null
+
     fun startFirestoreSync() {
         if (!isCloudSyncEnabledProvider()) {
             Log.i(TAG, "Cloud sync is disabled; aborting startFirestoreSync (pure offline mode)")
@@ -97,6 +100,7 @@ internal class PolicyCloudSyncBridge(
             listenerGeneration.incrementAndGet()
             firestoreListener?.remove()
             firestoreListener = null
+            lastUnchangedLoggedSignature = null
             ApprovalRepository.getInstance(appContext).stopApprovalsSync()
             Log.i(TAG, "Successfully stopped Firestore policy and approval sync listeners")
         } catch (e: Exception) {
@@ -189,6 +193,17 @@ internal class PolicyCloudSyncBridge(
                 statusChanged
             )
 
+            val isUnchanged = !(isVersionNewer || isTimeNewer || supervisoryChanged || statusChanged || supervisionChanged)
+            if (isUnchanged) {
+                val sig = "${cloudPolicy.version}:${cloudPolicy.updatedAt}:${cloudPolicy.hashCode()}:${current.version}"
+                if (lastUnchangedLoggedSignature == sig) {
+                    return
+                }
+                lastUnchangedLoggedSignature = sig
+            } else {
+                lastUnchangedLoggedSignature = null
+            }
+
             BlackBoxRecorder.recordCloudSync(
                 appContext,
                 "POLICY_RECEIVED",
@@ -196,7 +211,7 @@ internal class PolicyCloudSyncBridge(
                 details = "uid=$maskedUid, v${cloudPolicy.version}, isSupervised=${cloudPolicy.isSupervised}, curfew=${cloudPolicy.isCurfewEnabled}(${cloudPolicy.curfewStartHour}:${cloudPolicy.curfewStartMinute}), isVersionNewer=$isVersionNewer, isTimeNewer=$isTimeNewer"
             )
 
-            if (!(isVersionNewer || isTimeNewer || supervisoryChanged || statusChanged || supervisionChanged)) {
+            if (isUnchanged) {
                 return
             }
 
@@ -271,6 +286,7 @@ internal class PolicyCloudSyncBridge(
             cloudPolicy.isYouTubeRestrictedModeEnabled != current.isYouTubeRestrictedModeEnabled ||
             cloudPolicy.isAdBlockingEnabled != current.isAdBlockingEnabled ||
             cloudPolicy.isTelegramWebBlocked != current.isTelegramWebBlocked ||
+            cloudPolicy.isBlockExternalVpnEnabled != current.isBlockExternalVpnEnabled ||
             cloudPolicy.customBlockedUrls != current.customBlockedUrls ||
             cloudPolicy.customAllowedUrls != current.customAllowedUrls ||
             cloudPolicy.guardianUid != current.guardianUid ||

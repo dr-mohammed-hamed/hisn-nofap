@@ -244,8 +244,9 @@ class DnsUpstreamForwarder(
     private suspend fun executeDoh(rawPayload: ByteArray, timeoutMs: Int, preferredHost: String? = null): ByteArray? {
         currentCoroutineContext().ensureActive()
         if (timeoutMs <= 0) return null
+        val families = resolveActivePhysicalLinkIpFamilies(vpnService)
         return dohQueryExecutor?.invoke(rawPayload, timeoutMs)
-            ?: dohClient.query(rawPayload, timeoutMs, preferredHost)
+            ?: dohClient.query(rawPayload, timeoutMs, preferredHost, families)
     }
 
     private fun remainingTimeout(deadlineMs: Long, startGen: Long, capMs: Int): Int {

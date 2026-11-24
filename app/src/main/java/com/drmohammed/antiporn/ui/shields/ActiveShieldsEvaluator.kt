@@ -82,7 +82,11 @@ object ActiveShieldsEvaluator {
             (policy?.dnsHost?.isNotBlank() == true && displayedHost.equals(policy.dnsHost.trim(), ignoreCase = true))
         if (isDnsActive && (isAdultBlockingDns || isLocalVpnFiltering)) {
             val desc = if (isLocalVpnFiltering) {
-                context.getString(R.string.shield_dns_local_filter_active)
+                if (com.drmohammed.antiporn.core.network.dns.DnsResilienceManager.isLocalVpnFallbackActive()) {
+                    context.getString(R.string.shield_dns_resilience_doh_active)
+                } else {
+                    context.getString(R.string.shield_dns_local_filter_active)
+                }
             } else {
                 context.getString(R.string.shield_active_dns_desc, displayedHost)
             }

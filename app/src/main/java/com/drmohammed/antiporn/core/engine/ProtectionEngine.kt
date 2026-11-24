@@ -260,10 +260,15 @@ object ProtectionEngine {
         }
         if (com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge.isLocalVpnExpectedActive(appContext)) {
             Log.d(TAG, "Skipping applyDnsShieldFastSync because local VPN mode is expected active")
+            val msg = if (com.drmohammed.antiporn.core.network.dns.DnsResilienceManager.isLocalVpnFallbackActive()) {
+                appContext.getString(R.string.shield_dns_resilience_doh_active)
+            } else {
+                appContext.getString(R.string.shield_dns_local_filter_active)
+            }
             return ShieldResult(
                 shieldId = DnsShield.id,
                 success = true,
-                message = appContext.getString(R.string.shield_dns_local_filter_active)
+                message = msg
             )
         }
         if (!isDeviceOwner(appContext)) {

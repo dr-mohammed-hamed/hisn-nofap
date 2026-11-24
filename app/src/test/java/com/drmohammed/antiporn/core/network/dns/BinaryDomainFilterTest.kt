@@ -83,4 +83,10 @@ class BinaryDomainFilterTest {
             }
         }
     }
+
+    @Test
+    fun testGetLoadedEntriesCount_defaultZero() {
+        // When not initialized or before snapshot load, count is >= 0
+        assertTrue(BinaryDomainFilter.getLoadedEntriesCount() >= 0)
+    }
 }

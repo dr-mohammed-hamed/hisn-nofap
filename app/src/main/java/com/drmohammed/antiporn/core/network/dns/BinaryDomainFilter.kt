@@ -50,6 +50,11 @@ object BinaryDomainFilter {
     private var snapshot: FilterSnapshot? = null
 
     /**
+     * Returns the total number of entries loaded in the binary domain filter snapshot.
+     */
+    fun getLoadedEntriesCount(): Int = snapshot?.totalEntries ?: 0
+
+    /**
      * Initializes the memory-mapped buffer from local storage (if updated) or APK assets.
      * Safe to invoke multiple times; subsequent calls are no-ops once initialized.
      */

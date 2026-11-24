@@ -55,7 +55,24 @@ object DnsPolicyEvaluator {
         "dns.nextdns.io",
         "dns.mullvad.net",
         "doh.dns.sb",
-        "_dns.resolver.arpa"
+        "_dns.resolver.arpa",
+        "dns9.quad9.net",
+        "dns10.quad9.net",
+        "dns11.quad9.net",
+        "doh.umbrella.com",
+        "unfiltered.adguard-dns.com",
+        "dns-unfiltered.adguard.com",
+        "p0.freedns.controld.com",
+        "p1.freedns.controld.com",
+        "p2.freedns.controld.com",
+        "uncensored.freedns.controld.com",
+        "base.dns.mullvad.net",
+        "doh.pub",
+        "dns.alidns.com",
+        "dns.switch.ch",
+        "doh.applied-privacy.net",
+        "dns.digitale-gesellschaft.ch",
+        "common.dot.dns.yandex.net"
     )
 
     val YOUTUBE_DOMAINS: Set<String> = setOf(
@@ -158,8 +175,10 @@ object DnsPolicyEvaluator {
             }
         }
 
-        // Tier 5: Anti-Bypass DoH Canary & Encrypted Relay Blocking
-        if (isDomainInSanitizedSet(qName, SANITIZED_DOH_BYPASS_DOMAINS)) {
+        // Tier 5: Anti-Bypass DoH Canary & Encrypted Relay Blocking (exempt active supervisor policy.dnsHost)
+        val normalizedPolicyDnsHost = policy.dnsHost.trim().lowercase().trimEnd('.')
+        val isConfiguredPolicyDnsHost = normalizedPolicyDnsHost.isNotBlank() && qName == normalizedPolicyDnsHost
+        if (!isConfiguredPolicyDnsHost && isDomainInSanitizedSet(qName, SANITIZED_DOH_BYPASS_DOMAINS)) {
             return PolicyAction.BlockDohBypass
         }
 

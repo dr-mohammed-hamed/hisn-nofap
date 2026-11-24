@@ -30,6 +30,7 @@ class DnsResilienceManagerTest {
 
     @Before
     fun setUp() {
+        com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.resetForTest()
         DnsResilienceManager.onPolicyDnsHostChanged(fakeContext)
     }
 
@@ -314,8 +315,10 @@ class DnsResilienceManagerTest {
         DnsResilienceManager.internetProbeOverride = { true }
         DnsResilienceManager.dotProbeOverride = { _, _ -> true } // Java DoT connects to primary!
 
-        DnsResilienceManager.delayOverride = {
-            stageADelayInvoked = true
+        DnsResilienceManager.delayOverride = { ms ->
+            if (ms == 6_000L) {
+                stageADelayInvoked = true
+            }
         }
 
         DnsResilienceManager.isDeviceOwnerChecker = { true }
@@ -369,5 +372,149 @@ class DnsResilienceManagerTest {
             DnsResilienceManager.getActiveMode()
         )
         assertFalse(DnsResilienceManager.isLocalVpnFallbackActive())
+    }
+
+    @Test
+    fun testDnsResilienceManager_dpmHostNotServing_doesNotSkipWhenInitialValidated() = kotlinx.coroutines.runBlocking {
+        val wifiNet = createMockNetwork(263)
+        var level3Activated = false
+
+        DnsResilienceManager.resetStateSync()
+        DnsResilienceManager.policyHostProvider = { "family.cloudflare-dns.com" }
+        DnsResilienceManager.curfewOrVpnActiveChecker = { false }
+        DnsResilienceManager.isWifiValidatedChecker = { true } // Initial validated is TRUE!
+        DnsResilienceManager.internetProbeOverride = { true }
+        DnsResilienceManager.dotProbeOverride = { _, _ -> false } // Primary and alternates fail
+        DnsResilienceManager.isDeviceOwnerChecker = { true }
+        DnsResilienceManager.binaryFilterInitOverride = { true }
+        DnsResilienceManager.level3ActivationOverride = { _, _ ->
+            level3Activated = true
+            true
+        }
+
+        DnsResilienceManager.evaluateWifiUnvalidatedOrDotErrorDirect(
+            fakeContext,
+            wifiNet,
+            "dpm_host_not_serving:family.cloudflare-dns.com"
+        )
+
+        assertTrue(
+            "dpm_host_not_serving must NOT early-return on initialValidated, must proceed to Level 3",
+            level3Activated
+        )
+        assertEquals(
+            DnsResilienceManager.DnsResilienceMode.FALLBACK_LOCAL_VPN_DOH,
+            DnsResilienceManager.getActiveMode()
+        )
+    }
+
+    @Test
+    fun testDnsResilienceManager_osQuirk_validatesDuringGracePeriod_staysOnPrimary() = kotlinx.coroutines.runBlocking {
+        val wifiNet = createMockNetwork(263)
+        var validatedChecks = 0
+        var level3Activated = false
+
+        DnsResilienceManager.resetStateSync()
+        DnsResilienceManager.policyHostProvider = { "family.cloudflare-dns.com" }
+        DnsResilienceManager.curfewOrVpnActiveChecker = { false }
+        // First check false, during grace period check true!
+        DnsResilienceManager.isWifiValidatedChecker = {
+            validatedChecks++
+            validatedChecks > 2
+        }
+        DnsResilienceManager.internetProbeOverride = { true }
+        DnsResilienceManager.dotProbeOverride = { _, _ -> true }
+        DnsResilienceManager.delayOverride = { } // Instant grace delay
+        DnsResilienceManager.isDeviceOwnerChecker = { true }
+        DnsResilienceManager.binaryFilterInitOverride = { true }
+        DnsResilienceManager.level3ActivationOverride = { _, _ ->
+            level3Activated = true
+            true
+        }
+
+        DnsResilienceManager.evaluateWifiUnvalidatedOrDotErrorDirect(
+            fakeContext,
+            wifiNet,
+            "test_os_quirk_grace"
+        )
+
+        assertFalse("Must not escalate to Level 3 if network validates during grace", level3Activated)
+        assertEquals(
+            DnsResilienceManager.DnsResilienceMode.PRIMARY_STRICT_DOT,
+            DnsResilienceManager.getActiveMode()
+        )
+    }
+
+    @Test
+    fun testDnsResilienceManager_sameNetworkPrimaryRecovery_succeedsAndRestores() = kotlinx.coroutines.runBlocking {
+        val wifiNet = createMockNetwork(263)
+        val wifiId = DnsResilienceManager.resolveNetworkId(wifiNet)
+
+        com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.resetForTest()
+        DnsResilienceManager.resetStateSync()
+        DnsResilienceNetworkRouter.reset()
+
+        DnsResilienceManager.setFallbackStateForTest(
+            mode = DnsResilienceManager.DnsResilienceMode.FALLBACK_LOCAL_VPN_DOH,
+            netId = wifiId
+        )
+
+        var probeCalled = false
+        DnsResilienceManager.dotProbeOverride = { _, host ->
+            probeCalled = true
+            host == "family.cloudflare-dns.com"
+        }
+
+        // Fast recovery execution
+        DnsResilienceManager.recoveryDelayOverride = { }
+
+        DnsResilienceManager.scheduleSameNetworkPrimaryRecovery(
+            context = fakeContext,
+            network = wifiNet,
+            netId = wifiId,
+            targetPolicyHost = "family.cloudflare-dns.com",
+            triggerReason = "test_recovery"
+        )
+
+        val job = DnsResilienceNetworkRouter.activeRecoveryJob
+        job?.join()
+
+        assertTrue("Recovery probe must have been executed", probeCalled)
+        assertEquals(
+            DnsResilienceManager.DnsResilienceMode.PRIMARY_STRICT_DOT,
+            DnsResilienceManager.getActiveMode()
+        )
+        assertNull(DnsResilienceManager.getProtectedWifiNetworkId())
+        assertEquals(1, DnsResilienceNetworkRouter.recoveryAttemptCountByNet[wifiId])
+    }
+
+    @Test
+    fun testDnsResilienceManager_sameNetworkRecovery_stopsAfterMaxAttempts() = kotlinx.coroutines.runBlocking {
+        val wifiNet = createMockNetwork(263)
+        val wifiId = DnsResilienceManager.resolveNetworkId(wifiNet)
+
+        com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.resetForTest()
+        DnsResilienceManager.resetStateSync()
+        DnsResilienceNetworkRouter.reset()
+        DnsResilienceNetworkRouter.recoveryAttemptCountByNet[wifiId] = DnsResilienceNetworkRouter.MAX_SAME_NET_RECOVERY_ATTEMPTS
+
+        DnsResilienceManager.setFallbackStateForTest(
+            mode = DnsResilienceManager.DnsResilienceMode.FALLBACK_LOCAL_VPN_DOH,
+            netId = wifiId
+        )
+
+        DnsResilienceManager.scheduleSameNetworkPrimaryRecovery(
+            context = fakeContext,
+            network = wifiNet,
+            netId = wifiId,
+            targetPolicyHost = "family.cloudflare-dns.com",
+            triggerReason = "test_max_recovery"
+        )
+
+        assertNull("Job must not be scheduled when max attempts reached", DnsResilienceNetworkRouter.activeRecoveryJob)
+        assertEquals(
+            DnsResilienceManager.DnsResilienceMode.FALLBACK_LOCAL_VPN_DOH,
+            DnsResilienceManager.getActiveMode()
+        )
     }
 }

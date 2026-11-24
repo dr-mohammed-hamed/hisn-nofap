@@ -6,8 +6,8 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.SystemClock
-import android.util.Log
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
+import timber.log.Timber
 import java.util.Calendar
 
 /**
@@ -180,9 +180,9 @@ object CurfewScheduler {
                     cancelledCount++
                 }
             }
-            Log.i(TAG, "Cancelled $cancelledCount night curfew alarm(s)")
+            Timber.tag(TAG).i("Cancelled $cancelledCount night curfew alarm(s)")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to cancel curfew alarms", e)
+            Timber.tag(TAG).e(e, "Failed to cancel curfew alarms")
         }
     }
 
@@ -192,13 +192,13 @@ object CurfewScheduler {
      */
     fun scheduleNextAlarms(context: Context) {
         if (!CurfewConfig.isCurfewEnabled(context)) {
-            Log.i(TAG, "Night curfew is disabled in policy; cancelling curfew alarms and skipping scheduling")
+            Timber.tag(TAG).i("Night curfew is disabled in policy; cancelling curfew alarms and skipping scheduling")
             cancelCurfewAlarms(context)
             return
         }
 
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: run {
-            Log.e(TAG, "AlarmManager not available")
+            Timber.tag(TAG).e("AlarmManager not available")
             return
         }
 
@@ -226,16 +226,16 @@ object CurfewScheduler {
             if (preWarningMs > nowMs) {
                 val preElapsed = TrustedTimeProvider.computeElapsedTrigger(preWarningMs, context)
                 setExactCompat(alarmManager, AlarmManager.ELAPSED_REALTIME_WAKEUP, preElapsed, preWarningPendingIntent)
-                Log.i(TAG, "Scheduled pre-curfew 15-minute warning alarm at $preWarningMs (elapsed=$preElapsed)")
+                Timber.tag(TAG).i("Scheduled pre-curfew 15-minute warning alarm at $preWarningMs (elapsed=$preElapsed)")
             } else {
                 alarmManager.cancel(preWarningPendingIntent)
                 preWarningPendingIntent.cancel()
-                Log.d(TAG, "Cancelled/skipped stale pre-curfew warning alarm because remaining time is less than 15 minutes")
+                Timber.tag(TAG).d("Cancelled/skipped stale pre-curfew warning alarm because remaining time is less than 15 minutes")
             }
 
-            Log.i(TAG, "Scheduled exact curfew alarms via ELAPSED_REALTIME: Start at ${nextStart.time} (elapsed=$startElapsed), End at ${nextEnd.time} (elapsed=$endElapsed)")
+            Timber.tag(TAG).i("Scheduled exact curfew alarms via ELAPSED_REALTIME: Start at ${nextStart.time} (elapsed=$startElapsed), End at ${nextEnd.time} (elapsed=$endElapsed)")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to schedule exact alarms via AlarmManager", e)
+            Timber.tag(TAG).e(e, "Failed to schedule exact alarms via AlarmManager")
         }
     }
 
@@ -259,7 +259,7 @@ object CurfewScheduler {
                 alarmManager.setExactAndAllowWhileIdle(type, triggerMs, pi)
             }
         } catch (e: SecurityException) {
-            Log.w(TAG, "Exact alarm permission restricted; falling back to inexact alarm", e)
+            Timber.tag(TAG).w(e, "Exact alarm permission restricted; falling back to inexact alarm")
             alarmManager.setAndAllowWhileIdle(type, triggerMs, pi)
         }
     }
@@ -269,7 +269,7 @@ object CurfewScheduler {
      */
     fun scheduleNapEndAlarm(context: Context, triggerWallMs: Long) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: run {
-            Log.e(TAG, "AlarmManager not available for nap end")
+            Timber.tag(TAG).e("AlarmManager not available for nap end")
             return
         }
         try {
@@ -281,9 +281,9 @@ object CurfewScheduler {
             val piElapsed = buildNapEndPendingIntent(context, NapConfig.REQUEST_CODE_NAP_END_ELAPSED)
             val elapsedTrigger = SystemClock.elapsedRealtime() + remaining
             setExactCompat(alarmManager, AlarmManager.ELAPSED_REALTIME_WAKEUP, elapsedTrigger, piElapsed)
-            Log.i(TAG, "Scheduled nap end alarm via ELAPSED_REALTIME: wall=$triggerWallMs remainingMs=$remaining elapsedTrigger=$elapsedTrigger")
+            Timber.tag(TAG).i("Scheduled nap end alarm via ELAPSED_REALTIME: wall=$triggerWallMs remainingMs=$remaining elapsedTrigger=$elapsedTrigger")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to schedule nap end alarms", e)
+            Timber.tag(TAG).e(e, "Failed to schedule nap end alarms")
         }
     }
 
@@ -299,9 +299,9 @@ object CurfewScheduler {
             alarmManager.cancel(piRtc)
             piElapsed.cancel()
             piRtc.cancel()
-            Log.i(TAG, "Cancelled dual nap end alarms")
+            Timber.tag(TAG).i("Cancelled dual nap end alarms")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to cancel nap end alarms", e)
+            Timber.tag(TAG).e(e, "Failed to cancel nap end alarms")
         }
     }
 
@@ -310,6 +310,12 @@ object CurfewScheduler {
     fun scheduleCurfewSnoozeAlarm(context: Context, triggerWallMs: Long) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
         try {
+            val nowMs = TrustedTimeProvider.currentTimeMillis(context)
+            if (triggerWallMs <= nowMs) {
+                cancelCurfewSnoozeAlarm(context)
+                Timber.tag(TAG).d("Skipped past curfew snooze alarm ($triggerWallMs <= $nowMs)")
+                return
+            }
             val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             val intent = Intent(context, CurfewAlarmReceiver::class.java).apply {
                 action = CurfewConfig.ACTION_CURFEW_SNOOZE_END
@@ -317,9 +323,9 @@ object CurfewScheduler {
             val pi = PendingIntent.getBroadcast(context, REQUEST_CODE_SNOOZE, intent, flags)
             val elapsedTrigger = TrustedTimeProvider.computeElapsedTrigger(triggerWallMs, context)
             setExactCompat(alarmManager, AlarmManager.ELAPSED_REALTIME_WAKEUP, elapsedTrigger, pi)
-            Log.i(TAG, "Scheduled snooze expiration alarm via ELAPSED_REALTIME at $triggerWallMs (elapsed=$elapsedTrigger)")
+            Timber.tag(TAG).i("Scheduled snooze expiration alarm via ELAPSED_REALTIME at $triggerWallMs (elapsed=$elapsedTrigger)")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to schedule curfew snooze alarm", e)
+            Timber.tag(TAG).e(e, "Failed to schedule curfew snooze alarm")
         }
     }
 
@@ -333,9 +339,9 @@ object CurfewScheduler {
             val pi = PendingIntent.getBroadcast(context, REQUEST_CODE_SNOOZE, intent, flags)
             alarmManager.cancel(pi)
             pi.cancel()
-            Log.i(TAG, "Cancelled curfew snooze alarm")
+            Timber.tag(TAG).i("Cancelled curfew snooze alarm")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to cancel curfew snooze alarm", e)
+            Timber.tag(TAG).e(e, "Failed to cancel curfew snooze alarm")
         }
     }
 }

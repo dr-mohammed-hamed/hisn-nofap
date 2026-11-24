@@ -193,7 +193,8 @@ internal object AppSuspensionHandler {
         val policy = com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(appContext).getCurrentPolicy()
         val isCustomBlacklisted = policy.customBlacklistPackages.contains(packageName)
         val isPermanentlyBlacklisted = AppSuspensionShield.isBlacklisted(packageName)
-        if (!policy.lockNewInstallsUntilApproved && !isCustomBlacklisted && !isPermanentlyBlacklisted) {
+        val isHighRisk = AppPolicyRegistry.isHighRisk(packageName)
+        if (!policy.lockNewInstallsUntilApproved && !isCustomBlacklisted && !isPermanentlyBlacklisted && !isHighRisk) {
             return
         }
         if (AppSuspensionShield.isImmune(packageName) ||

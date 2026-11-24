@@ -116,6 +116,31 @@ class AppPolicyRegistryTest {
         assertTrue(AppPolicyRegistry.isRestrictedBrowser("com.brave.browser"))
         assertTrue(AppPolicyRegistry.isRestrictedBrowser("com.microsoft.emmx"))
         assertFalse(AppPolicyRegistry.isRestrictedBrowser("org.mozilla.firefox")) // Firefox is blacklisted, not restricted
+        assertFalse(AppPolicyRegistry.isRestrictedBrowser("com.opera.mini.native")) // Opera Mini moved to proxy browser blacklist
+    }
+
+    @Test
+    fun testSecurityBypassTools_proxyBrowsersAndLocalAdb() {
+        val bypassTools = listOf(
+            "com.opera.mini.native",
+            "org.mozilla.focus",
+            "com.opera.gx",
+            "com.opera.browser.beta",
+            "com.yandex.browser",
+            "org.torproject.torbrowser",
+            "com.draco.ladb",
+            "in.sunilpaulmathew.ashell",
+            "com.termux",
+            "io.github.muntashirakon.AppManager"
+        )
+        for (pkg in bypassTools) {
+            assertTrue("Expected $pkg to be recognized as security bypass tool", AppPolicyRegistry.isSecurityBypassTool(pkg))
+            assertTrue("Expected $pkg to be high risk", AppPolicyRegistry.isHighRisk(pkg))
+        }
+
+        assertFalse("Chrome must not be a security bypass tool", AppPolicyRegistry.isSecurityBypassTool("com.android.chrome"))
+        assertFalse("Calculator must not be a security bypass tool", AppPolicyRegistry.isSecurityBypassTool("com.google.android.calculator"))
+        assertFalse("Self-protection must not be a security bypass tool", AppPolicyRegistry.isSecurityBypassTool("com.drmohammed.antiporn"))
     }
 
     @Test

@@ -128,6 +128,7 @@
     <string name="card_system_tamper_title">حماية النظام ومنع الالتفاف (Anti-Tamper)</string>
 
     <string name="card_system_tamper_active">قفل التوقيت المعتمد، ومنع الوضع الآمن والفورمات وإلغاء التثبيت</string>
+    <string name="card_system_tamper_active_no_time_lock">منع الوضع الآمن والفورمات وإلغاء التثبيت (قفل التوقيت غير مفعّل في السياسة)</string>
 
     <string name="card_system_tamper_inactive">غير مفعلة (يتطلب صلاحية Device Owner)</string>
 
@@ -145,6 +146,7 @@
 
     <string name="shield_dns_unsupported">ميزة Private DNS تتطلب أندرويد 10 (API 29) أو أحدث</string>
     <string name="shield_dns_local_filter_active">فلترة DNS المحلية نشطة (Private DNS تلقائي مع تشفير DoT)</string>
+    <string name="shield_dns_resilience_doh_active">فلترة DNS المحلية نشطة (وضع الإنقاذ المشفّر DoH 443 + الفلتر الثنائي)</string>
     <string name="shield_dns_local_filter_unaffiliated_notice">درع فلترة المواقع وحماية DNS نشط عبر (%1$s). ملاحظة: لتخصيص خادم DNS أو فلاتر إضافية، يتطلب نظام أندرويد إيقاف التطبيقات المزدوجة أو المجلد الآمن مؤقتاً.</string>
     <string name="shield_dns_unaffiliated_users_notice">درع DNS نشط ومحمي عبر (%1$s). لتغيير الخادم النظامي إلى (%2$s)، يرجى إيقاف المرسل المزدوج أو المجلد الآمن مؤقتاً لتوافق نظام أندرويد.</string>
     <string name="shield_dns_unaffiliated_users_error">تعذر تفعيل درع DNS النظامي لوجود ملفات شخصية ثانوية (مثل المرسل المزدوج أو المجلد الآمن). يرجى إزالتها لتفعيل الحماية.</string>

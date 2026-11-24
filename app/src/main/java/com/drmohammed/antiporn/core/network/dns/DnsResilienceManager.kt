@@ -13,6 +13,7 @@ import com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge
 import com.drmohammed.antiporn.shields.DnsShield
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import com.drmohammed.antiporn.telemetry.SafeDpmGateway
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -22,10 +23,7 @@ import kotlinx.coroutines.sync.withLock
 import timber.log.Timber
 import java.net.InetSocketAddress
 import java.net.Socket
-import javax.net.ssl.HttpsURLConnection
-import javax.net.ssl.SNIHostName
-import javax.net.ssl.SSLSocket
-import javax.net.ssl.SSLSocketFactory
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Intelligent 3-tier Wi-Fi & DNS Resilience Engine.
@@ -47,20 +45,13 @@ object DnsResilienceManager {
 
     private const val PROBE_COOLDOWN_MS = 15_000L
     private const val ANTI_SPOOF_TIMEOUT_MS = 1_500
-    private const val DOT_PROBE_TIMEOUT_MS = 2_000
+    private const val OS_QUIRK_RECHECK_GRACE_MS = 2_000L
 
     private val ALTERNATE_FAMILY_PRESETS = listOf(
         DevicePolicyBundle.ADGUARD_FAMILY_DNS_HOST,
         DevicePolicyBundle.CLOUDFLARE_FAMILY_DNS_HOST,
         DevicePolicyBundle.CONTROLD_NO_ADS_PORN_DNS_HOST,
         "family-filter-dns.cleanbrowsing.org"
-    )
-
-    private val PRESET_BOOTSTRAP_IPV4 = mapOf(
-        "family.cloudflare-dns.com" to "1.1.1.3",
-        "family.adguard-dns.com" to "94.140.14.15",
-        "family-filter-dns.cleanbrowsing.org" to "185.228.168.168",
-        "family.controld.com" to "76.76.2.3"
     )
 
     private val resilienceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -100,6 +91,13 @@ object DnsResilienceManager {
     @VisibleForTesting
     internal var policyHostProvider: ((Context) -> String)? = null
 
+    @VisibleForTesting
+    internal var recoveryDelayOverride: (suspend (Long) -> Unit)?
+        get() = DnsResilienceNetworkRouter.recoveryDelayOverride
+        set(value) {
+            DnsResilienceNetworkRouter.recoveryDelayOverride = value
+        }
+
     private val stateLock = Any()
     @Volatile
     private var activeMode: DnsResilienceMode = DnsResilienceMode.PRIMARY_STRICT_DOT
@@ -108,7 +106,10 @@ object DnsResilienceManager {
     @Volatile
     private var protectedWifiNetworkId: String? = null
     @Volatile
+    private var isProtectedNetCaptivePortal: Boolean = false
+    @Volatile
     private var lastProbeElapsedMs: Long = 0L
+    private val stateEpoch = AtomicLong(0L)
 
     fun getActiveMode(): DnsResilienceMode = activeMode
 
@@ -116,10 +117,25 @@ object DnsResilienceManager {
         activeMode == DnsResilienceMode.FALLBACK_LOCAL_VPN_DOH
 
     fun getEffectiveRuntimeDnsHost(policyHost: String): String {
-        return if (activeMode == DnsResilienceMode.FALLBACK_STRICT_DOT && !overrideDotHost.isNullOrBlank()) {
-            overrideDotHost!!
+        val currentOverride = overrideDotHost
+        return if (activeMode == DnsResilienceMode.FALLBACK_STRICT_DOT && !currentOverride.isNullOrBlank()) {
+            currentOverride
         } else {
             policyHost
+        }
+    }
+
+    @VisibleForTesting
+    internal fun setFallbackStateForTest(
+        mode: DnsResilienceMode,
+        netId: String?,
+        isCaptivePortal: Boolean = false
+    ) {
+        synchronized(stateLock) {
+            stateEpoch.incrementAndGet()
+            activeMode = mode
+            protectedWifiNetworkId = netId
+            isProtectedNetCaptivePortal = isCaptivePortal
         }
     }
 
@@ -140,10 +156,13 @@ object DnsResilienceManager {
     fun resetStateSync() {
         synchronized(stateLock) {
             Timber.tag(TAG).i("Resetting resilience state to PRIMARY_STRICT_DOT synchronously")
+            stateEpoch.incrementAndGet()
             activeMode = DnsResilienceMode.PRIMARY_STRICT_DOT
             overrideDotHost = null
             protectedWifiNetworkId = null
+            isProtectedNetCaptivePortal = false
             lastProbeElapsedMs = 0L
+            DnsResilienceNetworkRouter.reset()
             pendingEvaluationJobs.values.forEach { it.cancel() }
             pendingEvaluationJobs.clear()
             curfewOrVpnActiveChecker = null
@@ -217,8 +236,14 @@ object DnsResilienceManager {
         triggerReason: String
     ) {
         resilienceScope.launch {
-            evaluationMutex.withLock {
-                evaluateWifiUnvalidatedOrDotErrorInternal(context, wifiNetwork, triggerReason)
+            try {
+                evaluationMutex.withLock {
+                    evaluateWifiUnvalidatedOrDotErrorInternal(context, wifiNetwork, triggerReason)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.tag(TAG).w(e, "Unhandled error evaluating Wi-Fi DNS resilience")
             }
         }
     }
@@ -234,33 +259,61 @@ object DnsResilienceManager {
         }
     }
 
+    private fun resolveTargetPolicyHost(context: Context): String {
+        val policyHost = DnsShield.DEFAULT_DNS_HOST
+        return try {
+            policyHostProvider?.invoke(context)
+                ?: com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(context)
+                    .getCurrentPolicy().dnsHost.takeIf { it.isNotBlank() } ?: policyHost
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Timber.tag(TAG).w(e, "Falling back to default DNS host while reading policy")
+            policyHost
+        }
+    }
+
+    private fun getLinkIpFamiliesForNetwork(cm: ConnectivityManager?, network: Network): LinkIpFamilies {
+        return try {
+            cm?.getLinkProperties(network).toLinkIpFamilies()
+        } catch (_: Throwable) {
+            LinkIpFamilies()
+        }
+    }
+
     private suspend fun evaluateWifiUnvalidatedOrDotErrorInternal(
         context: Context,
         wifiNetwork: Network,
         triggerReason: String
     ) {
+        val startEpoch = stateEpoch.get()
         val netId = resolveNetworkId(wifiNetwork)
-        val currentProtId = protectedWifiNetworkId
-        if (currentProtId == netId && activeMode == DnsResilienceMode.FALLBACK_LOCAL_VPN_DOH) {
+        val (currentModeSnapshot, currentProtId) = synchronized(stateLock) {
+            activeMode to protectedWifiNetworkId
+        }
+        if (currentProtId == netId && currentModeSnapshot == DnsResilienceMode.FALLBACK_LOCAL_VPN_DOH) {
             Timber.tag(TAG).d("Wi-Fi network $netId is already protected in Level 3 Fallback; skipping duplicate evaluation")
             return
         }
 
+        val isDpmHostNotServingTrigger = triggerReason.startsWith("dpm_host_not_serving:")
+
         val now = getElapsedRealtime()
-        if (now - lastProbeElapsedMs < PROBE_COOLDOWN_MS && currentProtId == netId) {
+        if (now - lastProbeElapsedMs < PROBE_COOLDOWN_MS && currentProtId == netId && !isDpmHostNotServingTrigger) {
             Timber.tag(TAG).d("Resilience evaluation in cooldown for $netId")
             return
         }
         lastProbeElapsedMs = now
 
-        Timber.tag(TAG).w("Evaluating Wi-Fi resilience for net=$netId (trigger=$triggerReason, activeMode=$activeMode)")
+        Timber.tag(TAG).w("Evaluating Wi-Fi resilience for net=$netId (trigger=$triggerReason, activeMode=$currentModeSnapshot)")
 
         // Pre-condition: Strictly do NOT intervene during Curfew Blackhole or active non-idle VPN!
         val isCurfewOrVpnActive = curfewOrVpnActiveChecker?.invoke(context) ?: try {
             CurfewBlackholeVpnService.evaluateRequiredMode(context) != CurfewBlackholeVpnService.VpnMode.IDLE ||
-            com.drmohammed.antiporn.curfew.CurfewEnforcer.isEffectiveBlockActive(context)
-        } catch (_: Exception) {
-            false
+                com.drmohammed.antiporn.curfew.CurfewEnforcer.isEffectiveBlockActive(context)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Timber.tag(TAG).w(e, "Failed checking curfew/VPN state; skipping resilience intervention fail-safe")
+            true
         }
         if (isCurfewOrVpnActive) {
             Timber.tag(TAG).d("Curfew or non-idle VPN is active; DnsResilienceManager will not intervene.")
@@ -269,16 +322,24 @@ object DnsResilienceManager {
 
         // 1. Fresh NetworkCapabilities check (Avoid stale cache on healthy devices)
         val cm = getConnectivityManager(context)
+        val safeCaps: (Network) -> NetworkCapabilities? = { net ->
+            try {
+                cm?.getNetworkCapabilities(net)
+            } catch (e: Exception) {
+                Timber.tag(TAG).d("Failed querying NetworkCapabilities for $netId: ${e.message}")
+                null
+            }
+        }
         val initialValidated = isWifiValidatedChecker?.invoke(wifiNetwork)
-            ?: (cm?.getNetworkCapabilities(wifiNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true)
-        if (initialValidated) {
+            ?: (safeCaps(wifiNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true)
+        if (!isDpmHostNotServingTrigger && initialValidated) {
             Timber.tag(TAG).d("Wi-Fi network $netId is already validated; skipping resilience intervention.")
             return
         }
 
         // Anti-Spoofing Internet Verification Probe (Strictly bound to wifiNetwork)
         val isCaptive = isWifiCaptivePortalChecker?.invoke(wifiNetwork)
-            ?: (cm?.getNetworkCapabilities(wifiNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL) == true)
+            ?: (safeCaps(wifiNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL) == true)
         val hasInternet = isCaptive || checkWifiHasPhysicalInternet(wifiNetwork)
 
         if (!hasInternet) {
@@ -286,44 +347,53 @@ object DnsResilienceManager {
             return
         }
 
-        val policyHost = DnsShield.DEFAULT_DNS_HOST
-        val targetPolicyHost = try {
-            policyHostProvider?.invoke(context)
-                ?: com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(context)
-                    .getCurrentPolicy().dnsHost.takeIf { it.isNotBlank() } ?: policyHost
-        } catch (_: Exception) {
-            policyHost
-        }
+        val markCaptivePortal = isCaptive || triggerReason.contains("captive", ignoreCase = true)
+        val targetPolicyHost = resolveTargetPolicyHost(context)
+        val linkFamilies = getLinkIpFamiliesForNetwork(cm, wifiNetwork)
 
         // 2. Test primary DoT host on wifiNetwork
-        val isPrimaryWorking = !isCaptive && testDotHostOnNetwork(wifiNetwork, targetPolicyHost)
+        val isPrimaryWorking = !isCaptive && testDotHostOnNetwork(wifiNetwork, targetPolicyHost, linkFamilies)
 
         // Re-read fresh capabilities after network probes
         val postPrimaryValidated = isWifiValidatedChecker?.invoke(wifiNetwork)
-            ?: (cm?.getNetworkCapabilities(wifiNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true)
-        if (postPrimaryValidated) {
+            ?: (safeCaps(wifiNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true)
+        if (!isDpmHostNotServingTrigger && postPrimaryValidated) {
             Timber.tag(TAG).i("Primary DoT host $targetPolicyHost is verified working and validated on $netId")
             return
         }
 
         var skipStageA = false
         if (isPrimaryWorking) {
-            // Java DoT connects to targetPolicyHost, but Android 17 / Nothing OS reports validated=false!
-            // Alternate DoT hosts will also fail in the OS resolver; escalate directly to Level 3.
-            Timber.tag(TAG).w("Primary DoT host connected on Java, but OS reports validated=false on Android 17 / Nothing OS! Skipping Stage A and escalating directly to Level 3.")
-            skipStageA = true
+            if (!isDpmHostNotServingTrigger) {
+                // Short verification grace period (OS_QUIRK_RECHECK_GRACE_MS)
+                val delayFn: suspend (Long) -> Unit = delayOverride ?: { kotlinx.coroutines.delay(it) }
+                delayFn(OS_QUIRK_RECHECK_GRACE_MS)
+                if (stateEpoch.get() != startEpoch) return
+                val quirkValidated = isWifiValidatedChecker?.invoke(wifiNetwork)
+                    ?: (safeCaps(wifiNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true)
+                if (quirkValidated) {
+                    Timber.tag(TAG).i("Network $netId validated during grace period; remaining on PRIMARY_STRICT_DOT")
+                    return
+                }
+                skipStageA = true
+            } else {
+                skipStageA = true
+            }
         }
 
         // 3. Stage A: Try Alternate Family DoT Presets (Level 2) if not captive and not Nothing OS quirk
         if (!isCaptive && !skipStageA) {
             val candidateHosts = ALTERNATE_FAMILY_PRESETS.filterNot { it.equals(targetPolicyHost, ignoreCase = true) }
             for (candidate in candidateHosts) {
-                if (testDotHostOnNetwork(wifiNetwork, candidate)) {
+                if (stateEpoch.get() != startEpoch) return
+                if (testDotHostOnNetwork(wifiNetwork, candidate, linkFamilies)) {
                     Timber.tag(TAG).i("Alternate Family DoT host $candidate works on Wi-Fi $netId! Activating Level 2 FALLBACK_STRICT_DOT")
                     synchronized(stateLock) {
+                        if (stateEpoch.get() != startEpoch) return
                         activeMode = DnsResilienceMode.FALLBACK_STRICT_DOT
                         overrideDotHost = candidate
                         protectedWifiNetworkId = netId
+                        isProtectedNetCaptivePortal = markCaptivePortal
                     }
                     BlackBoxRecorder.recordNetwork(
                         context = context,
@@ -339,10 +409,12 @@ object DnsResilienceManager {
                     } else {
                         kotlinx.coroutines.delay(6_000L)
                     }
+                    if (stateEpoch.get() != startEpoch) return
                     val postFallbackValidated = isWifiValidatedChecker?.invoke(wifiNetwork)
-                        ?: (cm?.getNetworkCapabilities(wifiNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true)
+                        ?: (safeCaps(wifiNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true)
                     if (postFallbackValidated) {
                         Timber.tag(TAG).i("Wi-Fi $netId successfully validated under alternate DoT $candidate; remaining at Level 2")
+                        scheduleSameNetworkPrimaryRecovery(context, wifiNetwork, netId, targetPolicyHost, triggerReason)
                         return
                     } else {
                         Timber.tag(TAG).w("Wi-Fi $netId remains unvalidated after 6s under alternate DoT $candidate; escalating to Level 3")
@@ -352,15 +424,19 @@ object DnsResilienceManager {
             }
         }
 
+        if (stateEpoch.get() != startEpoch) return
+
         // 4. Stage B: Level 3 Escalation - Port 853 Blocked or Android 17 OS Quirk (FALLBACK_LOCAL_VPN_DOH)
         Timber.tag(TAG).w("All DoT 853 failed or Wi-Fi unvalidated on $netId; escalating to Level 3 (FALLBACK_LOCAL_VPN_DOH + DoH 443)")
         val isDeviceOwner = isDeviceOwnerChecker?.invoke(context) ?: SafeDpmGateway.isDeviceOwner(context)
         if (!isDeviceOwner) {
             Timber.tag(TAG).e("Cannot activate Level 3 fallback: Application is not Device Owner; restoring PRIMARY_STRICT_DOT")
             synchronized(stateLock) {
+                if (stateEpoch.get() != startEpoch) return
                 activeMode = DnsResilienceMode.PRIMARY_STRICT_DOT
                 overrideDotHost = null
                 protectedWifiNetworkId = null
+                isProtectedNetCaptivePortal = false
             }
             applyDnsShieldSafely(context)
             return
@@ -370,24 +446,29 @@ object DnsResilienceManager {
         val filterReady = try {
             binaryFilterInitOverride?.invoke(context) ?: BinaryDomainFilter.init(context)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Timber.tag(TAG).e(e, "BinaryDomainFilter initialization threw exception before Level 3 activation")
             false
         }
         if (!filterReady) {
             Timber.tag(TAG).e("BinaryDomainFilter failed to initialize; strictly aborting Level 3 escalation to prevent porn leak (Invariant #1)")
             synchronized(stateLock) {
+                if (stateEpoch.get() != startEpoch) return
                 activeMode = DnsResilienceMode.PRIMARY_STRICT_DOT
                 overrideDotHost = null
                 protectedWifiNetworkId = null
+                isProtectedNetCaptivePortal = false
             }
             applyDnsShieldSafely(context)
             return
         }
 
         synchronized(stateLock) {
+            if (stateEpoch.get() != startEpoch) return
             activeMode = DnsResilienceMode.FALLBACK_LOCAL_VPN_DOH
             overrideDotHost = null
             protectedWifiNetworkId = netId
+            isProtectedNetCaptivePortal = markCaptivePortal
         }
 
         BlackBoxRecorder.recordNetwork(
@@ -414,15 +495,99 @@ object DnsResilienceManager {
             dpmRes.getOrNull()?.success == true
         }
 
+        if (stateEpoch.get() != startEpoch) return
+
         if (!result) {
             Timber.tag(TAG).e("Failed to activate Level 3 VPN fallback safely; rolling back to PRIMARY_STRICT_DOT (Fail-Secure)")
             synchronized(stateLock) {
+                if (stateEpoch.get() != startEpoch) return
                 activeMode = DnsResilienceMode.PRIMARY_STRICT_DOT
                 protectedWifiNetworkId = null
+                isProtectedNetCaptivePortal = false
             }
             applyDnsShieldSafely(context)
         } else {
             Timber.tag(TAG).i("Level 3 Local VPN DNS + DoH 443 activated successfully for Wi-Fi $netId")
+            scheduleSameNetworkPrimaryRecovery(context, wifiNetwork, netId, targetPolicyHost, triggerReason)
+        }
+    }
+
+    @VisibleForTesting
+    internal fun scheduleSameNetworkPrimaryRecovery(
+        context: Context,
+        network: Network,
+        netId: String,
+        targetPolicyHost: String,
+        triggerReason: String
+    ) {
+        synchronized(stateLock) {
+            if (activeMode == DnsResilienceMode.PRIMARY_STRICT_DOT || protectedWifiNetworkId != netId) {
+                return
+            }
+            val currentAttempts = DnsResilienceNetworkRouter.recoveryAttemptCountByNet.getOrDefault(netId, 0)
+            if (currentAttempts >= DnsResilienceNetworkRouter.MAX_SAME_NET_RECOVERY_ATTEMPTS) {
+                Timber.tag(TAG).d("Maximum same-network recovery attempts (${DnsResilienceNetworkRouter.MAX_SAME_NET_RECOVERY_ATTEMPTS}) reached for $netId")
+                return
+            }
+
+            if (triggerReason.contains("captive", ignoreCase = true) || isProtectedNetCaptivePortal) {
+                Timber.tag(TAG).d("Skipping scheduled recovery for captive portal network $netId; will recover on net_validated")
+                return
+            }
+
+            val delayMs = if (currentAttempts < DnsResilienceNetworkRouter.SAME_NET_RECOVERY_DELAYS_MS.size) {
+                DnsResilienceNetworkRouter.SAME_NET_RECOVERY_DELAYS_MS[currentAttempts]
+            } else {
+                DnsResilienceNetworkRouter.SAME_NET_RECOVERY_DELAYS_MS.last()
+            }
+
+            val scheduledEpoch = stateEpoch.get()
+            DnsResilienceNetworkRouter.activeRecoveryJob?.cancel()
+            lateinit var launchedJob: kotlinx.coroutines.Job
+            launchedJob = resilienceScope.launch {
+                try {
+                    val delayFn: suspend (Long) -> Unit = DnsResilienceNetworkRouter.recoveryDelayOverride ?: { kotlinx.coroutines.delay(it) }
+                    delayFn(delayMs)
+
+                    val stillValid = synchronized(stateLock) {
+                        stateEpoch.get() == scheduledEpoch &&
+                            DnsResilienceNetworkRouter.activeRecoveryJob === launchedJob &&
+                            activeMode != DnsResilienceMode.PRIMARY_STRICT_DOT &&
+                            protectedWifiNetworkId == netId
+                    }
+                    if (!stillValid || ProtectionTransitionGuard.hasActiveTransitions()) {
+                        return@launch
+                    }
+
+                    val linkFamilies = getLinkIpFamiliesForNetwork(getConnectivityManager(context), network)
+                    val restored = testDotHostOnNetwork(network, targetPolicyHost, linkFamilies)
+
+                    val newCount = synchronized(stateLock) {
+                        if (stateEpoch.get() != scheduledEpoch ||
+                            DnsResilienceNetworkRouter.activeRecoveryJob !== launchedJob ||
+                            protectedWifiNetworkId != netId
+                        ) {
+                            return@launch
+                        }
+                        DnsResilienceNetworkRouter.recoveryAttemptCountByNet.compute(netId) { _, count -> (count ?: 0) + 1 } ?: 1
+                    }
+
+                    if (restored) {
+                        Timber.tag(TAG).i("Primary DoT host $targetPolicyHost is now working on $netId! Restoring PRIMARY_STRICT_DOT")
+                        restorePrimaryStrictDot(context)
+                    } else {
+                        Timber.tag(TAG).w("Same-network recovery probe failed (attempt $newCount/${DnsResilienceNetworkRouter.MAX_SAME_NET_RECOVERY_ATTEMPTS}) on $netId")
+                        if (newCount < DnsResilienceNetworkRouter.MAX_SAME_NET_RECOVERY_ATTEMPTS) {
+                            scheduleSameNetworkPrimaryRecovery(context, network, netId, targetPolicyHost, triggerReason)
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Timber.tag(TAG).w(e, "Unhandled error during same-network recovery for $netId")
+                }
+            }
+            DnsResilienceNetworkRouter.activeRecoveryJob = launchedJob
         }
     }
 
@@ -436,22 +601,67 @@ object DnsResilienceManager {
         transport: String?
     ) {
         val netId = if (network != null) resolveNetworkId(network) else null
-        Timber.tag(TAG).d("onNetworkChanged: transition=$transitionType, net=$netId, transport=$transport, activeMode=$activeMode")
+        val (currentMode, protectedNet, wasCaptivePortal) = synchronized(stateLock) {
+            Triple(activeMode, protectedWifiNetworkId, isProtectedNetCaptivePortal)
+        }
+        Timber.tag(TAG).d("onNetworkChanged: transition=$transitionType, net=$netId, transport=$transport, activeMode=$currentMode")
 
         // Mandatory Invariant 1 (Anti-Flapping):
         // Never tear down or flap when Cellular disconnects or when the protected Wi-Fi becomes validated
-        if (activeMode != DnsResilienceMode.PRIMARY_STRICT_DOT) {
-            val protectedNet = protectedWifiNetworkId
+        if (currentMode != DnsResilienceMode.PRIMARY_STRICT_DOT) {
             if (transport == "CELLULAR" && transitionType.startsWith("net_lost")) {
                 Timber.tag(TAG).d("Cellular disconnected while Wi-Fi is protected; preserving active resilience mode")
                 return
             }
             if (netId == protectedNet && transitionType.startsWith("net_validated")) {
+                if (wasCaptivePortal && network != null) {
+                    Timber.tag(TAG).i("Protected captive portal Wi-Fi $netId validated; checking if primary DoT is restored")
+                    synchronized(stateLock) {
+                        val expectedEpoch = stateEpoch.get()
+                        DnsResilienceNetworkRouter.activeCaptivePortalRecoveryJob?.cancel()
+                        lateinit var portalJob: kotlinx.coroutines.Job
+                        portalJob = resilienceScope.launch {
+                            try {
+                                val delayFn: suspend (Long) -> Unit = DnsResilienceNetworkRouter.recoveryDelayOverride ?: { kotlinx.coroutines.delay(it) }
+                                delayFn(DnsResilienceNetworkRouter.CAPTIVE_PORTAL_RECOVERY_DELAY_MS)
+                                val stillProtected = synchronized(stateLock) {
+                                    stateEpoch.get() == expectedEpoch &&
+                                        DnsResilienceNetworkRouter.activeCaptivePortalRecoveryJob === portalJob &&
+                                        activeMode != DnsResilienceMode.PRIMARY_STRICT_DOT &&
+                                        protectedWifiNetworkId == netId
+                                }
+                                if (stillProtected && !ProtectionTransitionGuard.hasActiveTransitions()) {
+                                    val targetPolicyHost = resolveTargetPolicyHost(context)
+                                    val linkFamilies = getLinkIpFamiliesForNetwork(getConnectivityManager(context), network)
+                                    if (testDotHostOnNetwork(network, targetPolicyHost, linkFamilies)) {
+                                        val canRestore = synchronized(stateLock) {
+                                            stateEpoch.get() == expectedEpoch &&
+                                                DnsResilienceNetworkRouter.activeCaptivePortalRecoveryJob === portalJob &&
+                                                protectedWifiNetworkId == netId
+                                        }
+                                        if (canRestore) {
+                                            Timber.tag(TAG).i("Primary DoT works after captive portal login on $netId! Restoring PRIMARY_STRICT_DOT")
+                                            restorePrimaryStrictDot(context)
+                                        }
+                                    }
+                                }
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                Timber.tag(TAG).w(e, "Unhandled error during captive portal DoT recovery on $netId")
+                            }
+                        }
+                        DnsResilienceNetworkRouter.activeCaptivePortalRecoveryJob = portalJob
+                    }
+                    return
+                }
                 Timber.tag(TAG).d("Protected Wi-Fi $netId is now validated under resilience mode; preserving protection")
                 return
             }
             if (netId != null && netId == protectedNet && transitionType.startsWith("net_lost")) {
                 Timber.tag(TAG).i("Protected Wi-Fi $netId was disconnected! Restoring PRIMARY_STRICT_DOT")
+                pendingEvaluationJobs.remove(netId)?.cancel()
+                DnsResilienceNetworkRouter.onNetworkLost(netId)
                 restorePrimaryStrictDot(context)
                 return
             }
@@ -479,13 +689,23 @@ object DnsResilienceManager {
                 val key = netId ?: network.toString()
                 pendingEvaluationJobs[key]?.cancel()
                 val job = resilienceScope.launch {
-                    kotlinx.coroutines.delay(10_000L) // 10-second debounce window
-                    val cm = getConnectivityManager(context)
-                    val caps = cm?.getNetworkCapabilities(network)
-                    if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
-                        !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-                    ) {
-                        evaluateWifiUnvalidatedOrDotError(context, network, "wifi_unvalidated_timeout_10s")
+                    try {
+                        kotlinx.coroutines.delay(10_000L) // 10-second debounce window
+                        val cm = getConnectivityManager(context)
+                        val caps = try {
+                            cm?.getNetworkCapabilities(network)
+                        } catch (_: Exception) {
+                            null
+                        }
+                        if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
+                            !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                        ) {
+                            evaluateWifiUnvalidatedOrDotError(context, network, "wifi_unvalidated_timeout_10s")
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Timber.tag(TAG).w(e, "Error in 10s Wi-Fi unvalidated evaluation job")
                     }
                 }
                 pendingEvaluationJobs[key] = job
@@ -493,22 +713,35 @@ object DnsResilienceManager {
         }
     }
 
-    private fun restorePrimaryStrictDot(context: Context) {
+    @VisibleForTesting
+    internal fun restorePrimaryStrictDot(context: Context) {
         synchronized(stateLock) {
+            stateEpoch.incrementAndGet()
             activeMode = DnsResilienceMode.PRIMARY_STRICT_DOT
             overrideDotHost = null
             protectedWifiNetworkId = null
+            isProtectedNetCaptivePortal = false
+            DnsResilienceNetworkRouter.activeRecoveryJob?.cancel()
+            DnsResilienceNetworkRouter.activeRecoveryJob = null
+            DnsResilienceNetworkRouter.activeCaptivePortalRecoveryJob?.cancel()
+            DnsResilienceNetworkRouter.activeCaptivePortalRecoveryJob = null
         }
         resilienceScope.launch {
-            evaluationMutex.withLock {
-                ProtectionTransitionGuard.runInternalTransition {
-                    try {
-                        CurfewVpnDnsBridge.reconcileNonBlackholeVpnAndDns(context)
-                        Timber.tag(TAG).i("Cleanly restored PRIMARY_STRICT_DOT after leaving restricted Wi-Fi")
-                    } catch (e: Exception) {
-                        Timber.tag(TAG).w(e, "Error restoring PRIMARY_STRICT_DOT")
+            try {
+                evaluationMutex.withLock {
+                    ProtectionTransitionGuard.runInternalTransition {
+                        try {
+                            CurfewVpnDnsBridge.reconcileNonBlackholeVpnAndDns(context)
+                            Timber.tag(TAG).i("Cleanly restored PRIMARY_STRICT_DOT after leaving restricted Wi-Fi")
+                        } catch (e: Exception) {
+                            Timber.tag(TAG).w(e, "Error restoring PRIMARY_STRICT_DOT")
+                        }
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.tag(TAG).w(e, "Unhandled error restoring PRIMARY_STRICT_DOT")
             }
         }
     }
@@ -560,52 +793,16 @@ object DnsResilienceManager {
     /**
      * Network-bound TLS DoT Connectivity Probe (Port 853).
      */
-    private fun testDotHostOnNetwork(wifiNetwork: Network, host: String): Boolean {
-        dotProbeOverride?.let { return it(wifiNetwork, host) }
-        var rawSocket: Socket? = null
-        var sslSocket: SSLSocket? = null
-        return try {
-            val resolvedAddr = try {
-                wifiNetwork.getAllByName(host).firstOrNull { it is java.net.Inet4Address }
-                    ?: wifiNetwork.getByName(host)
-            } catch (e: Exception) {
-                PRESET_BOOTSTRAP_IPV4[host.lowercase().trim()]?.let { ipStr ->
-                    try {
-                        java.net.InetAddress.getByName(ipStr)
-                    } catch (_: Exception) { null }
-                } ?: run {
-                    Timber.tag(TAG).d("Failed resolving $host on wifiNetwork: ${e.message}")
-                    return false
-                }
-            }
-
-            rawSocket = wifiNetwork.socketFactory.createSocket()
-            rawSocket.soTimeout = DOT_PROBE_TIMEOUT_MS
-            rawSocket.connect(InetSocketAddress(resolvedAddr, 853), DOT_PROBE_TIMEOUT_MS)
-
-            val factory = SSLSocketFactory.getDefault() as SSLSocketFactory
-            val wrapped = factory.createSocket(rawSocket, host, 853, true) as SSLSocket
-            sslSocket = wrapped
-            val sslParams = wrapped.sslParameters
-            sslParams.serverNames = listOf(SNIHostName(host))
-            sslParams.endpointIdentificationAlgorithm = "HTTPS"
-            wrapped.sslParameters = sslParams
-            wrapped.soTimeout = DOT_PROBE_TIMEOUT_MS
-            wrapped.startHandshake()
-
-            val session = wrapped.session
-            val hostnameOk = HttpsURLConnection.getDefaultHostnameVerifier().verify(host, session)
-            hostnameOk
-        } catch (e: Exception) {
-            Timber.tag(TAG).d("DoT probe failed for $host on network: ${e.message}")
-            false
-        } finally {
-            try {
-                sslSocket?.close()
-            } catch (_: Exception) {}
-            try {
-                rawSocket?.close()
-            } catch (_: Exception) {}
-        }
+    private fun testDotHostOnNetwork(
+        wifiNetwork: Network,
+        host: String,
+        families: LinkIpFamilies = LinkIpFamilies(hasIpv4 = true, hasIpv6 = false)
+    ): Boolean {
+        return DnsResilienceProbeClient.testDotHostOnNetwork(
+            network = wifiNetwork,
+            host = host,
+            families = families,
+            dotProbeOverride = dotProbeOverride
+        )
     }
 }

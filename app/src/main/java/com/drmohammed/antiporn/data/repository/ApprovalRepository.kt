@@ -1024,8 +1024,8 @@ class ApprovalRepository(
         for (pkgInfo in installedPackages) {
             val pkg = pkgInfo.packageName ?: continue
             if (pkg == appContext.packageName) continue
-            // If it is permanently blacklisted, do not approve into baseline!
-            if (AppSuspensionShield.isBlacklisted(pkg)) continue
+            // If it is permanently blacklisted or high-risk, do not approve into baseline!
+            if (AppSuspensionShield.isBlacklisted(pkg) || AppPolicyRegistry.isHighRisk(pkg)) continue
 
             val appInfo = pkgInfo.applicationInfo
             val appName = try {
@@ -1215,7 +1215,7 @@ class ApprovalRepository(
             // it is part of the user's pre-existing baseline. Auto-adopt it into approved baseline without freezing.
             val firstInstallTime = pkgInfo.firstInstallTime
             val isPreExisting = doEnabledAt > 0L && firstInstallTime > 0L && firstInstallTime <= (doEnabledAt + DO_ACTIVATION_GRACE_PERIOD_MS)
-            if (isPreExisting) {
+            if (isPreExisting && !AppPolicyRegistry.isHighRisk(pkg)) {
                 Log.i(TAG, "🌱 [AUTO_ADOPT_PRE_EXISTING] Package '$pkg' was installed prior to Device Owner activation ($firstInstallTime <= $doEnabledAt). Auto-adopting into approved baseline.")
                 val appName = try {
                     if (appInfo != null) pm.getApplicationLabel(appInfo).toString() else pkg

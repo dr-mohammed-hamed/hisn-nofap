@@ -5,6 +5,7 @@ import android.content.Intent
 import android.util.Log
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.engine.ProtectionEngine
+import com.drmohammed.antiporn.core.network.dns.BinaryDomainFilter
 import com.drmohammed.antiporn.core.engine.SecondaryProfileDetector
 import com.drmohammed.antiporn.core.model.ShieldStatus
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
@@ -299,6 +300,7 @@ object AiTelemetryReporter {
             val runtimeDnsHost = com.drmohammed.antiporn.shields.DnsShield.getEffectiveDnsHost(appContext)
             val resilienceMode = com.drmohammed.antiporn.core.network.dns.DnsResilienceManager.getActiveMode()
             sb.appendLine("| **Effective Runtime DNS Host** | `${sanitizeMarkdownCell(runtimeDnsHost)} (ResilienceMode=$resilienceMode)` |")
+            sb.appendLine("| **Local Binary DNS Filter Entries** | `${BinaryDomainFilter.getLoadedEntriesCount()}` |")
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                 val gMode = android.provider.Settings.Global.getString(appContext.contentResolver, "private_dns_mode")
                 val gHost = android.provider.Settings.Global.getString(appContext.contentResolver, "private_dns_specifier")

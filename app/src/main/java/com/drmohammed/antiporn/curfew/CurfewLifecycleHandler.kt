@@ -244,7 +244,7 @@ internal object CurfewLifecycleHandler {
             context,
             "CURFEW_RELEASED",
             isSuccess = overallSuccess,
-            details = "released=${appsBatchToUnsuspend.size - failedApps.size}, failedApps=${failedApps.size}, failedStores=${failedStores.size}"
+            details = "released=${appsBatchToUnsuspend.size - failedApps.size}, failedApps=${failedApps.size}, failedStores=${failedStores.size}, dnsRestoreOk=$dnsRestoreSuccess"
         )
         syncNotificationSafely(context, "enforceRelease")
         overallSuccess
