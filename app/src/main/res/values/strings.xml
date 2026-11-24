@@ -773,7 +773,10 @@
     <string name="provisioning_webadb_url">https://puresite.app/install</string>
     <string name="provisioning_webadb_copy_link">نسخ رابط الموقع</string>
     <string name="provisioning_webadb_link_copied">تم نسخ رابط الموقع بنجاح</string>
-    <string name="provisioning_error_samsung_secure_folder">يرجى تعطيل \'المجلد الآمن\' (Secure Folder) في سامسونج أو إيقاف ميزة \'التطبيقات المزدوجة\' مؤقتاً أثناء التفعيل.</string>
+    <string name="provisioning_error_samsung_secure_folder">يرجى نقل كافة الملفات الهامة خارج «المجلد الآمن» (Secure Folder) أو «المرسال المزدوج» في سامسونج ثم إزالتهما نهائياً قبل إعادة محاولة التفعيل لتجنب فقدان البيانات.</string>
+    <string name="provisioning_error_ack_required">تم إيقاف التفعيل: يتطلب تفعيل مالك الجهاز تأكيد إقرار حماية البيانات في المعالج أولاً (صلاحية الإقرار 15 دقيقة).</string>
+    <string name="provisioning_prompt_ack_required_title">مطلوب تأكيد أمان البيانات في المعالج</string>
+    <string name="provisioning_prompt_ack_required_desc">لحماية بيانات المجلد الآمن من الحذف الدائم، يرجى النقر هنا لفتح المعالج وقراءة التحذير وتأكيد المتابعة أولاً.</string>
     <string name="provisioning_error_realme_precondition">لهواتف ريلمي وأوبو: يرجى تسجيل الخروج من حساب HeyTap/Realme في الإعدادات وتفعيل \'تعطيل مراقبة الأذونات\' بخيارات المطور.</string>
     <string name="provisioning_error_already_device_owner">يوجد بالفعل تطبيق مالك مسجل على الجهاز، أو تم تفعيل الحماية مسبقاً.</string>
     <string name="provisioning_failed_accounts_title">تعذر التفعيل: يرجى حذف الحسابات أولاً</string>
@@ -794,7 +797,10 @@
     <string name="oem_xiaomi_title">تنبيه لأجهزة شاومي وريدمي وبوكو</string>
     <string name="oem_xiaomi_desc">يشترط نظام شاومي تفعيل خياري: (تصحيح أخطاء USB) و(تصحيح أخطاء USB - إعدادات الأمان) داخل خيارات المطور للمتابعة.</string>
     <string name="oem_samsung_multiuser_title">تنبيه لسامسونج: وُجد مجلد آمن أو مستخدم إضافي</string>
-    <string name="oem_samsung_multiuser_desc">تم رصد «المجلد الآمن» (Secure Folder) أو «المرسال المزدوج». يُنصح بإيقافهما مؤقتاً لتجنب تعثر الترقية.</string>
+    <string name="oem_samsung_multiuser_desc">تم رصد «المجلد الآمن» (Secure Folder) أو «المرسال المزدوج». تفعيل مالك الجهاز سيؤدي لحذفهما نهائياً ومسح بياناتهما فوراً! يجب نقل كافة ملفاتك وصورك للخارج وإلغاء تثبيتهما قبل المتابعة.</string>
+    <string name="oem_samsung_preventive_title">تحذير وقائي لمستخدمي هواتف سامسونج (المجلد الآمن)</string>
+    <string name="oem_samsung_preventive_desc">نظام سامسونج قد يُخفي «المجلد الآمن» عن الفحص الأولي. تفعيل صلاحية المالك سيحذف المجلد الآمن نهائياً ويمسح محتوياته بلا رجعة. إذا كنت تستخدمه، انقل ملفاتك للخارج واحذفه أولاً.</string>
+    <string name="dialog_danger_samsung_preventive_desc">جهازك من نوع سامسونج. على هواتف سامسونج، قد لا يظهر «المجلد الآمن» في الفحص المبدئي، ولكن بمجرد تفعيل مالك الجهاز سيقوم نظام Knox بحذفه نهائياً ومسح كافة الصور والمستندات الموجودة بداخله بلا رجعة!\n\nإذا كنت تستخدم المجلد الآمن، يرجى الخروج الآن ونقل كافة ملفاتك الهامة لخارجه وإزالته قبل المتابعة.</string>
     <string name="oem_realme_oppo_title">تنبيه هام لأجهزة ريلمي وأوبو وون بلس (OPPO / Realme)</string>
     <string name="oem_realme_oppo_desc">يجب تفعيل خيار «تعطيل مراقبة الأذونات» (Disable permission monitoring) بأسفل خيارات المطور ثم إعادة تشغيل الهاتف قبل الاقتران، لمنح صلاحية ضبط Private DNS وحماية التطبيقات المنسوخة.</string>
     <string name="oem_clone_profile_warning_title">تم اكتشاف تطبيق مستنسخ (App Cloner)</string>

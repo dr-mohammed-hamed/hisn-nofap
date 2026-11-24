@@ -1,6 +1,7 @@
 package com.drmohammed.antiporn.provisioning.engine
 
 import android.content.Context
+import android.content.pm.LauncherApps
 import android.os.Build
 import android.os.UserManager
 import androidx.annotation.StringRes
@@ -22,11 +23,8 @@ object OemProvisioningHelper {
 
     private const val TAG = "AntiPorn_OemHelper"
 
-    val manufacturer: String
-        get() = Build.MANUFACTURER?.lowercase(Locale.ROOT) ?: ""
-
-    val brand: String
-        get() = Build.BRAND?.lowercase(Locale.ROOT) ?: ""
+    val manufacturer: String get() = Build.MANUFACTURER?.lowercase(Locale.ROOT) ?: ""
+    val brand: String get() = Build.BRAND?.lowercase(Locale.ROOT) ?: ""
 
     fun isXiaomi(): Boolean {
         val m = manufacturer
@@ -47,8 +45,7 @@ object OemProvisioningHelper {
         }
     }
 
-    fun isSamsung(): Boolean =
-        manufacturer.contains("samsung")
+    fun isSamsung(): Boolean = manufacturer.contains("samsung")
 
     fun isRealmeOrOppo(): Boolean =
         manufacturer.contains("realme") || manufacturer.contains("oppo") || manufacturer.contains("oneplus")
@@ -56,50 +53,74 @@ object OemProvisioningHelper {
     /**
      * Checks if secondary users, work profiles, Samsung Knox Secure Folder,
      * or Android 15 Private Space are active on the device.
-     * Works across all OEMs and Android versions.
      */
     fun hasConflictingProfile(context: Context): Boolean {
         return try {
             val userManager = context.getSystemService(Context.USER_SERVICE) as? UserManager
             val profiles = userManager?.userProfiles ?: emptyList()
-            if (profiles.size > 1) {
-                return true
+            if (profiles.size > 1) return true
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps
+                val launcherProfiles = launcherApps?.profiles ?: emptyList()
+                if (launcherProfiles.size > 1) return true
             }
+
             if (SafeDpmGateway.isDeviceOwner(context)) {
                 SecondaryProfileDetector.countSecondaryUsersAndProfiles(context).count > 0
             } else {
                 false
             }
-        } catch (e: Exception) {
-            Timber.tag(TAG).w(e, "Failed inspecting user profiles: ${e.message}")
+        } catch (t: Throwable) {
+            Timber.tag(TAG).w(t, "Failed inspecting user profiles: ${t.message}")
             false
         }
     }
 
-    /**
-     * Checks if secondary users, work profiles, or Samsung Knox Secure Folder are active.
-     */
-    fun checkSamsungMultiUser(context: Context): Boolean {
-        if (!isSamsung()) return false
-        return hasConflictingProfile(context)
-    }
+    fun requiresPreActivationDangerAck(context: Context): Boolean =
+        isSamsung() || hasConflictingProfile(context)
 
-    /**
-     * Returns the appropriate instruction resource for enabling developer options.
-     */
+    fun checkSamsungMultiUser(context: Context): Boolean =
+        isSamsung() && hasConflictingProfile(context)
+
     @StringRes
-    fun getDevOptionsDialogDescription(): Int {
-        return if (isXiaomi()) {
-            R.string.dialog_enable_dev_desc_miui
-        } else {
-            R.string.dialog_enable_dev_desc
-        }
-    }
+    fun getDevOptionsDialogDescription(): Int =
+        if (isXiaomi()) R.string.dialog_enable_dev_desc_miui else R.string.dialog_enable_dev_desc
 
     data class OemWarning(
         @param:StringRes val titleRes: Int,
-        @param:StringRes val descRes: Int
+        @param:StringRes val descRes: Int,
+        val isCritical: Boolean = false
     )
+
+    data class DangerDialogCopy(
+        @param:StringRes val titleRes: Int,
+        @param:StringRes val descRes: Int,
+        val showRecheckButton: Boolean
+    )
+
+    fun getDangerDialogStrings(context: Context): DangerDialogCopy = when {
+        isSamsung() && hasConflictingProfile(context) -> DangerDialogCopy(
+            R.string.oem_samsung_multiuser_title,
+            R.string.oem_samsung_multiuser_desc,
+            showRecheckButton = true
+        )
+        hasConflictingProfile(context) -> DangerDialogCopy(
+            R.string.dialog_danger_private_space_title,
+            R.string.dialog_danger_private_space_desc,
+            showRecheckButton = true
+        )
+        isSamsung() -> DangerDialogCopy(
+            R.string.dialog_danger_private_space_title,
+            R.string.dialog_danger_samsung_preventive_desc,
+            showRecheckButton = false
+        )
+        else -> DangerDialogCopy(
+            R.string.dialog_danger_private_space_title,
+            R.string.dialog_danger_private_space_desc,
+            showRecheckButton = false
+        )
+    }
 
     /**
      * Returns all applicable OEM pre-flight warnings without letting conflicting-profile
@@ -139,33 +160,36 @@ object OemProvisioningHelper {
             warnings.add(
                 when {
                     isSamsung -> OemWarning(
-                        titleRes = R.string.oem_samsung_multiuser_title,
-                        descRes = R.string.oem_samsung_multiuser_desc
+                        R.string.oem_samsung_multiuser_title,
+                        R.string.oem_samsung_multiuser_desc,
+                        isCritical = true
                     )
                     isOnlyCloneProfile -> OemWarning(
-                        titleRes = R.string.oem_clone_profile_warning_title,
-                        descRes = R.string.oem_clone_profile_warning_desc
+                        R.string.oem_clone_profile_warning_title,
+                        R.string.oem_clone_profile_warning_desc,
+                        isCritical = false
                     )
                     else -> OemWarning(
-                        titleRes = R.string.dialog_danger_private_space_title,
-                        descRes = R.string.dialog_danger_private_space_desc
+                        R.string.dialog_danger_private_space_title,
+                        R.string.dialog_danger_private_space_desc,
+                        isCritical = true
                     )
                 }
             )
+        } else if (isSamsung) {
+            warnings.add(
+                OemWarning(
+                    R.string.oem_samsung_preventive_title,
+                    R.string.oem_samsung_preventive_desc,
+                    isCritical = true
+                )
+            )
         }
-        when {
-            isXiaomi -> warnings.add(
-                OemWarning(
-                    titleRes = R.string.oem_xiaomi_title,
-                    descRes = R.string.oem_xiaomi_desc
-                )
-            )
-            isRealmeOrOppo -> warnings.add(
-                OemWarning(
-                    titleRes = R.string.oem_realme_oppo_title,
-                    descRes = R.string.oem_realme_oppo_desc
-                )
-            )
+        if (isXiaomi) {
+            warnings.add(OemWarning(R.string.oem_xiaomi_title, R.string.oem_xiaomi_desc, isCritical = false))
+        }
+        if (isRealmeOrOppo) {
+            warnings.add(OemWarning(R.string.oem_realme_oppo_title, R.string.oem_realme_oppo_desc, isCritical = false))
         }
         return warnings
     }
@@ -173,30 +197,5 @@ object OemProvisioningHelper {
     /**
      * Returns the primary OEM-specific pre-flight guidance warning, if applicable.
      */
-    fun getOemWarning(context: Context): OemWarning? {
-        if (hasConflictingProfile(context)) {
-            return if (isSamsung()) {
-                OemWarning(
-                    titleRes = R.string.oem_samsung_multiuser_title,
-                    descRes = R.string.oem_samsung_multiuser_desc
-                )
-            } else {
-                OemWarning(
-                    titleRes = R.string.dialog_danger_private_space_title,
-                    descRes = R.string.dialog_danger_private_space_desc
-                )
-            }
-        }
-        return when {
-            isXiaomi() -> OemWarning(
-                titleRes = R.string.oem_xiaomi_title,
-                descRes = R.string.oem_xiaomi_desc
-            )
-            isRealmeOrOppo() -> OemWarning(
-                titleRes = R.string.oem_realme_oppo_title,
-                descRes = R.string.oem_realme_oppo_desc
-            )
-            else -> null
-        }
-    }
+    fun getOemWarning(context: Context): OemWarning? = getAllOemWarnings(context).firstOrNull()
 }

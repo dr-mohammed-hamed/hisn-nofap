@@ -33,6 +33,7 @@ import com.drmohammed.antiporn.core.engine.ProtectionEngine
 import com.drmohammed.antiporn.provisioning.engine.DeviceOwnerPromoter
 import com.drmohammed.antiporn.provisioning.engine.OemProvisioningHelper
 import com.drmohammed.antiporn.provisioning.engine.PromotionResult
+import com.drmohammed.antiporn.provisioning.engine.ProvisioningAckStore
 import com.drmohammed.antiporn.provisioning.engine.ProvisioningWifiWatcher
 import com.drmohammed.antiporn.provisioning.receiver.PairingCodeReceiver
 import com.drmohammed.antiporn.provisioning.service.AdbPairingNotificationService
@@ -72,6 +73,7 @@ class ProvisioningWizardActivity : AppCompatActivity() {
     private lateinit var cardOemWarning: MaterialCardView
     private lateinit var tvOemWarningTitle: TextView
     private lateinit var tvOemWarningDesc: TextView
+    private var ivOemWarningIcon: ImageView? = null
     private lateinit var cardOemPermissionWarning: MaterialCardView
     private lateinit var tvOemPermissionWarningTitle: TextView
     private lateinit var tvOemPermissionWarningDesc: TextView
@@ -168,6 +170,17 @@ class ProvisioningWizardActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInMultiWindowMode) {
             updateMultiWindowUi(true)
         }
+        if (intent?.getBooleanExtra(EXTRA_REQUIRE_DANGER_ACK, false) == true) {
+            ensureDangerAcknowledgedBeforeAction {}
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_REQUIRE_DANGER_ACK, false)) {
+            ensureDangerAcknowledgedBeforeAction {}
+        }
     }
 
     private fun bindViews() {
@@ -186,6 +199,7 @@ class ProvisioningWizardActivity : AppCompatActivity() {
         cardOemWarning = findViewById(R.id.cardOemWarning)
         tvOemWarningTitle = findViewById(R.id.tvOemWarningTitle)
         tvOemWarningDesc = findViewById(R.id.tvOemWarningDesc)
+        ivOemWarningIcon = findViewById(R.id.ivOemWarningIcon)
         cardOemPermissionWarning = findViewById(R.id.cardOemPermissionWarning)
         tvOemPermissionWarningTitle = findViewById(R.id.tvOemPermissionWarningTitle)
         tvOemPermissionWarningDesc = findViewById(R.id.tvOemPermissionWarningDesc)
@@ -260,23 +274,31 @@ class ProvisioningWizardActivity : AppCompatActivity() {
                 Toast.makeText(this, R.string.provisioning_wifi_required_title, Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            if (!isDevOptionsEnabled()) {
-                showEnableDevOptionsDialog()
-                return@setOnClickListener
+            ensureDangerAcknowledgedBeforeAction {
+                if (!isDevOptionsEnabled()) {
+                    showEnableDevOptionsDialog()
+                } else {
+                    launchWirelessDebuggingScreen()
+                }
             }
-            launchWirelessDebuggingScreen()
         }
 
         btnTrySplitScreen.setOnClickListener {
-            launchAdjacentDevSettings()
+            ensureDangerAcknowledgedBeforeAction {
+                launchAdjacentDevSettings()
+            }
         }
 
         btnStartXiaomiSplit.setOnClickListener {
-            launchAdjacentDevSettings()
+            ensureDangerAcknowledgedBeforeAction {
+                launchAdjacentDevSettings()
+            }
         }
 
         btnSplitReopenSettings.setOnClickListener {
-            launchAdjacentDevSettings()
+            ensureDangerAcknowledgedBeforeAction {
+                launchAdjacentDevSettings()
+            }
         }
 
         tvCableQuickHint.setOnClickListener {
@@ -314,13 +336,9 @@ class ProvisioningWizardActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
 
-            if (OemProvisioningHelper.hasConflictingProfile(this)) {
-                showDangerPrivateSpaceDialog {
-                    executePairingAndPromotion(code)
-                }
-                return@setOnClickListener
+            ensureDangerAcknowledgedBeforeAction {
+                executePairingAndPromotion(code)
             }
-            executePairingAndPromotion(code)
         }
 
         btnSplitPairAndActivate.setOnClickListener {
@@ -373,7 +391,24 @@ class ProvisioningWizardActivity : AppCompatActivity() {
         }
     }
 
-    private fun showDangerPrivateSpaceDialog(onProceed: () -> Unit) {
+    private fun ensureDangerAcknowledgedBeforeAction(onReady: () -> Unit) {
+        if (!OemProvisioningHelper.requiresPreActivationDangerAck(this) || ProvisioningAckStore.hasValidAck(this)) {
+            onReady()
+            return
+        }
+        showDangerPrivateSpaceDialog(
+            onProceed = {
+                ProvisioningAckStore.recordAck(this)
+                AdbPairingNotificationService.refreshNotificationState(this)
+                onReady()
+            },
+            onCancel = {
+                ProvisioningAckStore.clearAck(this)
+            }
+        )
+    }
+
+    private fun showDangerPrivateSpaceDialog(onProceed: () -> Unit, onCancel: (() -> Unit)? = null) {
         if (isFinishing || isDestroyed) return
         dangerDialog?.let {
             if (it.isShowing) {
@@ -389,16 +424,36 @@ class ProvisioningWizardActivity : AppCompatActivity() {
             .create()
         dangerDialog = dialog
 
+        val copy = OemProvisioningHelper.getDangerDialogStrings(this)
+        val tvDangerTitle = dialogView.findViewById<TextView>(R.id.tvDangerTitle)
+        val tvDangerDesc = dialogView.findViewById<TextView>(R.id.tvDangerDesc)
+        tvDangerTitle.setText(copy.titleRes)
+        tvDangerDesc.setText(copy.descRes)
+
         val chkAcknowledgeDanger = dialogView.findViewById<MaterialCheckBox>(R.id.chkAcknowledgeDanger)
         val btnDialogProceed = dialogView.findViewById<MaterialButton>(R.id.btnDialogProceed)
         val btnDialogRecheck = dialogView.findViewById<MaterialButton>(R.id.btnDialogRecheck)
         val btnDialogCancel = dialogView.findViewById<MaterialButton>(R.id.btnDialogCancel)
 
+        btnDialogRecheck.visibility = if (copy.showRecheckButton) View.VISIBLE else View.GONE
+
         chkAcknowledgeDanger.setOnCheckedChangeListener { _, isChecked ->
             btnDialogProceed.isEnabled = isChecked
         }
 
+        var proceeded = false
+        var canceled = false
+        val notifyCancel = {
+            if (!canceled && !proceeded) {
+                canceled = true
+                onCancel?.invoke()
+            }
+        }
+
         btnDialogProceed.setOnClickListener {
+            if (proceeded) return@setOnClickListener
+            proceeded = true
+            btnDialogProceed.isEnabled = false
             if (!isFinishing && !isDestroyed) {
                 dialog.dismiss()
             }
@@ -419,6 +474,7 @@ class ProvisioningWizardActivity : AppCompatActivity() {
         }
 
         btnDialogCancel.setOnClickListener {
+            notifyCancel()
             if (!isFinishing && !isDestroyed) {
                 dialog.dismiss()
             }
@@ -428,6 +484,7 @@ class ProvisioningWizardActivity : AppCompatActivity() {
             if (dangerDialog === dialog) {
                 dangerDialog = null
             }
+            notifyCancel()
         }
 
         dialog.show()
@@ -473,6 +530,21 @@ class ProvisioningWizardActivity : AppCompatActivity() {
             cardOemWarning.visibility = View.VISIBLE
             tvOemWarningTitle.setText(primaryWarning.titleRes)
             tvOemWarningDesc.setText(primaryWarning.descRes)
+            if (primaryWarning.isCritical) {
+                val colorRed = MaterialColors.getColor(
+                    this,
+                    androidx.appcompat.R.attr.colorError,
+                    ContextCompat.getColor(this, R.color.status_red)
+                )
+                cardOemWarning.strokeColor = colorRed
+                tvOemWarningTitle.setTextColor(colorRed)
+                ivOemWarningIcon?.setColorFilter(colorRed)
+            } else {
+                val colorPrimary = MaterialColors.getColor(this, androidx.appcompat.R.attr.colorPrimary, ContextCompat.getColor(this, R.color.md_theme_light_primary))
+                cardOemWarning.strokeColor = colorPrimary
+                tvOemWarningTitle.setTextColor(colorPrimary)
+                ivOemWarningIcon?.setColorFilter(colorPrimary)
+            }
         } else {
             cardOemWarning.visibility = View.GONE
         }
@@ -719,6 +791,7 @@ class ProvisioningWizardActivity : AppCompatActivity() {
 
     private fun onProvisioningSuccessful() {
         if (isFinishing || isDestroyed) return
+        ProvisioningAckStore.clearAck(this)
         AdbPairingNotificationService.stop(this)
         Toast.makeText(this, R.string.toast_provisioning_success, Toast.LENGTH_LONG).show()
         startActivity(Intent(this, MainActivity::class.java).apply {
@@ -729,5 +802,6 @@ class ProvisioningWizardActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "AntiPorn_WizardAct"
+        const val EXTRA_REQUIRE_DANGER_ACK = "extra_require_danger_ack"
     }
 }
