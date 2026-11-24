@@ -261,10 +261,15 @@ object ProtectionEngine {
             com.drmohammed.antiporn.core.network.dns.DnsResilienceManager.isEvaluationOrDohFallbackActive()
         ) {
             Timber.tag(TAG).d("Skipping applyDnsShieldFastSync because local VPN or DoH resilience evaluation is active")
+            val msg = if (com.drmohammed.antiporn.core.network.dns.DnsResilienceManager.isEvaluationOrDohFallbackActive()) {
+                appContext.getString(R.string.shield_dns_resilience_doh_active)
+            } else {
+                appContext.getString(R.string.shield_dns_local_filter_active)
+            }
             return ShieldResult(
                 shieldId = DnsShield.id,
                 success = true,
-                message = appContext.getString(R.string.shield_dns_local_filter_active)
+                message = msg
             )
         }
         if (!isDeviceOwner(appContext)) {

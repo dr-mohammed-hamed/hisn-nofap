@@ -22,8 +22,11 @@ import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.notification.registry.NotificationRegistry
 import com.drmohammed.antiporn.provisioning.engine.AdbMdnsDiscovery
 import com.drmohammed.antiporn.provisioning.engine.DeviceOwnerPromoter
+import com.drmohammed.antiporn.provisioning.engine.OemProvisioningHelper
 import com.drmohammed.antiporn.provisioning.engine.PromotionResult
+import com.drmohammed.antiporn.provisioning.engine.ProvisioningAckStore
 import com.drmohammed.antiporn.provisioning.receiver.PairingCodeReceiver
+import com.drmohammed.antiporn.provisioning.ui.ProvisioningWizardActivity
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -76,6 +79,13 @@ class AdbPairingNotificationService : Service() {
                 stopForegroundAndSelf()
                 return START_NOT_STICKY
             }
+            ACTION_REFRESH_ACK_STATE -> {
+                val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                if (capturedPairingPort > 0) {
+                    nm?.notify(PAIRING_PROMPT_NOTIFICATION_ID, buildPairingPromptNotification())
+                }
+                return START_STICKY
+            }
             ACTION_SUBMIT_PAIRING_CODE -> {
                 val remoteInput = RemoteInput.getResultsFromIntent(intent)
                 val rawCode = remoteInput?.getCharSequence(PairingCodeReceiver.EXTRA_PAIRING_CODE)?.toString()
@@ -105,6 +115,25 @@ class AdbPairingNotificationService : Service() {
     }
 
     private fun handlePairingCodeSubmission(code: String, port: Int) {
+        if (OemProvisioningHelper.requiresPreActivationDangerAck(this) && !ProvisioningAckStore.hasValidAck(this)) {
+            Timber.tag(TAG).w("Submission blocked: Danger acknowledgment required but missing or expired")
+            BlackBoxRecorder.recordPairing(
+                this,
+                "SUBMISSION_BLOCKED_NO_ACK",
+                isSuccess = false,
+                details = "port=$port"
+            )
+            val failIntent = Intent(PairingCodeReceiver.ACTION_PROVISIONING_RESULT).apply {
+                setPackage(packageName)
+                putExtra(PairingCodeReceiver.EXTRA_SUCCESS, false)
+                putExtra(PairingCodeReceiver.EXTRA_ERROR_MESSAGE, getString(R.string.provisioning_error_ack_required))
+            }
+            sendBroadcast(failIntent)
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            nm?.notify(PAIRING_PROMPT_NOTIFICATION_ID, buildPairingPromptNotification())
+            return
+        }
+
         if (isPromoting) {
             Timber.tag(TAG).w("Promotion already in progress, ignoring duplicate submit")
             return
@@ -132,6 +161,7 @@ class AdbPairingNotificationService : Service() {
                 when (result) {
                     is PromotionResult.Success -> {
                         Timber.tag(TAG).i("Promotion succeeded via service submission")
+                        ProvisioningAckStore.clearAck(this@AdbPairingNotificationService)
 
                         val mainIntent = Intent(this@AdbPairingNotificationService, MainActivity::class.java).apply {
                             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -308,6 +338,35 @@ class AdbPairingNotificationService : Service() {
     }
 
     private fun buildPairingPromptNotification(): android.app.Notification {
+        val canSubmitFromNotif = !OemProvisioningHelper.requiresPreActivationDangerAck(this) || ProvisioningAckStore.hasValidAck(this)
+
+        if (!canSubmitFromNotif) {
+            val ackWizardIntent = Intent(this, ProvisioningWizardActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra(ProvisioningWizardActivity.EXTRA_REQUIRE_DANGER_ACK, true)
+            }
+            val ackPendingIntent = PendingIntent.getActivity(
+                this,
+                103,
+                ackWizardIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val promptDesc = getString(R.string.provisioning_prompt_ack_required_desc)
+
+            return NotificationCompat.Builder(this, CHANNEL_ID_HEADS_UP)
+                .setSmallIcon(R.drawable.ic_shield_device_owner)
+                .setContentTitle(getString(R.string.provisioning_prompt_ack_required_title))
+                .setContentText(promptDesc)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(promptDesc))
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setCategory(NotificationCompat.CATEGORY_REMINDER)
+                .setVibrate(VIBRATION_PATTERN)
+                .setContentIntent(ackPendingIntent)
+                .setOngoing(true)
+                .setAutoCancel(false)
+                .build()
+        }
+
         val remoteInput = RemoteInput.Builder(PairingCodeReceiver.EXTRA_PAIRING_CODE)
             .setLabel(getString(R.string.provisioning_input_label))
             .setAllowFreeFormInput(true)
@@ -447,11 +506,24 @@ class AdbPairingNotificationService : Service() {
 
         const val ACTION_START_SERVICE = "com.drmohammed.antiporn.START_PAIRING_SERVICE"
         const val ACTION_STOP_SERVICE = "com.drmohammed.antiporn.STOP_PAIRING_SERVICE"
+        const val ACTION_REFRESH_ACK_STATE = "com.drmohammed.antiporn.ACTION_REFRESH_ACK_STATE"
         const val ACTION_SUBMIT_PAIRING_CODE = "com.drmohammed.antiporn.ACTION_SUBMIT_PAIRING_CODE"
 
         const val ACTION_PORTS_DISCOVERED = "com.drmohammed.antiporn.PORTS_DISCOVERED"
         const val EXTRA_PAIRING_PORT = "extra_pairing_port"
         const val EXTRA_CONNECT_PORT = "extra_connect_port"
+
+        fun refreshNotificationState(context: Context) {
+            if (capturedPairingPort <= 0) return
+            val intent = Intent(context, AdbPairingNotificationService::class.java).apply {
+                action = ACTION_REFRESH_ACK_STATE
+            }
+            try {
+                context.startService(intent)
+            } catch (e: Exception) {
+                Timber.tag(TAG).w(e, "Failed starting service for ACTION_REFRESH_ACK_STATE")
+            }
+        }
 
         fun start(context: Context) {
             val intent = Intent(context, AdbPairingNotificationService::class.java).apply {

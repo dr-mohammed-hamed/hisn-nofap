@@ -3,11 +3,14 @@ package com.drmohammed.antiporn.curfew
 import android.app.admin.DevicePolicyManager
 import android.content.Context
 import android.os.Build
+import android.os.Looper
 import androidx.annotation.RequiresApi
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard
 import com.drmohammed.antiporn.core.engine.SecondaryProfileDetector
 import com.drmohammed.antiporn.core.model.ShieldResult
+import com.drmohammed.antiporn.core.network.PhysicalNetworkResolver
+import com.drmohammed.antiporn.core.network.dns.DnsResilienceManager
 import com.drmohammed.antiporn.shields.DnsShield
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import com.drmohammed.antiporn.telemetry.SafeDpmGateway
@@ -193,6 +196,7 @@ internal object AlwaysOnVpnPolicyBridge {
                     R.string.shield_dns_emergency_vpn_active_notice,
                     SecondaryProfileDetector.formatClonedAppsSummary(context) ?: context.getString(R.string.shield_dns_cloned_app_default)
                 )
+                DnsResilienceManager.isLocalVpnFallbackActive() -> context.getString(R.string.shield_dns_resilience_doh_active)
                 else -> context.getString(R.string.shield_dns_local_filter_active)
             }
             return ShieldResult(shieldId, true, message, CurfewVpnDnsBridge.COMPAT_PRIVATE_DNS_SET_NO_ERROR)
@@ -276,10 +280,43 @@ internal object AlwaysOnVpnPolicyBridge {
                     CurfewBlackholeVpnService.forceReleaseVpnAndAwait(context, 2000L)
                     vpnWasTornDown = true
                 }
-                if ((vpnWasTornDown || !DnsShieldPolicyEvaluator.isStandaloneDnsShieldActive(context)) &&
-                    !restoreDnsShieldOnCurfewRelease(context)
-                ) {
-                    allOk = false
+                val isMainThread = try {
+                    Looper.myLooper() == Looper.getMainLooper()
+                } catch (_: RuntimeException) {
+                    false
+                }
+                if (vpnWasTornDown && !isMainThread) {
+                    try {
+                        Thread.sleep(450L)
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                    }
+                }
+                if (vpnWasTornDown || !DnsShieldPolicyEvaluator.isStandaloneDnsShieldActive(context)) {
+                    var restored = restoreDnsShieldOnCurfewRelease(context)
+                    if (!restored) {
+                        if (!PhysicalNetworkResolver.isDevicePhysicallyOffline(context) && !isMainThread) {
+                            try {
+                                Thread.sleep(600L)
+                            } catch (_: InterruptedException) {
+                                Thread.currentThread().interrupt()
+                            }
+                            restored = restoreDnsShieldOnCurfewRelease(context)
+                        } else if (!PhysicalNetworkResolver.isDevicePhysicallyOffline(context)) {
+                            restored = restoreDnsShieldOnCurfewRelease(context)
+                        }
+                        if (!restored) {
+                            val targetHost = DnsShield.getEffectiveDnsHost(context)
+                            val preArmed = StandaloneDotEnforcer.preArmStandaloneDotFailClosed(context, targetHost)
+                            if (preArmed) {
+                                Timber.tag(TAG).i("Post-curfew DPM DNS deferred (Doze/transient); fail-closed Settings.Global pre-armed to $targetHost")
+                                restored = true
+                            }
+                        }
+                    }
+                    if (!restored) {
+                        allOk = false
+                    }
                 }
             }
             Timber.tag(TAG).i("VPN Blackhole is disabled and network is released (ok=$allOk).")

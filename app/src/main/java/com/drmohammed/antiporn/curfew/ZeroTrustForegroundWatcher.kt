@@ -101,7 +101,7 @@ object ZeroTrustForegroundWatcher {
                 pkg.isNotBlank() &&
                     !criticalPackages.contains(pkg) &&
                     !AppPolicyRegistry.isImmune(pkg) &&
-                    !curfewWhitelisted.contains(pkg) &&
+                    (!curfewWhitelisted.contains(pkg) || AppPolicyRegistry.isHighRisk(pkg)) &&
                     isPackageInstalled(pm, pkg)
             }.toSet()
 

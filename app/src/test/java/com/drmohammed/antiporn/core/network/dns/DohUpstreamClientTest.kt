@@ -195,4 +195,70 @@ class DohUpstreamClientTest {
             }
         }
     }
+
+    @Test
+    fun testNextDnsEndpoints_simpleProfile_generatesCorrectEndpointAndPath() {
+        val client = DohUpstreamClient(fakeVpnService)
+        val endpoints = client.getPrioritizedEndpoints("1bb7e3.dns.nextdns.io")
+        assertTrue(endpoints.isNotEmpty())
+        val first = endpoints.first()
+        assertEquals("45.90.28.0", first.ip)
+        assertEquals("dns.nextdns.io", first.host)
+        assertEquals("/1bb7e3", first.path)
+    }
+
+    @Test
+    fun testNextDnsEndpoints_profileWithDeviceLabel_generatesProfileAndDevicePath() {
+        val client = DohUpstreamClient(fakeVpnService)
+        val endpoints = client.getPrioritizedEndpoints("phone-1bb7e3.dns.nextdns.io")
+        assertTrue(endpoints.isNotEmpty())
+        val first = endpoints.first()
+        assertEquals("45.90.28.0", first.ip)
+        assertEquals("dns.nextdns.io", first.host)
+        assertEquals("/1bb7e3/phone", first.path)
+    }
+
+    @Test
+    fun testControlDFreeDnsEndpoints_slug_generatesCorrectEndpointAndPath() {
+        val client = DohUpstreamClient(fakeVpnService)
+        val endpoints = client.getPrioritizedEndpoints("no-ads-porn.freedns.controld.com")
+        assertTrue(endpoints.isNotEmpty())
+        val first = endpoints.first()
+        assertEquals("76.76.2.11", first.ip)
+        assertEquals("freedns.controld.com", first.host)
+        assertEquals("/no-ads-porn", first.path)
+    }
+
+    @Test
+    fun testResolveBootstrapCandidates_nextDns_returnsBothV4AndV6() {
+        val candidates = DnsResilienceProbeClient.resolveBootstrapCandidates(
+            "1bb7e3.dns.nextdns.io",
+            LinkIpFamilies(hasIpv4 = true, hasIpv6 = true)
+        )
+        assertTrue(candidates.contains("45.90.28.0"))
+        assertTrue(candidates.contains("2a07:a8c0::"))
+    }
+
+    @Test
+    fun testDohUpstreamClient_ipv6OnlyLink_routesToIpv6Endpoints() = runBlocking {
+        val query = buildFakeDnsQuery()
+        val queriedIps = mutableListOf<String>()
+
+        val client = DohUpstreamClient(
+            vpnService = fakeVpnService,
+            clockMs = { 10_000L },
+            exchangeExecutor = { endpoint, _, _ ->
+                queriedIps.add(endpoint.ip)
+                buildFakeDnsResponse()
+            }
+        )
+
+        client.query(
+            rawPayload = query,
+            timeoutMs = 1000,
+            preferredHost = "1bb7e3.dns.nextdns.io",
+            families = LinkIpFamilies(hasIpv4 = false, hasIpv6 = true)
+        )
+        assertEquals("2a07:a8c0::", queriedIps.firstOrNull())
+    }
 }

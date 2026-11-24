@@ -70,12 +70,14 @@ object PackageChangeHandler {
                     val approvalRepo = ApprovalRepository.getInstance(appContext)
                     val isHighRisk = com.drmohammed.antiporn.core.policy.AppPolicyRegistry.isHighRisk(packageName)
                     val isAlreadyApproved = approvalRepo.getLocalPendingApprovals().any {
-                        it.packageName == packageName && it.isApproved
+                        it.packageName == packageName &&
+                            it.isApproved &&
+                            (!isHighRisk || (it.decidedBy != "INITIAL_DEVICE_BASELINE" && it.decidedBy != "AUTO_APPROVED_UNLOCKED"))
                     }
                     val policy = PolicyRepository.getInstance(appContext).getCurrentPolicy()
                     val isCustomBlacklisted = policy.customBlacklistPackages.contains(packageName)
                     val isPermanentlyBlacklisted = AppSuspensionShield.isBlacklisted(packageName)
-                    val shouldFreeze = (policy.lockNewInstallsUntilApproved || isCustomBlacklisted || isPermanentlyBlacklisted) && !isAlreadyApproved
+                    val shouldFreeze = (policy.lockNewInstallsUntilApproved || isCustomBlacklisted || isPermanentlyBlacklisted || isHighRisk) && !isAlreadyApproved
 
                     Timber.tag(TAG).w("[ZERO_TRUST_CHECK] Package: $packageName | lockNewInstalls=${policy.lockNewInstallsUntilApproved} | isHighRisk=$isHighRisk | isCustomBlacklisted=$isCustomBlacklisted | isPermanentlyBlacklisted=$isPermanentlyBlacklisted | isReplacing=$isReplacing | isAlreadyApproved=$isAlreadyApproved | shouldFreeze=$shouldFreeze")
 
@@ -89,7 +91,7 @@ object PackageChangeHandler {
                             Timber.tag(TAG).w("[FREEZE_STATUS] Result of local freeze for $packageName: $frozen")
                         }
                     } else {
-                        if (!isAlreadyApproved && !isCustomBlacklisted && !isPermanentlyBlacklisted) {
+                        if (!isAlreadyApproved && !isCustomBlacklisted && !isPermanentlyBlacklisted && !isHighRisk) {
                             val appName = try {
                                 val pm = appContext.packageManager
                                 val appInfo = pm.getApplicationInfo(packageName, 0)
@@ -108,6 +110,7 @@ object PackageChangeHandler {
                     // Strictly prevent rogue app/browser/store curfew bypasses and respect Zero-Trust locking
                     val isZeroTrustBlocked = shouldFreeze
                     val isBypassTarget = AppPolicyRegistry.isRestrictedBrowser(packageName) ||
+                        AppPolicyRegistry.isHighRisk(packageName) ||
                         CurfewConfig.KNOWN_APP_STORES.contains(packageName) ||
                         CurfewConfig.CURFEW_SEARCH_APPS.contains(packageName) ||
                         policy.customBlacklistPackages.contains(packageName) ||

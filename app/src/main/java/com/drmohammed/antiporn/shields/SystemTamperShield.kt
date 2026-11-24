@@ -208,10 +208,13 @@ object SystemTamperShield : ProtectionShield {
                 // Time lock is NOT enabled by supervisor: Lift user restriction and allow user manual/auto time
                 if (isDo && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     try {
-                        dpm.clearUserRestriction(admin, UserManager.DISALLOW_CONFIG_DATE_TIME)
-                        Log.i(TAG, "Cleared DISALLOW_CONFIG_DATE_TIME restriction (time lock is not active)")
+                        val hasRestriction = dpm.getUserRestrictions(admin)?.getBoolean(UserManager.DISALLOW_CONFIG_DATE_TIME, false) == true
+                        if (hasRestriction) {
+                            dpm.clearUserRestriction(admin, UserManager.DISALLOW_CONFIG_DATE_TIME)
+                            Timber.tag(TAG).i("Cleared DISALLOW_CONFIG_DATE_TIME restriction (time lock is not active)")
+                        }
                     } catch (e: Exception) {
-                        Log.w(TAG, "Could not clear date time block: ${e.message}")
+                        Timber.tag(TAG).w(e, "Could not clear date time block: ${e.message}")
                     }
                 }
                 if (isDo && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -357,7 +360,12 @@ object SystemTamperShield : ProtectionShield {
             }
 
             if (isFullyProtected) {
-                ShieldStatus.Active(context.getString(R.string.card_system_tamper_active))
+                val messageRes = if (isDateTimeLocked) {
+                    R.string.card_system_tamper_active
+                } else {
+                    R.string.card_system_tamper_active_no_time_lock
+                }
+                ShieldStatus.Active(context.getString(messageRes))
             } else {
                 ShieldStatus.NeedsEnforcement(context.getString(R.string.card_system_tamper_pending))
             }

@@ -99,6 +99,11 @@ object AppPolicyRegistry {
         AppRule("com.alohamobile.browser.lite", AppClassification.PERMANENT_BLACKLIST, "Aloha Lite Browser", CATEGORY_PROXY_BROWSER),
         AppRule("com.UCMobile.intl", AppClassification.PERMANENT_BLACKLIST, "UC Browser International", CATEGORY_PROXY_BROWSER),
         AppRule("com.uc.browser.en", AppClassification.PERMANENT_BLACKLIST, "UC Browser English", CATEGORY_PROXY_BROWSER),
+        AppRule("com.opera.mini.native", AppClassification.PERMANENT_BLACKLIST, "Opera Mini", CATEGORY_PROXY_BROWSER),
+        AppRule("org.mozilla.focus", AppClassification.PERMANENT_BLACKLIST, "Firefox Focus", CATEGORY_PROXY_BROWSER),
+        AppRule("com.opera.gx", AppClassification.PERMANENT_BLACKLIST, "Opera GX Browser", CATEGORY_PROXY_BROWSER),
+        AppRule("com.opera.browser.beta", AppClassification.PERMANENT_BLACKLIST, "Opera Browser Beta", CATEGORY_PROXY_BROWSER),
+        AppRule("com.yandex.browser", AppClassification.PERMANENT_BLACKLIST, "Yandex Browser", CATEGORY_PROXY_BROWSER),
 
         // =========================================================================
         // 7. PERMANENT BLACKLIST: RANDOM & ANONYMOUS CHAT APPS
@@ -136,7 +141,6 @@ object AppPolicyRegistry {
         AppRule("com.microsoft.emmx", AppClassification.RESTRICTED_BROWSER, "Microsoft Edge"),
         AppRule("com.microsoft.emmx.canary", AppClassification.RESTRICTED_BROWSER, "Microsoft Edge Canary"),
         AppRule("com.sec.android.app.sbrowser", AppClassification.RESTRICTED_BROWSER, "Samsung Internet"),
-        AppRule("com.opera.mini.native", AppClassification.RESTRICTED_BROWSER, "Opera Mini"),
         AppRule("com.vivaldi.browser", AppClassification.RESTRICTED_BROWSER, "Vivaldi Browser"),
 
         // =========================================================================
@@ -315,6 +319,13 @@ object AppPolicyRegistry {
     fun isHighRisk(packageName: String): Boolean {
         if (isImmune(packageName)) return false
         return classify(packageName) == AppClassification.PERMANENT_BLACKLIST
+    }
+
+    fun isSecurityBypassTool(packageName: String): Boolean {
+        if (isImmune(packageName)) return false
+        val lower = packageName.lowercase()
+        val rule = exactMatchRules[lower] ?: wildcardRules.firstOrNull { it.matches(lower) }
+        return rule?.highRiskCategory == CATEGORY_PROXY_BROWSER || rule?.highRiskCategory == CATEGORY_LOCAL_ADB
     }
 
     /**

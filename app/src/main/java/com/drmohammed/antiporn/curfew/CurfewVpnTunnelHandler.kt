@@ -85,6 +85,40 @@ internal object CurfewVpnTunnelHandler {
         builder.addRoute("1.0.0.1", 32)
         builder.addRoute("9.9.9.9", 32)
         builder.addRoute("149.112.112.112", 32)
+        // OpenDNS Unfiltered
+        builder.addRoute("208.67.222.222", 32)
+        builder.addRoute("208.67.220.220", 32)
+        // AdGuard Unfiltered
+        builder.addRoute("94.140.14.14", 32)
+        builder.addRoute("94.140.15.15", 32)
+        builder.addRoute("94.140.14.140", 32)
+        builder.addRoute("94.140.14.141", 32)
+        // Control D Unfiltered
+        builder.addRoute("76.76.2.0", 32)
+        builder.addRoute("76.76.10.0", 32)
+        // Quad9 Alt
+        builder.addRoute("9.9.9.10", 32)
+        builder.addRoute("9.9.9.11", 32)
+        builder.addRoute("149.112.112.9", 32)
+        builder.addRoute("149.112.112.10", 32)
+        builder.addRoute("149.112.112.11", 32)
+        // Control D Unfiltered Alt
+        builder.addRoute("76.76.2.1", 32)
+        builder.addRoute("76.76.10.1", 32)
+        builder.addRoute("76.76.2.2", 32)
+        builder.addRoute("76.76.10.2", 32)
+        // DNS.SB
+        builder.addRoute("185.222.222.222", 32)
+        builder.addRoute("45.11.45.11", 32)
+        // Mullvad Unfiltered
+        builder.addRoute("194.242.2.2", 32)
+        // Yandex Unfiltered
+        builder.addRoute("77.88.8.8", 32)
+        builder.addRoute("77.88.8.1", 32)
+        // Level3
+        builder.addRoute("4.2.2.1", 32)
+        builder.addRoute("4.2.2.2", 32)
+
         builder.addAddress("fd00::1", 126)
         builder.addDnsServer("fd00::2")
         builder.addRoute("fd00::2", 128)
@@ -92,6 +126,32 @@ internal object CurfewVpnTunnelHandler {
         builder.addRoute("2001:4860:4860::8844", 128)
         builder.addRoute("2606:4700:4700::1111", 128)
         builder.addRoute("2606:4700:4700::1001", 128)
+        // Quad9 IPv6
+        builder.addRoute("2620:fe::fe", 128)
+        builder.addRoute("2620:fe::9", 128)
+        builder.addRoute("2620:fe::fe:9", 128)
+        builder.addRoute("2620:fe::10", 128)
+        builder.addRoute("2620:fe::11", 128)
+        // OpenDNS Unfiltered IPv6
+        builder.addRoute("2620:119:35::35", 128)
+        builder.addRoute("2620:119:53::53", 128)
+        // AdGuard Unfiltered IPv6
+        builder.addRoute("2a10:50c0::ad1:ff", 128)
+        builder.addRoute("2a10:50c0::ad2:ff", 128)
+        builder.addRoute("2a10:50c0::1:ff", 128)
+        builder.addRoute("2a10:50c0::2:ff", 128)
+        // Control D Unfiltered IPv6
+        builder.addRoute("2606:1a40::", 128)
+        builder.addRoute("2606:1a40:1::", 128)
+        builder.addRoute("2606:1a40::1", 128)
+        builder.addRoute("2606:1a40::2", 128)
+        // DNS.SB IPv6
+        builder.addRoute("2a09::", 128)
+        builder.addRoute("2a11::", 128)
+        // Mullvad Unfiltered IPv6
+        builder.addRoute("2a07:e340::2", 128)
+        // Yandex Unfiltered IPv6
+        builder.addRoute("2a02:6b8::feed:0ff", 128)
         // Note: Cloudflare Family IPv6 (2606:4700:4700::1113 / 1003) is intentionally omitted
         // from TUN sinkholing to allow Android's Private DNS probe to validate connectivity
         // cleanly when Private DNS remains pointing to family.cloudflare-dns.com.

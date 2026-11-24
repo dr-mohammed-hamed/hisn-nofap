@@ -2,8 +2,8 @@ package com.drmohammed.antiporn.telemetry
 
 import android.content.Context
 import android.os.SystemClock
-import android.util.Log
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
+import timber.log.Timber
 import com.drmohammed.antiporn.data.local.db.HisnRoomDatabase
 import com.drmohammed.antiporn.data.local.db.entity.DiagnosticEventEntity
 import java.util.concurrent.ConcurrentHashMap
@@ -96,7 +96,7 @@ object BlackBoxRecorder {
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.w(TAG, "Failed writing diagnostic event [$tag / $actionName]: ${e.message}")
+                Timber.tag(TAG).w(e, "Failed writing diagnostic event [$tag / $actionName]: ${e.message}")
             }
         }
         if (pendingWriteJobs.add(job)) {
@@ -129,7 +129,7 @@ object BlackBoxRecorder {
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.w(TAG, "Interrupted while awaiting pending BlackBox writes: ${e.message}")
+                Timber.tag(TAG).w(e, "Interrupted while awaiting pending BlackBox writes: ${e.message}")
                 return
             }
         }
@@ -297,7 +297,7 @@ object BlackBoxRecorder {
                     .putLong(KEY_LAST_HEALTHY_SHIELD_CHECK_MS, timestampToPersist)
                     .apply()
             } catch (e: Exception) {
-                Log.w(TAG, "Failed persisting healthy shield check timestamp: ${e.message}")
+                Timber.tag(TAG).w(e, "Failed persisting healthy shield check timestamp: ${e.message}")
             }
         }
     }
@@ -312,7 +312,7 @@ object BlackBoxRecorder {
             appContext.getSharedPreferences(HEALTH_PREFS_NAME, Context.MODE_PRIVATE)
                 .getLong(KEY_LAST_HEALTHY_SHIELD_CHECK_MS, 0L)
         } catch (e: Exception) {
-            Log.w(TAG, "Failed reading healthy shield check timestamp: ${e.message}")
+            Timber.tag(TAG).w(e, "Failed reading healthy shield check timestamp: ${e.message}")
             0L
         }
         return maxOf(lastHealthyCheckWallMs, persisted)

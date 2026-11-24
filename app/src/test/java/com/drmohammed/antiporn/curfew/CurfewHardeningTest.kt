@@ -492,4 +492,22 @@ class CurfewHardeningTest {
             }
         }
     }
+
+    @Test
+    fun testEnsureFailClosedOnUnexpectedStop_whenActiveTransitions_earlyReturns() {
+        val fakeCtx = object : ContextWrapper(null) {
+            override fun getApplicationContext(): Context = this
+        }
+        val vpnService = CurfewBlackholeVpnService()
+        com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.resetForTest()
+        val token = com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.acquireTransitionToken("TEST_TRANSITION")
+        try {
+            assertTrue(com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.hasActiveTransitions())
+            // Must return early without exception
+            vpnService.ensureFailClosedOnUnexpectedStop(fakeCtx, wasRevoked = true)
+        } finally {
+            com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.releaseTransitionToken(token)
+            com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.resetForTest()
+        }
+    }
 }

@@ -5,6 +5,7 @@ import android.content.Intent
 import android.util.Log
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.engine.ProtectionEngine
+import com.drmohammed.antiporn.core.network.dns.BinaryDomainFilter
 import com.drmohammed.antiporn.core.engine.SecondaryProfileDetector
 import com.drmohammed.antiporn.core.model.ShieldStatus
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
@@ -299,6 +300,7 @@ object AiTelemetryReporter {
             val runtimeDnsHost = com.drmohammed.antiporn.shields.DnsShield.getEffectiveDnsHost(appContext)
             val resilienceSnapshot = com.drmohammed.antiporn.core.network.dns.DnsResilienceManager.getRuntimeSnapshot()
             sb.appendLine("| **Effective Runtime DNS Host** | `${sanitizeMarkdownCell(runtimeDnsHost)} (ResilienceMode=${resilienceSnapshot.mode})` |")
+            sb.appendLine("| **Local Binary DNS Filter Entries** | `${BinaryDomainFilter.getLoadedEntriesCount()}` |")
             sb.appendLine("| **DNS Resilience Runtime** | `mode=${resilienceSnapshot.mode}, protectedNet=${sanitizeMarkdownCell(resilienceSnapshot.protectedNetworkId ?: "none")}, transport=${sanitizeMarkdownCell(resilienceSnapshot.protectedTransport ?: "none")}, trigger=${resilienceSnapshot.triggerClass ?: "none"}, restoring=${resilienceSnapshot.isRestoringPrimary}` |")
             val activePhysicalSummary = com.drmohammed.antiporn.core.network.PhysicalNetworkResolver
                 .describeActivePhysicalNetwork(appContext)

@@ -67,8 +67,10 @@ internal class DohHttpWireExchange(
             }
             raw.connect(targetAddr, connectTimeout)
 
-            val sslFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
-            val wrapped = sslFactory.createSocket(raw, endpoint.host, DOH_PORT, true) as SSLSocket
+            val sslFactory = SSLSocketFactory.getDefault() as? SSLSocketFactory
+                ?: throw IOException("Default SSLSocketFactory unavailable")
+            val wrapped = sslFactory.createSocket(raw, endpoint.host, DOH_PORT, true) as? SSLSocket
+                ?: throw IOException("Failed to wrap socket with SSLSocket")
             sslSocket = wrapped
             activeSockets.add(wrapped)
 
@@ -214,12 +216,15 @@ internal class DohHttpWireExchange(
     private fun readBodyUntilEof(socket: SSLSocket, inStream: DataInputStream, deadlineMs: Long): ByteArray {
         val out = ByteArrayOutputStream()
         val buf = ByteArray(1024)
-        while (out.size() <= MAX_DOH_RESPONSE_BYTES) {
+        while (true) {
             val remaining = (deadlineMs - clockMs()).toInt()
-            if (remaining <= 0) break
+            if (remaining <= 0) throw SocketTimeoutException("DoH response read deadline exceeded")
             socket.soTimeout = remaining.coerceAtLeast(1)
             val count = inStream.read(buf)
             if (count == -1) break
+            if (out.size() + count > MAX_DOH_RESPONSE_BYTES) {
+                throw IOException("DoH response body exceeded maximum size ($MAX_DOH_RESPONSE_BYTES bytes)")
+            }
             out.write(buf, 0, count)
         }
         return out.toByteArray()

@@ -10,6 +10,7 @@ import com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge
 import com.drmohammed.antiporn.shields.DnsShield
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import com.drmohammed.antiporn.telemetry.SafeDpmGateway
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import timber.log.Timber
 
@@ -23,6 +24,7 @@ internal object DnsResilienceEvaluationRunner {
     private const val PROBE_COOLDOWN_MS = 15_000L
     private const val STAGE_A_PROBE_BUDGET_MS = 8_000L
     private const val LEVEL2_VALIDATION_GRACE_MS = 6_000L
+    private const val OS_QUIRK_RECHECK_GRACE_MS = 2_000L
 
     internal interface HostCallbacks {
         fun currentEpoch(): Long
@@ -40,6 +42,13 @@ internal object DnsResilienceEvaluationRunner {
             netId: String,
             transport: String,
             triggerClass: DnsResilienceManager.FailoverTriggerClass
+        )
+        fun scheduleSameNetworkPrimaryRecovery(
+            context: Context,
+            network: Network,
+            netId: String,
+            targetPolicyHost: String,
+            triggerReason: String
         )
         fun rollbackToPrimarySync(context: Context, netId: String, transport: String, reason: String)
         fun applyDnsShieldSafely(context: Context)
@@ -77,8 +86,9 @@ internal object DnsResilienceEvaluationRunner {
             return
         }
 
+        val isDpmHostNotServingTrigger = triggerReason.startsWith("dpm_host_not_serving:")
         val now = DnsResilienceManager.getElapsedRealtime()
-        if (host.isInCooldown(netId, now)) {
+        if (!isDpmHostNotServingTrigger && host.isInCooldown(netId, now)) {
             Timber.tag(TAG).d("Resilience evaluation in cooldown for $netId ($resolvedTransport)")
             return
         }
@@ -87,15 +97,16 @@ internal object DnsResilienceEvaluationRunner {
             CurfewBlackholeVpnService.evaluateRequiredMode(context) != CurfewBlackholeVpnService.VpnMode.IDLE ||
                 CurfewEnforcer.isEffectiveBlockActive(context)
         } catch (e: Exception) {
-            Timber.tag(TAG).w(e, "Failed checking Curfew/VPN pre-condition in resilience evaluation")
-            false
+            if (e is CancellationException) throw e
+            Timber.tag(TAG).w(e, "Failed checking Curfew/VPN pre-condition in resilience evaluation; fail-safe skipping")
+            true
         }
         if (isCurfewOrVpnActive) {
             Timber.tag(TAG).d("Curfew or non-idle VPN is active; DnsResilienceManager will not intervene.")
             return
         }
 
-        if (DnsResilienceManager.isNetworkValidated(cm, network)) {
+        if (!isDpmHostNotServingTrigger && DnsResilienceManager.isNetworkValidated(cm, network)) {
             Timber.tag(TAG).d("Network $netId ($resolvedTransport) is already validated; skipping resilience intervention.")
             return
         }
@@ -132,7 +143,7 @@ internal object DnsResilienceEvaluationRunner {
         recordProbeTelemetry(context, netId, resolvedTransport, triggerReason, isCaptive, families, isPrimaryWorking)
 
         if (isAbortedByStateOrDisconnect(host, entryEpoch, cm, network)) return
-        if (DnsResilienceManager.isNetworkValidated(cm, network)) {
+        if (!isDpmHostNotServingTrigger && DnsResilienceManager.isNetworkValidated(cm, network)) {
             Timber.tag(TAG).i("Primary DoT host $targetPolicyHost validated on $netId ($resolvedTransport)")
             return
         }
@@ -141,6 +152,15 @@ internal object DnsResilienceEvaluationRunner {
         val resolvedTriggerClass = when {
             isCaptive -> DnsResilienceManager.FailoverTriggerClass.CAPTIVE_PORTAL
             isPrimaryWorking -> {
+                if (!isDpmHostNotServingTrigger) {
+                    val delayFn: suspend (Long) -> Unit = DnsResilienceManager.delayOverride ?: { delay(it) }
+                    delayFn(OS_QUIRK_RECHECK_GRACE_MS)
+                    if (isAbortedByStateOrDisconnect(host, entryEpoch, cm, network)) return
+                    if (DnsResilienceManager.isNetworkValidated(cm, network)) {
+                        Timber.tag(TAG).i("Network $netId ($resolvedTransport) validated during OS quirk grace period; remaining on PRIMARY_STRICT_DOT")
+                        return
+                    }
+                }
                 Timber.tag(TAG).w("Primary DoT connected on Java, but OS validated=false ($resolvedTransport); skipping Stage A to Level 3.")
                 skipStageA = true
                 DnsResilienceManager.FailoverTriggerClass.OS_DOT_VALIDATION_QUIRK
@@ -156,6 +176,7 @@ internal object DnsResilienceEvaluationRunner {
                 netId = netId,
                 resolvedTransport = resolvedTransport,
                 targetPolicyHost = targetPolicyHost,
+                triggerReason = triggerReason,
                 families = families,
                 entryEpoch = entryEpoch,
                 host = host
@@ -185,6 +206,7 @@ internal object DnsResilienceEvaluationRunner {
         netId: String,
         resolvedTransport: String,
         targetPolicyHost: String,
+        triggerReason: String,
         families: LinkIpFamilies,
         entryEpoch: Long,
         host: HostCallbacks
@@ -226,6 +248,7 @@ internal object DnsResilienceEvaluationRunner {
                 }
                 if (DnsResilienceManager.isNetworkValidated(cm, network)) {
                     Timber.tag(TAG).i("$resolvedTransport $netId validated under alternate DoT $candidate; staying at Level 2")
+                    host.scheduleSameNetworkPrimaryRecovery(context, network, netId, targetPolicyHost, triggerReason)
                     return true
                 }
                 Timber.tag(TAG).w("$resolvedTransport $netId unvalidated after 6s under alternate DoT $candidate; escalating to Level 3")
@@ -260,6 +283,7 @@ internal object DnsResilienceEvaluationRunner {
         val filterReady = try {
             DnsResilienceManager.binaryFilterInitOverride?.invoke(context) ?: BinaryDomainFilter.init(context)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Timber.tag(TAG).e(e, "BinaryDomainFilter initialization failed before Level 3 activation")
             false
         }
@@ -296,11 +320,14 @@ internal object DnsResilienceEvaluationRunner {
                 dpmRes.getOrNull()?.success == true
             }
 
+        if (isAbortedByStateOrDisconnect(host, entryEpoch, cm, network)) return
+
         if (!result) {
             Timber.tag(TAG).e("Level 3 VPN activation failed; rolling back to PRIMARY_STRICT_DOT")
             host.rollbackToPrimarySync(context, netId, resolvedTransport, "level3_activation_failed")
         } else {
             Timber.tag(TAG).i("Level 3 Local VPN DNS + DoH 443 activated for $resolvedTransport $netId")
+            host.scheduleSameNetworkPrimaryRecovery(context, network, netId, targetPolicyHost, triggerReason)
         }
     }
 
@@ -343,7 +370,7 @@ internal object DnsResilienceEvaluationRunner {
         )
     }
 
-    private fun resolvePolicyHost(context: Context): String {
+    internal fun resolvePolicyHost(context: Context): String {
         val fallback = DnsShield.DEFAULT_DNS_HOST
         return try {
             DnsResilienceManager.policyHostProvider?.invoke(context)
@@ -351,6 +378,7 @@ internal object DnsResilienceEvaluationRunner {
                     .getCurrentPolicy().dnsHost.takeIf { it.isNotBlank() }
                 ?: fallback
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Timber.tag(TAG).w(e, "Failed resolving target policy DNS host; using default")
             fallback
         }

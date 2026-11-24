@@ -1075,4 +1075,49 @@ class PrivateDnsFastPathTest {
             )
         )
     }
+
+    @Test
+    fun testApplyStandaloneDot_dpmSucceedsAndGlobalMatches_noDoubleGlobalWrite() {
+        var globalWriteCalls = 0
+        val (resCode, usedFallback) = CurfewVpnDnsBridge.applyStandaloneDotInternal(
+            targetHost = expectedHost,
+            currentDpmMode = DevicePolicyManager.PRIVATE_DNS_MODE_OFF,
+            currentDpmHost = null,
+            globalMode = "off",
+            globalHost = null,
+            isDeviceOwner = true,
+            markInternalMutation = {},
+            writeGlobal = { _, _ ->
+                globalWriteCalls++
+                true
+            },
+            setDpmPrivateDns = { true to DevicePolicyManager.PRIVATE_DNS_SET_NO_ERROR },
+            readGlobalAfterDpm = { "hostname" to expectedHost }
+        )
+
+        assertEquals(DevicePolicyManager.PRIVATE_DNS_SET_NO_ERROR, resCode)
+        assertFalse(usedFallback)
+        assertEquals("Must NOT perform double write to Settings.Global when DPM succeeded and global matches", 0, globalWriteCalls)
+    }
+
+    @Test
+    fun testStandaloneDotEnforcer_errorFailureSettingWithGlobalAlreadyMatched_reportsUsedFallback() {
+        var clearedRestorePending = false
+        val (resCode, usedFallback) = StandaloneDotEnforcer.applyStandaloneDotInternal(
+            targetHost = expectedHost,
+            currentDpmMode = DevicePolicyManager.PRIVATE_DNS_MODE_OFF,
+            currentDpmHost = null,
+            globalMode = "hostname",
+            globalHost = expectedHost,
+            isDeviceOwner = true,
+            markInternalMutation = {},
+            writeGlobal = { _, _ -> true },
+            setDpmPrivateDns = { false to DevicePolicyManager.PRIVATE_DNS_SET_ERROR_FAILURE_SETTING },
+            clearDnsRestorePending = { clearedRestorePending = true }
+        )
+
+        assertEquals(DevicePolicyManager.PRIVATE_DNS_SET_ERROR_FAILURE_SETTING, resCode)
+        assertTrue("Pre-armed Settings.Global must report usedFallback=true on DPM error 2", usedFallback)
+        assertTrue("clearDnsRestorePending must be called when fail-closed global fallback is active", clearedRestorePending)
+    }
 }

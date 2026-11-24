@@ -4,10 +4,14 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import androidx.annotation.VisibleForTesting
+import com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard
 import com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -75,6 +79,13 @@ object DnsResilienceManager {
     @VisibleForTesting internal var physicalTransportProvider: ((Context, Network) -> String?)? = null
     @VisibleForTesting internal var allPhysicalNetworksProvider: ((Context) -> List<Network>)? = null
 
+    @VisibleForTesting
+    internal var recoveryDelayOverride: (suspend (Long) -> Unit)?
+        get() = DnsResilienceNetworkRouter.recoveryDelayOverride
+        set(value) {
+            DnsResilienceNetworkRouter.recoveryDelayOverride = value
+        }
+
     private val stateLock = Any()
     private val stateEpoch = AtomicLong(0L)
 
@@ -124,6 +135,15 @@ object DnsResilienceManager {
             }
             DnsResilienceStore.persistSnapshot(context, snap)
         }
+        override fun scheduleSameNetworkPrimaryRecovery(
+            context: Context,
+            network: Network,
+            netId: String,
+            targetPolicyHost: String,
+            triggerReason: String
+        ) {
+            this@DnsResilienceManager.scheduleSameNetworkPrimaryRecovery(context, network, netId, targetPolicyHost, triggerReason)
+        }
         override fun rollbackToPrimarySync(context: Context, netId: String, transport: String, reason: String) {
             this@DnsResilienceManager.rollbackToPrimarySync(context, netId, transport, reason)
         }
@@ -166,6 +186,7 @@ object DnsResilienceManager {
         restoringPrimary: Boolean = false
     ) {
         synchronized(stateLock) {
+            stateEpoch.incrementAndGet()
             activeMode = mode
             overrideDotHost = overrideHost
             protectedNetworkId = netId
@@ -174,6 +195,20 @@ object DnsResilienceManager {
             isRestoringPrimary = restoringPrimary
             isHydrated = true
         }
+    }
+
+    @VisibleForTesting
+    internal fun setFallbackStateForTest(
+        mode: DnsResilienceMode,
+        netId: String?,
+        isCaptivePortal: Boolean = false
+    ) {
+        setStateForTest(
+            mode = mode,
+            netId = netId,
+            transport = "WIFI",
+            triggerClass = if (isCaptivePortal) FailoverTriggerClass.CAPTIVE_PORTAL else FailoverTriggerClass.PORT_853_BLOCKED
+        )
     }
 
     internal fun resolveNetworkId(network: Network): String = try {
@@ -252,6 +287,8 @@ object DnsResilienceManager {
         resilienceScope.launch {
             try {
                 CurfewVpnDnsBridge.reconcileNonBlackholeVpnAndDns(context)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Timber.tag(TAG).w(e, "Error reconciling VPN after policy host change")
             }
@@ -292,8 +329,14 @@ object DnsResilienceManager {
 
     fun evaluateNetworkUnvalidatedOrDotError(context: Context, network: Network, transport: String, triggerReason: String) {
         resilienceScope.launch {
-            evaluationMutex.withLock {
-                DnsResilienceEvaluationRunner.evaluate(context, network, transport, triggerReason, evalCallbacks)
+            try {
+                evaluationMutex.withLock {
+                    DnsResilienceEvaluationRunner.evaluate(context, network, transport, triggerReason, evalCallbacks)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.tag(TAG).w(e, "Unhandled error evaluating $transport DNS resilience")
             }
         }
     }
@@ -320,31 +363,192 @@ object DnsResilienceManager {
         evaluateNetworkUnvalidatedOrDotErrorDirect(context, wifiNetwork, "WIFI", triggerReason)
     }
 
-    fun onNetworkChanged(context: Context, transitionType: String, network: Network?, transport: String?) {
-        ensureHydrated(context)
-        networkRouter.onNetworkChanged(context, transitionType, network, transport) { reason ->
-            restorePrimaryStrictDot(context, reason)
+    @VisibleForTesting
+    internal fun scheduleSameNetworkPrimaryRecovery(
+        context: Context,
+        network: Network,
+        netId: String,
+        targetPolicyHost: String,
+        triggerReason: String
+    ) {
+        synchronized(stateLock) {
+            if (activeMode == DnsResilienceMode.PRIMARY_STRICT_DOT || protectedNetworkId != netId) {
+                return
+            }
+            val currentAttempts = DnsResilienceNetworkRouter.recoveryAttemptCountByNet.getOrDefault(netId, 0)
+            if (currentAttempts >= DnsResilienceNetworkRouter.MAX_SAME_NET_RECOVERY_ATTEMPTS) {
+                Timber.tag(TAG).d("Maximum same-network recovery attempts (${DnsResilienceNetworkRouter.MAX_SAME_NET_RECOVERY_ATTEMPTS}) reached for $netId")
+                return
+            }
+            if (triggerReason.contains("captive", ignoreCase = true) ||
+                failoverTriggerClass == FailoverTriggerClass.CAPTIVE_PORTAL
+            ) {
+                Timber.tag(TAG).d("Skipping scheduled recovery for captive portal network $netId; will recover on net_validated")
+                return
+            }
+
+            val delayMs = if (currentAttempts < DnsResilienceNetworkRouter.SAME_NET_RECOVERY_DELAYS_MS.size) {
+                DnsResilienceNetworkRouter.SAME_NET_RECOVERY_DELAYS_MS[currentAttempts]
+            } else {
+                DnsResilienceNetworkRouter.SAME_NET_RECOVERY_DELAYS_MS.last()
+            }
+
+            val scheduledEpoch = stateEpoch.get()
+            DnsResilienceNetworkRouter.activeRecoveryJob?.cancel()
+            lateinit var launchedJob: Job
+            launchedJob = resilienceScope.launch {
+                try {
+                    val delayFn: suspend (Long) -> Unit = DnsResilienceNetworkRouter.recoveryDelayOverride ?: { delay(it) }
+                    delayFn(delayMs)
+
+                    val stillValid = synchronized(stateLock) {
+                        stateEpoch.get() == scheduledEpoch &&
+                            DnsResilienceNetworkRouter.activeRecoveryJob === launchedJob &&
+                            activeMode != DnsResilienceMode.PRIMARY_STRICT_DOT &&
+                            protectedNetworkId == netId
+                    }
+                    if (!stillValid || ProtectionTransitionGuard.hasActiveTransitions()) {
+                        return@launch
+                    }
+
+                    val linkFamilies = DnsResilienceProbeClient.detectLinkFamilies(getConnectivityManager(context), network)
+                    val restored = DnsResilienceProbeClient.testDotHostOnNetwork(
+                        network = network,
+                        host = targetPolicyHost,
+                        families = linkFamilies,
+                        dotProbeOverride = dotProbeOverride
+                    )
+
+                    val newCount = synchronized(stateLock) {
+                        if (stateEpoch.get() != scheduledEpoch ||
+                            DnsResilienceNetworkRouter.activeRecoveryJob !== launchedJob ||
+                            protectedNetworkId != netId
+                        ) {
+                            return@launch
+                        }
+                        DnsResilienceNetworkRouter.recoveryAttemptCountByNet.compute(netId) { _, count -> (count ?: 0) + 1 } ?: 1
+                    }
+
+                    if (restored) {
+                        Timber.tag(TAG).i("Primary DoT host $targetPolicyHost is now working on $netId! Restoring PRIMARY_STRICT_DOT")
+                        restorePrimaryStrictDot(context, "same_network_primary_recovery:$netId")
+                    } else {
+                        Timber.tag(TAG).w("Same-network recovery probe failed (attempt $newCount/${DnsResilienceNetworkRouter.MAX_SAME_NET_RECOVERY_ATTEMPTS}) on $netId")
+                        if (newCount < DnsResilienceNetworkRouter.MAX_SAME_NET_RECOVERY_ATTEMPTS) {
+                            scheduleSameNetworkPrimaryRecovery(context, network, netId, targetPolicyHost, triggerReason)
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Timber.tag(TAG).w(e, "Unhandled error during same-network recovery for $netId")
+                }
+            }
+            DnsResilienceNetworkRouter.activeRecoveryJob = launchedJob
         }
     }
 
+    private fun scheduleCaptivePortalPrimaryRecovery(context: Context, network: Network, netId: String) {
+        Timber.tag(TAG).i("Protected captive portal network $netId validated; checking if primary DoT is restored")
+        synchronized(stateLock) {
+            val expectedEpoch = stateEpoch.get()
+            DnsResilienceNetworkRouter.activeCaptivePortalRecoveryJob?.cancel()
+            lateinit var portalJob: Job
+            portalJob = resilienceScope.launch {
+                try {
+                    val delayFn: suspend (Long) -> Unit = DnsResilienceNetworkRouter.recoveryDelayOverride ?: { delay(it) }
+                    delayFn(DnsResilienceNetworkRouter.CAPTIVE_PORTAL_RECOVERY_DELAY_MS)
+                    val stillProtected = synchronized(stateLock) {
+                        stateEpoch.get() == expectedEpoch &&
+                            DnsResilienceNetworkRouter.activeCaptivePortalRecoveryJob === portalJob &&
+                            activeMode != DnsResilienceMode.PRIMARY_STRICT_DOT &&
+                            protectedNetworkId == netId
+                    }
+                    if (stillProtected && !ProtectionTransitionGuard.hasActiveTransitions()) {
+                        val targetPolicyHost = DnsResilienceEvaluationRunner.resolvePolicyHost(context)
+                        val linkFamilies = DnsResilienceProbeClient.detectLinkFamilies(getConnectivityManager(context), network)
+                        if (DnsResilienceProbeClient.testDotHostOnNetwork(
+                                network = network,
+                                host = targetPolicyHost,
+                                families = linkFamilies,
+                                dotProbeOverride = dotProbeOverride
+                            )
+                        ) {
+                            val canRestore = synchronized(stateLock) {
+                                stateEpoch.get() == expectedEpoch &&
+                                    DnsResilienceNetworkRouter.activeCaptivePortalRecoveryJob === portalJob &&
+                                    protectedNetworkId == netId
+                            }
+                            if (canRestore) {
+                                Timber.tag(TAG).i("Primary DoT works after captive portal login on $netId! Restoring PRIMARY_STRICT_DOT")
+                                restorePrimaryStrictDot(context, "captive_portal_validated_recovery:$netId")
+                            }
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Timber.tag(TAG).w(e, "Unhandled error during captive portal DoT recovery on $netId")
+                }
+            }
+            DnsResilienceNetworkRouter.activeCaptivePortalRecoveryJob = portalJob
+        }
+    }
+
+    fun onNetworkChanged(context: Context, transitionType: String, network: Network?, transport: String?) {
+        ensureHydrated(context)
+        networkRouter.onNetworkChanged(
+            context = context,
+            transitionType = transitionType,
+            network = network,
+            transport = transport,
+            onCaptivePortalValidated = { validatedNet, netId ->
+                scheduleCaptivePortalPrimaryRecovery(context, validatedNet, netId)
+            },
+            restorePrimary = { reason ->
+                restorePrimaryStrictDot(context, reason)
+            }
+        )
+    }
+
     private fun beginRestorePrimaryTransition(context: Context, reason: String): Boolean {
-        val prevMode: DnsResilienceMode; val prevNet: String?; val prevTransport: String?
+        val prevMode: DnsResilienceMode
+        val prevNet: String?
+        val prevTransport: String?
         synchronized(stateLock) {
             if (activeMode == DnsResilienceMode.PRIMARY_STRICT_DOT && !isRestoringPrimary) return false
             stateEpoch.incrementAndGet()
-            prevMode = activeMode; prevNet = protectedNetworkId; prevTransport = protectedTransport
-            isRestoringPrimary = true; activeMode = DnsResilienceMode.PRIMARY_STRICT_DOT
-            overrideDotHost = null; protectedNetworkId = null; protectedTransport = null; failoverTriggerClass = null
+            prevMode = activeMode
+            prevNet = protectedNetworkId
+            prevTransport = protectedTransport
+            isRestoringPrimary = true
+            activeMode = DnsResilienceMode.PRIMARY_STRICT_DOT
+            overrideDotHost = null
+            protectedNetworkId = null
+            protectedTransport = null
+            failoverTriggerClass = null
             if (prevNet != null) networkRouter.cancelForNetwork(prevNet)
+            DnsResilienceNetworkRouter.cancelRecoveryJobs()
         }
         DnsResilienceStore.clearPersistedState(context)
         DnsResilienceStore.recordNetworkSafe(context, "DNS_RESILIENCE_RESTORE", true, "reason=$reason, prevMode=$prevMode, prevNet=$prevNet, prevTransport=$prevTransport")
         return true
     }
 
-    private fun restorePrimaryStrictDot(context: Context, reason: String = "net_lost") {
+    @VisibleForTesting
+    internal fun restorePrimaryStrictDot(context: Context, reason: String = "net_lost") {
         if (!beginRestorePrimaryTransition(context, reason)) return
-        resilienceScope.launch { evaluationMutex.withLock { restorePrimaryStrictDotLockedAsyncBody(context, reason) } }
+        resilienceScope.launch {
+            try {
+                evaluationMutex.withLock { restorePrimaryStrictDotLockedAsyncBody(context, reason) }
+            } catch (e: CancellationException) {
+                synchronized(stateLock) { isRestoringPrimary = false }
+                throw e
+            } catch (e: Exception) {
+                synchronized(stateLock) { isRestoringPrimary = false }
+                Timber.tag(TAG).w(e, "Unhandled error restoring PRIMARY_STRICT_DOT ($reason)")
+            }
+        }
     }
 
     private fun restorePrimaryStrictDotLockedAsyncBody(context: Context, reason: String) {
@@ -355,7 +559,12 @@ object DnsResilienceManager {
         synchronized(stateLock) {
             stateEpoch.incrementAndGet()
             activeMode = DnsResilienceMode.PRIMARY_STRICT_DOT
-            overrideDotHost = null; protectedNetworkId = null; protectedTransport = null; failoverTriggerClass = null; isRestoringPrimary = false
+            overrideDotHost = null
+            protectedNetworkId = null
+            protectedTransport = null
+            failoverTriggerClass = null
+            isRestoringPrimary = false
+            DnsResilienceNetworkRouter.cancelRecoveryJobs()
             DnsResilienceStore.clearPersistedState(context)
         }
         DnsResilienceStore.recordNetworkSafe(context, "DNS_FAILOVER_ROLLBACK", false, "net=$netId, transport=$transport, reason=$reason")
@@ -364,7 +573,7 @@ object DnsResilienceManager {
 
     private fun applyDnsShieldSafely(context: Context) = DnsResilienceStore.applyDnsShieldSafely(context, applyDnsShieldOverride)
 
-    @VisibleForTesting internal fun resolveBootstrapCandidates(host: String, families: LinkIpFamilies): List<InetAddress> = DnsResilienceProbeClient.resolveBootstrapCandidates(host, families)
+    @VisibleForTesting internal fun resolveBootstrapCandidates(host: String, families: LinkIpFamilies): List<InetAddress> = DnsResilienceProbeClient.resolveBootstrapAddresses(host, families)
     @VisibleForTesting internal fun verifyTls443OnSocket(rawSocket: Socket, sniHost: String): Boolean = DnsResilienceProbeClient.verifyTls443OnSocket(rawSocket, sniHost)
     @VisibleForTesting internal fun exchangeRfc7858ProbeOnSocket(socket: Socket): Boolean = DnsResilienceProbeClient.exchangeRfc7858ProbeOnSocket(socket)
 }

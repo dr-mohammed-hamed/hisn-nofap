@@ -62,6 +62,18 @@ object ProtectionTransitionGuard {
         }
     }
 
+    @VisibleForTesting
+    internal fun acquireTransitionToken(reason: String = ""): Long {
+        val token = nextToken.incrementAndGet()
+        activeTransitions[token] = elapsedRealtimeProvider()
+        return token
+    }
+
+    @VisibleForTesting
+    internal fun releaseTransitionToken(token: Long) {
+        activeTransitions.remove(token)
+    }
+
     /**
      * Marks a deliberate internal DNS or VPN reconfiguration event.
      */

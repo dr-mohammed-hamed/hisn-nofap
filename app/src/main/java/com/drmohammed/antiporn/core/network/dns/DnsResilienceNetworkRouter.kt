@@ -3,6 +3,8 @@ package com.drmohammed.antiporn.core.network.dns
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
+import androidx.annotation.VisibleForTesting
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -12,8 +14,8 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Handles physical network transition routing, multi-network default guards,
- * 10-second unvalidated debounce jobs, and external Private DNS drift fast-tracking
- * for [DnsResilienceManager].
+ * 10-second unvalidated debounce jobs, external Private DNS drift fast-tracking,
+ * and same-network/captive-portal primary DoT recovery tracking for [DnsResilienceManager].
  */
 internal class DnsResilienceNetworkRouter(
     private val scope: CoroutineScope,
@@ -24,6 +26,42 @@ internal class DnsResilienceNetworkRouter(
     companion object {
         private const val TAG = "AntiPorn_DnsNetRouter"
         private const val UNVALIDATED_DEBOUNCE_MS = 10_000L
+
+        const val MAX_SAME_NET_RECOVERY_ATTEMPTS = 2
+        const val CAPTIVE_PORTAL_RECOVERY_DELAY_MS = 3_000L
+        val SAME_NET_RECOVERY_DELAYS_MS = longArrayOf(10L * 60_000L, 30L * 60_000L)
+
+        val recoveryAttemptCountByNet = ConcurrentHashMap<String, Int>()
+
+        @Volatile
+        var activeRecoveryJob: Job? = null
+
+        @Volatile
+        var activeCaptivePortalRecoveryJob: Job? = null
+
+        @VisibleForTesting
+        internal var recoveryDelayOverride: (suspend (Long) -> Unit)? = null
+
+        fun reset() {
+            recoveryAttemptCountByNet.clear()
+            activeRecoveryJob?.cancel()
+            activeRecoveryJob = null
+            activeCaptivePortalRecoveryJob?.cancel()
+            activeCaptivePortalRecoveryJob = null
+            recoveryDelayOverride = null
+        }
+
+        fun cancelRecoveryJobs() {
+            activeRecoveryJob?.cancel()
+            activeRecoveryJob = null
+            activeCaptivePortalRecoveryJob?.cancel()
+            activeCaptivePortalRecoveryJob = null
+        }
+
+        fun onNetworkLost(netId: String) {
+            recoveryAttemptCountByNet.remove(netId)
+            cancelRecoveryJobs()
+        }
     }
 
     private val pendingJobsLock = Any()
@@ -38,6 +76,7 @@ internal class DnsResilienceNetworkRouter(
             pendingEvaluationJobs.clear()
         }
         lastImmediateDriftEscalatedNetId = null
+        reset()
     }
 
     fun cancelForNetwork(netId: String) {
@@ -168,6 +207,7 @@ internal class DnsResilienceNetworkRouter(
         transitionType: String,
         network: Network?,
         transport: String?,
+        onCaptivePortalValidated: (Network, String) -> Unit,
         restorePrimary: (String) -> Unit
     ) {
         val netId = network?.let(DnsResilienceManager::resolveNetworkId)
@@ -181,9 +221,13 @@ internal class DnsResilienceNetworkRouter(
             val protTransport = snap.protectedTransport
 
             if (netId != null && netId == protectedNet && transitionType.startsWith("net_validated")) {
+                if (snap.triggerClass == DnsResilienceManager.FailoverTriggerClass.CAPTIVE_PORTAL && network != null) {
+                    onCaptivePortalValidated(network, netId)
+                }
                 return
             }
             if (netId != null && netId == protectedNet && transitionType.startsWith("net_lost")) {
+                onNetworkLost(netId)
                 restorePrimary("protected_net_lost:${protTransport ?: transport}:$netId")
                 return
             }
@@ -204,6 +248,7 @@ internal class DnsResilienceNetworkRouter(
                 }
                 if (isValidatedEvent || (protTransport == "CELLULAR" && isActiveDefault)) {
                     Timber.tag(TAG).i("Preferred physical network $transport ($netId) active/validated; restoring PRIMARY_STRICT_DOT")
+                    if (protectedNet != null) onNetworkLost(protectedNet)
                     restorePrimary("preferred_transport_active:$transport:$netId")
                     return
                 }
@@ -261,9 +306,15 @@ internal class DnsResilienceNetworkRouter(
         synchronized(pendingJobsLock) {
             pendingEvaluationJobs.remove(key)?.cancel()
             val job = scope.launch {
-                val override = DnsResilienceManager.delayOverride
-                if (override != null) override.invoke(delayMs) else delay(delayMs)
-                block()
+                try {
+                    val override = DnsResilienceManager.delayOverride
+                    if (override != null) override.invoke(delayMs) else delay(delayMs)
+                    block()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Timber.tag(TAG).w(e, "Error in scheduled pending DNS resilience evaluation for $key")
+                }
             }
             pendingEvaluationJobs[key] = job
             job.invokeOnCompletion { pendingEvaluationJobs.remove(key, job) }

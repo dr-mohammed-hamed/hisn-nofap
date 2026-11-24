@@ -237,6 +237,20 @@ interface SafeDpmPolicyBridge : SafeDpmBaseGateway {
         recordPrivateDnsDpmTelemetry(context, tag, "setGlobalPrivateDnsOpportunisticBlocking", res, "mode=opportunistic")
     }
 
+    fun getAutoTimeRequiredBlocking(
+        context: Context,
+        tag: String = BlackBoxRecorder.TAG_DPM,
+        recordSuccess: Boolean = false
+    ): DpmExecutionResult<Boolean> = executeBlocking(
+        context = context,
+        tag = tag,
+        actionName = "getAutoTimeRequiredBlocking",
+        recordSuccess = recordSuccess
+    ) { dpm, _ ->
+        @Suppress("DEPRECATION")
+        dpm.autoTimeRequired
+    }
+
     suspend fun getGlobalPrivateDnsMode(
         context: Context,
         tag: String = BlackBoxRecorder.TAG_DPM,

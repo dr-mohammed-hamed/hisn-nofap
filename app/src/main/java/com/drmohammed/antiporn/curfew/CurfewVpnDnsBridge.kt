@@ -8,6 +8,7 @@ import androidx.annotation.VisibleForTesting
 import com.drmohammed.antiporn.core.model.ShieldResult
 import com.drmohammed.antiporn.core.model.ShieldStatus
 import com.drmohammed.antiporn.core.network.PhysicalNetworkResolver
+import com.drmohammed.antiporn.shields.DnsShield
 import com.drmohammed.antiporn.telemetry.SafeDpmGateway
 
 enum class DnsFastHealOutcome {
@@ -46,7 +47,7 @@ sealed class WebFilterCapabilityResult {
 /**
  * Facade coordinating Always-On VPN lockdown and Private DNS state during curfew transitions
  * and shield verification. Delegates to [PrivateDnsSettingsBridge], [DnsFastHealEngine],
- * [AlwaysOnVpnPolicyBridge], and [DnsShieldPolicyEvaluator].
+ * [AlwaysOnVpnPolicyBridge], [StandaloneDotEnforcer], and [DnsShieldPolicyEvaluator].
  */
 internal object CurfewVpnDnsBridge {
 
@@ -224,8 +225,10 @@ internal object CurfewVpnDnsBridge {
     internal fun isDevicePhysicallyOffline(context: Context): Boolean =
         PhysicalNetworkResolver.isDevicePhysicallyOffline(context)
 
-    internal fun preArmStandaloneDotFailClosed(context: Context, targetHost: String): Boolean =
-        DnsFastHealEngine.preArmStandaloneDotFailClosed(context, targetHost)
+    internal fun preArmStandaloneDotFailClosed(
+        context: Context,
+        targetHost: String = DnsShield.getEffectiveDnsHost(context)
+    ): Boolean = DnsFastHealEngine.preArmStandaloneDotFailClosed(context, targetHost)
 
     fun isLocalVpnExpectedActive(context: Context): Boolean =
         AlwaysOnVpnConsentHelper.isLocalVpnExpectedActive(context)
@@ -298,11 +301,23 @@ internal object CurfewVpnDnsBridge {
         clearDnsRestorePending: () -> Unit = {},
         writePrivateDnsPair: ((mode: String, specifier: String) -> Boolean)? = null,
         isDeviceOffline: Boolean = false,
-        markPendingDpmSync: (Boolean) -> Unit = {}
+        markPendingDpmSync: (Boolean) -> Unit = {},
+        readGlobalAfterDpm: (() -> Pair<String?, String?>)? = null
     ): Pair<Int, Boolean> = StandaloneDotEnforcer.applyStandaloneDotInternal(
-        targetHost, currentDpmMode, currentDpmHost, globalMode, globalHost, isDeviceOwner,
-        markInternalMutation, writeGlobal, setDpmPrivateDns, clearDnsRestorePending,
-        writePrivateDnsPair, isDeviceOffline, markPendingDpmSync
+        targetHost = targetHost,
+        currentDpmMode = currentDpmMode,
+        currentDpmHost = currentDpmHost,
+        globalMode = globalMode,
+        globalHost = globalHost,
+        isDeviceOwner = isDeviceOwner,
+        markInternalMutation = markInternalMutation,
+        writeGlobal = writeGlobal,
+        setDpmPrivateDns = setDpmPrivateDns,
+        clearDnsRestorePending = clearDnsRestorePending,
+        writePrivateDnsPair = writePrivateDnsPair,
+        isDeviceOffline = isDeviceOffline,
+        markPendingDpmSync = markPendingDpmSync,
+        readGlobalAfterDpm = readGlobalAfterDpm
     )
 
     internal fun isVpnConsentGranted(context: Context): Boolean =

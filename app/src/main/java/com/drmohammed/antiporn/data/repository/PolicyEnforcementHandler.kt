@@ -43,6 +43,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import timber.log.Timber
 import java.util.TimeZone
 import java.util.concurrent.atomic.AtomicLong
 
@@ -260,11 +261,16 @@ internal class PolicyEnforcementHandler(
         } else {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 try {
-                    SafeDpmGateway.clearUserRestriction(appContext, UserManager.DISALLOW_CONFIG_DATE_TIME)
-                    Log.i(TAG, "Cleared DISALLOW_CONFIG_DATE_TIME restriction from policy bundle (phone settings open)")
+                    val restrictionsRes = SafeDpmGateway.getUserRestrictions(appContext)
+                    val shouldClear = restrictionsRes.isFailure ||
+                        restrictionsRes.getOrNull()?.getBoolean(UserManager.DISALLOW_CONFIG_DATE_TIME, false) == true
+                    if (shouldClear) {
+                        SafeDpmGateway.clearUserRestriction(appContext, UserManager.DISALLOW_CONFIG_DATE_TIME)
+                        Timber.tag(TAG).i("Cleared DISALLOW_CONFIG_DATE_TIME restriction from policy bundle (phone settings open)")
+                    }
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
-                    Log.w(TAG, "Failed clearing DISALLOW_CONFIG_DATE_TIME: ${e.message}")
+                    Timber.tag(TAG).w(e, "Failed clearing DISALLOW_CONFIG_DATE_TIME: ${e.message}")
                 }
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -272,14 +278,17 @@ internal class PolicyEnforcementHandler(
                     SafeDpmGateway.setAutoTimeZoneEnabled(appContext, true)
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
-                    Log.w(TAG, "Failed restoring auto timezone on Android 11+: ${e.message}")
+                    Timber.tag(TAG).w(e, "Failed restoring auto timezone on Android 11+: ${e.message}")
                 }
             } else {
                 try {
-                    SafeDpmGateway.setAutoTimeRequired(appContext, false)
+                    val autoTimeRes = SafeDpmGateway.getAutoTimeRequiredBlocking(appContext)
+                    if (autoTimeRes.isFailure || autoTimeRes.getOrNull() == true) {
+                        SafeDpmGateway.setAutoTimeRequired(appContext, false)
+                    }
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
-                    Log.w(TAG, "Failed clearing auto time required: ${e.message}")
+                    Timber.tag(TAG).w(e, "Failed clearing auto time required: ${e.message}")
                 }
             }
         }

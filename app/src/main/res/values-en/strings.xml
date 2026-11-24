@@ -205,7 +205,10 @@
     <string name="provisioning_webadb_url">https://puresite.app/install</string>
     <string name="provisioning_webadb_copy_link">Copy Website Link</string>
     <string name="provisioning_webadb_link_copied">Website link copied successfully</string>
-    <string name="provisioning_error_samsung_secure_folder">Please disable Samsung \'Secure Folder\' or \'Dual Messenger\' temporarily during activation.</string>
+    <string name="provisioning_error_samsung_secure_folder">Please move all important files out of Samsung \'Secure Folder\' or \'Dual Messenger\', then remove them before retrying activation to avoid permanent data loss.</string>
+    <string name="provisioning_error_ack_required">Activation blocked: Device Owner activation requires confirming the data safety acknowledgment in the setup wizard first (valid for 15 minutes).</string>
+    <string name="provisioning_prompt_ack_required_title">Data Safety Confirmation Required</string>
+    <string name="provisioning_prompt_ack_required_desc">To protect Secure Folder data from permanent loss, tap here to open the wizard, review the warning, and confirm acknowledgment first.</string>
     <string name="provisioning_error_realme_precondition">For Realme and Oppo devices: Please sign out of HeyTap/Realme account in Settings and enable \'Disable permission monitoring\' in Developer options.</string>
     <string name="provisioning_error_already_device_owner">A Device Owner is already registered on this device, or protection was previously activated.</string>
     <string name="provisioning_failed_accounts_title">Activation Failed: Accounts Must Be Removed</string>
@@ -236,7 +239,10 @@
     <string name="oem_xiaomi_title">Notice for Xiaomi, Redmi &amp; POCO Devices</string>
     <string name="oem_xiaomi_desc">Xiaomi devices require enabling both \"USB Debugging\" and \"USB Debugging (Security settings)\" inside Developer Options.</string>
     <string name="oem_samsung_multiuser_title">Notice for Samsung: Secure Folder / Dual Messenger Active</string>
-    <string name="oem_samsung_multiuser_desc">Secure Folder or Dual Messenger was detected. Please disable them temporarily to avoid setup interruptions.</string>
+    <string name="oem_samsung_multiuser_desc">Secure Folder or Dual Messenger was detected. Activating Device Owner will permanently delete them and destroy all their data! You must back up/move your files outside and uninstall them before proceeding.</string>
+    <string name="oem_samsung_preventive_title">Preventive Warning for Samsung Devices (Secure Folder)</string>
+    <string name="oem_samsung_preventive_desc">Samsung devices may hide \'Secure Folder\' from initial checks. Activating Device Owner will permanently delete Secure Folder and destroy its data. If you use it, back up your files outside and remove it first.</string>
+    <string name="dialog_danger_samsung_preventive_desc">You are using a Samsung device. On Samsung devices, \'Secure Folder\' may not appear in initial system checks, but activating Device Owner will cause Knox to permanently delete it and wipe all photos and documents inside it forever!\n\nIf you use Secure Folder, please exit now, back up/move your important files outside, and remove it before continuing.</string>
     <string name="oem_realme_oppo_title">Important Notice for Realme, OPPO &amp; OnePlus</string>
     <string name="oem_realme_oppo_desc">Enable \"Disable permission monitoring\" at the bottom of Developer Options and reboot before pairing to allow granting Private DNS control across cloned apps.</string>
     <string name="oem_clone_profile_warning_title">Cloned App Profile Detected</string>
@@ -551,6 +557,7 @@
     <string name="toast_error_applying">Error applying protection: %1$s</string>
     <string name="card_system_tamper_title">System Anti-Tamper Shield</string>
     <string name="card_system_tamper_active">System settings, safe mode, and user switching are locked.</string>
+    <string name="card_system_tamper_active_no_time_lock">Safe Boot, Factory Reset &amp; Uninstall blocked (Date/Time lock disabled in policy)</string>
     <string name="card_system_tamper_inactive">Anti-tamper protection is inactive.</string>
     <string name="card_system_tamper_pending">Anti-tamper configuration pending...</string>
     <string name="shield_dns_success">Family DNS enforced successfully.</string>
@@ -559,6 +566,7 @@
     <string name="shield_system_tamper_success">System tamper restrictions enforced successfully.</string>
     <string name="shield_dns_unsupported">Private DNS not supported on this Android version.</string>
     <string name="shield_dns_local_filter_active">Local DNS filtering active (opportunistic Private DNS with encrypted DoT upstream)</string>
+    <string name="shield_dns_resilience_doh_active">Local DNS filtering active (Encrypted DoH 443 resilience + local binary filter)</string>
     <string name="shield_dns_local_filter_unaffiliated_notice">Web &amp; DNS filtering active via (%1$s). Note: Customizing DNS servers or advanced filters requires temporarily disabling Dual apps or Secure Folder per Android policy.</string>
     <string name="shield_dns_unaffiliated_users_notice">DNS Shield is actively protecting the device via (%1$s). To change system DNS to (%2$s), temporarily disable Dual Messenger or Secure Folder per Android policy.</string>
     <string name="shield_dns_unaffiliated_users_error">Cannot enforce system Private DNS due to secondary profiles (such as Dual Messenger or Secure Folder). Please remove them to enable protection.</string>

@@ -296,6 +296,8 @@ internal object DnsShieldPolicyEvaluator {
                     R.string.shield_dns_emergency_vpn_active_notice,
                     SecondaryProfileDetector.formatClonedAppsSummary(context) ?: context.getString(R.string.shield_dns_cloned_app_default)
                 )
+                com.drmohammed.antiporn.core.network.dns.DnsResilienceManager.isLocalVpnFallbackActive() ->
+                    context.getString(R.string.shield_dns_resilience_doh_active)
                 else -> context.getString(R.string.shield_dns_local_filter_active)
             }
             ShieldStatus.Active(message)

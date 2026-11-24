@@ -81,6 +81,17 @@ object DeviceOwnerPromoter {
         val appContext = context.applicationContext
         val startTime = SystemClock.elapsedRealtime()
         try {
+            if (OemProvisioningHelper.requiresPreActivationDangerAck(appContext) && !ProvisioningAckStore.hasValidAck(appContext)) {
+                val err = appContext.getString(R.string.provisioning_error_ack_required)
+                Timber.tag(TAG).e("Promotion blocked by defense-in-depth: Danger acknowledgment required but missing or expired")
+                BlackBoxRecorder.recordPairing(
+                    appContext,
+                    "PROMOTION_BLOCKED_NO_ACK",
+                    isSuccess = false,
+                    error = err
+                )
+                return@withContext PromotionResult.Failure(err)
+            }
             withTimeout(30_000L) {
                 val keyFile = File(appContext.filesDir, "antiporn_adb.key")
                 val keyProvider = FileKeyProvider(keyFile)
@@ -165,6 +176,7 @@ object DeviceOwnerPromoter {
                 val finalResult = result ?: throw (lastException ?: IllegalStateException("Failed to connect over TLS"))
                 val totalDuration = SystemClock.elapsedRealtime() - startTime
                 if (finalResult is PromotionResult.Success) {
+                    ProvisioningAckStore.clearAck(appContext)
                     BlackBoxRecorder.recordPairing(
                         appContext,
                         "PROMOTION_SUCCESS",
@@ -219,6 +231,17 @@ object DeviceOwnerPromoter {
         val appContext = context.applicationContext
         val startTime = SystemClock.elapsedRealtime()
         try {
+            if (OemProvisioningHelper.requiresPreActivationDangerAck(appContext) && !ProvisioningAckStore.hasValidAck(appContext)) {
+                val err = appContext.getString(R.string.provisioning_error_ack_required)
+                Timber.tag(TAG).e("Promotion blocked by defense-in-depth: Danger acknowledgment required but missing or expired")
+                BlackBoxRecorder.recordPairing(
+                    appContext,
+                    "PROMOTION_BLOCKED_NO_ACK",
+                    isSuccess = false,
+                    error = err
+                )
+                return@withContext PromotionResult.Failure(err)
+            }
             withTimeout(30_000L) {
                 val keyFile = File(appContext.filesDir, "antiporn_adb.key")
                 if (!keyFile.exists()) {
@@ -227,9 +250,13 @@ object DeviceOwnerPromoter {
                 val keyProvider = FileKeyProvider(keyFile)
                 val adminComponent = ComponentName(appContext, AdminReceiver::class.java).flattenToShortString()
 
-                AdbClient.connectTls(LOCALHOST, connectPort, keyProvider).use { client ->
+                val result = AdbClient.connectTls(LOCALHOST, connectPort, keyProvider).use { client ->
                     executeZeroAccountPromotion(appContext, client, adminComponent, 0)
                 }
+                if (result is PromotionResult.Success) {
+                    ProvisioningAckStore.clearAck(appContext)
+                }
+                result
             }
         } catch (te: TimeoutCancellationException) {
             val totalDuration = SystemClock.elapsedRealtime() - startTime

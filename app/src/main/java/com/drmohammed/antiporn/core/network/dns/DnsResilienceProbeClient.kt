@@ -9,6 +9,7 @@ import timber.log.Timber
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.EOFException
+import java.io.IOException
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
@@ -23,14 +24,16 @@ import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
 
 /**
- * Network-bound TLS 443 anti-spoof and RFC 7858 TLS 853 DoT connectivity probes
- * for [DnsResilienceManager]. Enforces cumulative handshake and read deadlines.
+ * Network-bound TLS 443 anti-spoof, bootstrap IP resolution (including NextDNS & Control D),
+ * and RFC 7858 TLS 853 DoT connectivity probes for [DnsResilienceManager].
+ * Enforces cumulative handshake and read deadlines.
  */
 internal object DnsResilienceProbeClient {
 
     private const val TAG = "AntiPorn_DnsResProbe"
+    const val DOT_PORT = 853
     private const val ANTI_SPOOF_TIMEOUT_MS = 1_500
-    private const val DOT_PROBE_TIMEOUT_MS = 2_000
+    const val DOT_PROBE_TIMEOUT_MS = 2_000
     private const val DOT_PROBE_QUERY_DOMAIN = "example.com"
 
     internal val ALTERNATE_FAMILY_PRESETS = listOf(
@@ -40,18 +43,21 @@ internal object DnsResilienceProbeClient {
         "family-filter-dns.cleanbrowsing.org"
     )
 
-    private val PRESET_BOOTSTRAP_IPV4 = mapOf(
+    val PRESET_BOOTSTRAP_IPV4 = mapOf(
         DevicePolicyBundle.CLOUDFLARE_FAMILY_DNS_HOST to listOf("1.1.1.3", "1.0.0.3"),
         DevicePolicyBundle.ADGUARD_FAMILY_DNS_HOST to listOf("94.140.14.15", "94.140.15.16"),
-        DevicePolicyBundle.CONTROLD_NO_ADS_PORN_DNS_HOST to listOf("76.76.2.11"),
-        "family.controld.com" to listOf("76.76.2.3"),
-        "family-filter-dns.cleanbrowsing.org" to listOf("185.228.168.168", "185.228.168.10")
+        DevicePolicyBundle.CONTROLD_NO_ADS_PORN_DNS_HOST to listOf("76.76.2.11", "76.76.10.11"),
+        DevicePolicyBundle.CONTROLD_FAMILY_DNS_HOST to listOf("76.76.2.11", "76.76.10.11"),
+        "family.controld.com" to listOf("76.76.2.3", "76.76.10.3"),
+        "family-filter-dns.cleanbrowsing.org" to listOf("185.228.168.168", "185.228.169.168", "185.228.168.10")
     )
 
-    private val PRESET_BOOTSTRAP_IPV6 = mapOf(
+    val PRESET_BOOTSTRAP_IPV6 = mapOf(
         DevicePolicyBundle.CLOUDFLARE_FAMILY_DNS_HOST to listOf("2606:4700:4700::1113", "2606:4700:4700::1003"),
         DevicePolicyBundle.ADGUARD_FAMILY_DNS_HOST to listOf("2a10:50c0::bad1:ff", "2a10:50c0::bad2:ff"),
-        DevicePolicyBundle.CONTROLD_NO_ADS_PORN_DNS_HOST to listOf("2606:1a40::11"),
+        DevicePolicyBundle.CONTROLD_NO_ADS_PORN_DNS_HOST to listOf("2606:1a40::11", "2606:1a40:1::11"),
+        DevicePolicyBundle.CONTROLD_FAMILY_DNS_HOST to listOf("2606:1a40::11", "2606:1a40:1::11"),
+        "family.controld.com" to listOf("2606:1a40::3", "2606:1a40:1::3"),
         "family-filter-dns.cleanbrowsing.org" to listOf("2a0d:2a00:1::", "2a0d:2a00:2::")
     )
 
@@ -82,16 +88,46 @@ internal object DnsResilienceProbeClient {
     fun detectLinkFamilies(cm: ConnectivityManager?, network: Network): LinkIpFamilies =
         PhysicalNetworkResolver.detectLinkFamilies(cm, network)
 
-    fun resolveBootstrapCandidates(host: String, families: LinkIpFamilies): List<InetAddress> {
-        val clean = host.lowercase().trim()
-        val v4Strings = PRESET_BOOTSTRAP_IPV4[clean].orEmpty()
-        val v6Strings = PRESET_BOOTSTRAP_IPV6[clean].orEmpty()
+    /**
+     * Resolves high-availability Bootstrap IP address strings for preset and custom DoH/DoT
+     * providers (Cloudflare, AdGuard, CleanBrowsing, NextDNS, Control D) without OS DNS dependency.
+     */
+    fun resolveBootstrapCandidates(
+        host: String,
+        families: LinkIpFamilies = LinkIpFamilies(hasIpv4 = true, hasIpv6 = false)
+    ): List<String> {
+        val clean = host.lowercase().trim().trimEnd('.')
+        val v4Preset = PRESET_BOOTSTRAP_IPV4[clean]
+        val v6Preset = PRESET_BOOTSTRAP_IPV6[clean]
+
+        val (v4Strings, v6Strings) = if (v4Preset != null || v6Preset != null) {
+            v4Preset.orEmpty() to v6Preset.orEmpty()
+        } else {
+            when {
+                clean.endsWith(".dns.nextdns.io") ->
+                    listOf("45.90.28.0", "45.90.30.0") to listOf("2a07:a8c0::", "2a07:a8c1::")
+                clean.endsWith(".freedns.controld.com") ->
+                    listOf("76.76.2.11", "76.76.10.11") to listOf("2606:1a40::11", "2606:1a40:1::11")
+                clean.endsWith(".dns.controld.com") ->
+                    listOf("76.76.2.22", "76.76.10.22") to listOf("2606:1a40::22", "2606:1a40:1::22")
+                else -> emptyList<String>() to emptyList<String>()
+            }
+        }
+
         val orderedStrings = when {
             families.hasIpv6 && !families.hasIpv4 -> v6Strings + v4Strings
             families.hasIpv6 && families.hasIpv4 -> v4Strings + v6Strings
             else -> v4Strings
         }
-        return orderedStrings.mapNotNull { ipStr ->
+        return orderedStrings.distinct()
+    }
+
+    fun resolveBootstrapAddresses(
+        host: String,
+        families: LinkIpFamilies = LinkIpFamilies(hasIpv4 = true, hasIpv6 = false)
+    ): List<InetAddress> {
+        val clean = host.lowercase().trim().trimEnd('.')
+        return resolveBootstrapCandidates(clean, families).mapNotNull { ipStr ->
             try {
                 InetAddress.getByName(ipStr).takeUnless { DnsIpPolicy.isNonPublicOrReservedIp(it) }
             } catch (e: Exception) {
@@ -142,8 +178,10 @@ internal object DnsResilienceProbeClient {
         var sslSocket: SSLSocket? = null
         val deadlineMs = clockMs() + ANTI_SPOOF_TIMEOUT_MS
         return try {
-            val factory = SSLSocketFactory.getDefault() as SSLSocketFactory
-            val wrapped = factory.createSocket(rawSocket, sniHost, 443, true) as SSLSocket
+            val factory = SSLSocketFactory.getDefault() as? SSLSocketFactory
+                ?: throw IOException("Default SSLSocketFactory unavailable")
+            val wrapped = factory.createSocket(rawSocket, sniHost, 443, true) as? SSLSocket
+                ?: throw IOException("Failed to wrap socket with SSLSocket")
             sslSocket = wrapped
             val sslParams = wrapped.sslParameters
             sslParams.serverNames = listOf(SNIHostName(sniHost))
@@ -184,7 +222,7 @@ internal object DnsResilienceProbeClient {
             Timber.tag(TAG).d(e, "Network.getAllByName failed for DoT probe host=$host")
             emptyList()
         }
-        val candidates = (resolvedCandidates + resolveBootstrapCandidates(host, families)).distinct()
+        val candidates = (resolvedCandidates + resolveBootstrapAddresses(host, families)).distinct()
         if (candidates.isEmpty()) {
             Timber.tag(TAG).d("No candidate IPs resolved for DoT probe host=$host")
             return false
@@ -213,10 +251,12 @@ internal object DnsResilienceProbeClient {
         return try {
             rawSocket = network.socketFactory.createSocket()
             rawSocket.soTimeout = timeoutMs
-            rawSocket.connect(InetSocketAddress(targetAddr, 853), timeoutMs)
+            rawSocket.connect(InetSocketAddress(targetAddr, DOT_PORT), timeoutMs)
 
-            val factory = SSLSocketFactory.getDefault() as SSLSocketFactory
-            val wrapped = factory.createSocket(rawSocket, host, 853, true) as SSLSocket
+            val factory = SSLSocketFactory.getDefault() as? SSLSocketFactory
+                ?: throw IOException("Default SSLSocketFactory unavailable")
+            val wrapped = factory.createSocket(rawSocket, host, DOT_PORT, true) as? SSLSocket
+                ?: throw IOException("Failed to wrap socket with SSLSocket")
             sslSocket = wrapped
             val sslParams = wrapped.sslParameters
             sslParams.serverNames = listOf(SNIHostName(host))
