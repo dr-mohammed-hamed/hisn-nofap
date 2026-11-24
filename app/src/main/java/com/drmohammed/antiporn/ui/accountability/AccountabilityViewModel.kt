@@ -2,6 +2,7 @@ package com.drmohammed.antiporn.ui.accountability
 
 import android.app.Application
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.drmohammed.antiporn.cloud.auth.GoogleAuthManager
@@ -33,25 +34,34 @@ import kotlinx.coroutines.withContext
  * ViewModel for AccountabilityFragment.
  * Manages partner synchronization, pairing credentials, emergency breakout flow, and approval counting.
  */
-class AccountabilityViewModel(
+open class AccountabilityViewModel(
     application: Application,
     private val accountabilityRepo: AccountabilityRepository = AccountabilityRepository.getInstance(application),
     private val approvalRepo: ApprovalRepository? = ApprovalRepository.getInstance(application),
     private val googleAuthManager: GoogleAuthManager? = GoogleAuthManager.getInstance(application),
-    private val policyRepository: PolicyRepository? = PolicyRepository.getInstance(application),
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
-    private val policyProvider: suspend () -> DevicePolicyBundle = {
-        policyRepository?.getCurrentPolicy() ?: DevicePolicyBundle.defaultPolicy()
-    },
-    private val startFirestoreSyncAction: () -> Unit = {
-        policyRepository?.startFirestoreSync()
-    },
-    private val rollbackCloudSyncAction: suspend (Application) -> Unit = {
-        com.drmohammed.antiporn.cloud.CloudSyncManager.checkAndAutoRollbackIfUnsupervisedSuspend(it)
-    },
-    autoObserve: Boolean = true
+    private val policyRepository: PolicyRepository? = PolicyRepository.getInstance(application)
 ) : AndroidViewModel(application) {
+
+    @VisibleForTesting
+    internal var ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+
+    @VisibleForTesting
+    internal var mainDispatcher: CoroutineDispatcher = Dispatchers.Main
+
+    @VisibleForTesting
+    internal var policyProvider: suspend () -> DevicePolicyBundle = {
+        policyRepository?.getCurrentPolicy() ?: DevicePolicyBundle.defaultPolicy()
+    }
+
+    @VisibleForTesting
+    internal var startFirestoreSyncAction: () -> Unit = {
+        policyRepository?.startFirestoreSync()
+    }
+
+    @VisibleForTesting
+    internal var rollbackCloudSyncAction: suspend (Application) -> Unit = {
+        com.drmohammed.antiporn.cloud.CloudSyncManager.checkAndAutoRollbackIfUnsupervisedSuspend(it)
+    }
 
     private val _uiState = MutableStateFlow(AccountabilityUiState())
     val uiState: StateFlow<AccountabilityUiState> = _uiState.asStateFlow()
@@ -62,12 +72,16 @@ class AccountabilityViewModel(
     private var pairingCountdownJob: Job? = null
 
     init {
-        if (autoObserve) {
+        @Suppress("LeakingThis")
+        if (shouldAutoObserveOnInit()) {
             observePolicyFlow()
             observeCloudSyncFlow()
             refreshAll()
         }
     }
+
+    @VisibleForTesting
+    protected open fun shouldAutoObserveOnInit(): Boolean = true
 
     private fun observeCloudSyncFlow() {
         viewModelScope.launch {

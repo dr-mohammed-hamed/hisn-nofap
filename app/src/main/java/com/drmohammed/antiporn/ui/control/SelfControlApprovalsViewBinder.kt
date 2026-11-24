@@ -10,6 +10,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import com.drmohammed.antiporn.R
+import com.drmohammed.antiporn.data.repository.ApprovalDecisionResult
 import com.drmohammed.antiporn.data.repository.ApprovalRepository
 import com.drmohammed.antiporn.ui.control.qr.QrScannerBottomSheet
 import com.drmohammed.antiporn.ui.control.qr.SelfControlQrManager
@@ -179,14 +180,43 @@ class SelfControlApprovalsViewBinder(
         activity.lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val repo = ApprovalRepository.getInstance(activity.applicationContext)
-                if (isApproved) {
+                val result = if (isApproved) {
                     repo.unsuspendAndApprove(pkg, "SELF")
                 } else {
                     repo.recordRejection(pkg, "SELF")
+                    null
                 }
                 withContext(Dispatchers.Main) {
-                    if (!activity.isFinishing && !activity.isDestroyed) {
-                        onReloadRequested()
+                    if (activity.isFinishing || activity.isDestroyed) return@withContext
+                    when (result) {
+                        null,
+                        ApprovalDecisionResult.APPROVED,
+                        ApprovalDecisionResult.APPROVED_CURFEW_DEFERRED -> {
+                            onReloadRequested()
+                        }
+                        ApprovalDecisionResult.BLOCKED_REJECTED -> {
+                            approveBtn?.isEnabled = true
+                            rejectBtn?.isEnabled = true
+                            Toast.makeText(activity, R.string.toast_quick_unsuspend_rejected, Toast.LENGTH_LONG).show()
+                            onReloadRequested()
+                        }
+                        ApprovalDecisionResult.BLOCKED_BLACKLISTED -> {
+                            approveBtn?.isEnabled = true
+                            rejectBtn?.isEnabled = true
+                            Toast.makeText(activity, R.string.toast_quick_unsuspend_blacklisted, Toast.LENGTH_LONG).show()
+                            onReloadRequested()
+                        }
+                        ApprovalDecisionResult.BLOCKED_SELF_CONTROL_FORBIDDEN -> {
+                            approveBtn?.isEnabled = true
+                            rejectBtn?.isEnabled = true
+                            Toast.makeText(activity, R.string.toast_quick_unsuspend_forbidden, Toast.LENGTH_LONG).show()
+                        }
+                        ApprovalDecisionResult.FAILED_NOT_DEVICE_OWNER,
+                        ApprovalDecisionResult.FAILED_DPM_ERROR -> {
+                            approveBtn?.isEnabled = true
+                            rejectBtn?.isEnabled = true
+                            Toast.makeText(activity, R.string.toast_self_policy_save_failed, Toast.LENGTH_SHORT).show()
+                        }
                     }
                 }
             } catch (e: Exception) {

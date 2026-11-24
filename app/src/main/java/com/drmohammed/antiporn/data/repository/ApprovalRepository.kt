@@ -5,9 +5,11 @@ import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
-import android.util.Log
+import com.drmohammed.antiporn.core.util.SafeAndroidLog as Log
+import androidx.annotation.VisibleForTesting
 import com.drmohammed.antiporn.AdminReceiver
 import com.drmohammed.antiporn.R
+import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.core.policy.AppPolicyRegistry
 import com.drmohammed.antiporn.curfew.CurfewAppResolver
 import com.drmohammed.antiporn.curfew.CurfewConfig
@@ -22,8 +24,10 @@ import com.drmohammed.antiporn.notification.model.NotificationCategory
 import com.drmohammed.antiporn.notification.registry.NotificationRegistry
 import com.drmohammed.antiporn.shields.AppSuspensionShield
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.DocumentReference
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.CoroutineScope
@@ -34,6 +38,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import timber.log.Timber
+
+enum class ApprovalDecisionResult {
+    APPROVED,
+    APPROVED_CURFEW_DEFERRED,
+    BLOCKED_BLACKLISTED,
+    BLOCKED_REJECTED,
+    BLOCKED_SELF_CONTROL_FORBIDDEN,
+    FAILED_NOT_DEVICE_OWNER,
+    FAILED_DPM_ERROR
+}
 
 /**
  * Repository responsible for managing Zero-Trust app installation approvals.
@@ -48,14 +62,135 @@ class ApprovalRepository(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var approvalsListener: ListenerRegistration? = null
 
+    @VisibleForTesting
+    internal var policyProvider: () -> DevicePolicyBundle = {
+        PolicyRepository.getInstance(appContext).getCurrentPolicy()
+    }
+
+    @VisibleForTesting
+    internal var currentTimeMillisProvider: () -> Long = {
+        com.drmohammed.antiporn.core.time.TrustedTimeProvider.currentTimeMillis(appContext)
+    }
+
+    @VisibleForTesting
+    internal var isDeviceOwnerProvider: () -> Boolean = {
+        com.drmohammed.antiporn.telemetry.SafeDpmGateway.isDeviceOwner(appContext)
+    }
+
+    @VisibleForTesting
+    internal var isBlockActiveProvider: () -> Boolean = {
+        CurfewEnforcer.isEffectiveBlockActive(appContext)
+    }
+
+    @VisibleForTesting
+    internal var immunePackagesProvider: () -> Set<String> = {
+        CurfewAppResolver.resolveImmunePackages(appContext)
+    }
+
+    @VisibleForTesting
+    internal var appLabelProvider: (String) -> String = { packageName ->
+        try {
+            val pm = appContext.packageManager
+            val appInfo = pm.getApplicationInfo(packageName, 0)
+            pm.getApplicationLabel(appInfo).toString()
+        } catch (e: Exception) {
+            packageName
+        }
+    }
+
+    @VisibleForTesting
+    internal var isPackageInstalledProvider: (String) -> Boolean = { packageName ->
+        try {
+            appContext.packageManager.getPackageInfo(packageName, 0)
+            true
+        } catch (e: PackageManager.NameNotFoundException) {
+            false
+        } catch (e: Exception) {
+            Log.w(TAG, "Error checking package info for $packageName", e)
+            false
+        }
+    }
+
+    @VisibleForTesting
+    internal var isAppHiddenProvider: (String) -> Boolean = { packageName ->
+        com.drmohammed.antiporn.telemetry.SafeDpmGateway.isApplicationHiddenBlocking(appContext, packageName).getOrNull() == true
+    }
+
+    @VisibleForTesting
+    internal var setAppHiddenProvider: (String, Boolean) -> Boolean = { packageName, hidden ->
+        com.drmohammed.antiporn.telemetry.SafeDpmGateway.setApplicationHiddenBlocking(appContext, packageName, hidden).getOrNull() ?: false
+    }
+
+    @VisibleForTesting
+    internal var setPackagesSuspendedProvider: (Array<String>, Boolean) -> Boolean = { packages, suspended ->
+        try {
+            val dpmResult = com.drmohammed.antiporn.telemetry.SafeDpmGateway.setPackagesSuspendedBlocking(appContext, packages, suspended)
+            val failed = dpmResult.getOrNull()
+            dpmResult is com.drmohammed.antiporn.telemetry.DpmExecutionResult.Success &&
+                (failed == null || packages.none { failed.contains(it) })
+        } catch (e: Exception) {
+            Log.w(TAG, "Exception calling setPackagesSuspended($suspended) for ${packages.joinToString()}", e)
+            false
+        }
+    }
+
+    @VisibleForTesting
+    internal var suspendWithMessageProvider: (String, String) -> Boolean = { packageName, message ->
+        try {
+            com.drmohammed.antiporn.telemetry.SafeDpmGateway.setPackageSuspendedWithMessageBlocking(
+                context = appContext,
+                packageName = packageName,
+                message = message
+            ).getOrNull() == true
+        } catch (e: Exception) {
+            Log.w(TAG, "Exception calling setPackageSuspendedWithMessage for $packageName", e)
+            false
+        }
+    }
+
+    @VisibleForTesting
+    internal var watcherSyncer: () -> Unit = {
+        ZeroTrustForegroundWatcher.syncWatcherState(appContext)
+    }
+
+    @VisibleForTesting
+    internal var foregroundEvaluator: (String) -> Unit = { packageName ->
+        ZeroTrustForegroundWatcher.evaluateCurrentForegroundApp(appContext, immediateTargetPackage = packageName)
+    }
+
+    @VisibleForTesting
+    internal var notificationDispatcher: (String, Boolean, Boolean, String?) -> Unit = { packageName, approved, isCurfewDeferred, decidedBy ->
+        postApprovalNotification(packageName, approved, isCurfewDeferred, decidedBy)
+    }
+
+    @VisibleForTesting
+    internal var cloudDecisionSyncer: (String) -> Unit = { packageName ->
+        syncApprovalDecisionToCloud(packageName)
+    }
+
+    @VisibleForTesting
+    internal var firestoreUploader: (suspend (PendingApprovalEntity) -> Boolean)? = null
+
+    @VisibleForTesting
+    internal var stringProvider: (Int) -> String = { resId ->
+        appContext.getString(resId)
+    }
+
+    @VisibleForTesting
+    internal var systemCriticalChecker: (String) -> Boolean = { packageName ->
+        CurfewAppResolver.isSystemCriticalOrImmune(appContext, packageName)
+    }
+
     val pendingApprovalsFlow: Flow<List<PendingApprovalEntity>> = approvalDao.getPendingApprovalsFlow()
+
+    private fun resolveAppLabel(packageName: String): String = appLabelProvider(packageName)
 
     /**
      * Intercepts a newly installed package:
      * Freezes it in 0ms via DevicePolicyManager, records it locally, and asynchronously submits a cloud approval ticket.
      */
     fun freezeAndSubmitApproval(packageName: String) {
-        if (CurfewAppResolver.isSystemCriticalOrImmune(appContext, packageName)) {
+        if (systemCriticalChecker(packageName)) {
             Log.i(TAG, "Package $packageName is immune/self/system. Skipping freeze and approval submission.")
             return
         }
@@ -76,7 +211,7 @@ class ApprovalRepository(
         showToast: Boolean = true,
         isHighRisk: Boolean = false
     ): Boolean {
-        if (com.drmohammed.antiporn.curfew.CurfewAppResolver.isSystemCriticalOrImmune(appContext, packageName)) {
+        if (systemCriticalChecker(packageName)) {
             Log.i(TAG, "IRON GUARD: Package $packageName is critical system / launcher / dialer / keyboard / immune. Skipping freeze.")
             return false
         }
@@ -92,28 +227,24 @@ class ApprovalRepository(
             return false
         }
 
-        if (!com.drmohammed.antiporn.telemetry.SafeDpmGateway.isDeviceOwner(appContext)) {
+        if (!isDeviceOwnerProvider()) {
             Log.w(TAG, "Cannot freeze $packageName: Not Device/Profile Owner")
             return false
         }
 
         // 1. Instant 0ms suspension with Fail-Secure Fallback
         val freezeMessage = if (isHighRisk) {
-            appContext.getString(R.string.toast_high_risk_app_suspended)
+            stringProvider(R.string.toast_high_risk_app_suspended)
         } else {
-            appContext.getString(R.string.toast_app_suspended_by_guardian)
+            stringProvider(R.string.toast_app_suspended_by_guardian)
         }
-        val suspended = com.drmohammed.antiporn.telemetry.SafeDpmGateway.setPackageSuspendedWithMessageBlocking(
-            context = appContext,
-            packageName = packageName,
-            message = freezeMessage
-        ).getOrNull() == true
+        val suspended = suspendWithMessageProvider(packageName, freezeMessage)
 
         // Self-healing: Zero-Trust architecture requires unapproved apps to be visible & suspended, NEVER hidden.
         // If an application was previously hidden by a legacy version, unhide it immediately so it appears on launcher as frozen.
         try {
-            if (com.drmohammed.antiporn.telemetry.SafeDpmGateway.isApplicationHiddenBlocking(appContext, packageName).getOrNull() == true) {
-                com.drmohammed.antiporn.telemetry.SafeDpmGateway.setApplicationHiddenBlocking(appContext, packageName, false)
+            if (isAppHiddenProvider(packageName)) {
+                setAppHiddenProvider(packageName, false)
                 Log.i(TAG, "Self-healing: Unhid package $packageName during Zero-Trust freeze")
             }
         } catch (e: Exception) {
@@ -147,19 +278,21 @@ class ApprovalRepository(
             }
         }
 
-        // 2. Resolve human-readable application label
-        val appName = try {
-            val pm = appContext.packageManager
-            val appInfo = pm.getApplicationInfo(packageName, 0)
-            pm.getApplicationLabel(appInfo).toString()
-        } catch (e: Exception) {
-            packageName
+        val existing = approvalDao.getApprovalByPackageNameBlocking(packageName)
+        if (existing?.isRejected == true) {
+            Log.w(TAG, "Preserving existing REJECTED status for $packageName; skipping PENDING overwrite.")
+            watcherSyncer()
+            foregroundEvaluator(packageName)
+            return true
         }
+
+        // 2. Resolve human-readable application label
+        val appName = resolveAppLabel(packageName)
 
         val approvalEntity = PendingApprovalEntity(
             packageName = packageName,
             appName = appName,
-            requestedAt = com.drmohammed.antiporn.core.time.TrustedTimeProvider.currentTimeMillis(appContext),
+            requestedAt = currentTimeMillisProvider(),
             status = finalStatus,
             isCloudSynced = false
         )
@@ -195,8 +328,8 @@ class ApprovalRepository(
         }
 
         // 4. Update Zero-Trust active foreground watcher immediately and trigger in-memory anti-race evaluation
-        ZeroTrustForegroundWatcher.syncWatcherState(appContext)
-        ZeroTrustForegroundWatcher.evaluateCurrentForegroundApp(appContext, immediateTargetPackage = packageName)
+        watcherSyncer()
+        foregroundEvaluator(packageName)
 
         return true
     }
@@ -239,6 +372,35 @@ class ApprovalRepository(
      */
     suspend fun uploadSingleApprovalSync(approval: PendingApprovalEntity): Boolean = withContext(Dispatchers.IO) {
         try {
+            val expectedStatus = approval.status
+            val expectedDecidedAt = approval.decidedAt
+
+            // Guard: AUTO_APPROVED_UNLOCKED does not need to be uploaded to cloud
+            if (approval.decidedBy == "AUTO_APPROVED_UNLOCKED") {
+                approvalDao.markApprovalCloudSyncedIfMatchingBlocking(
+                    packageName = approval.packageName,
+                    expectedStatus = expectedStatus,
+                    expectedDecidedAt = expectedDecidedAt,
+                    isSynced = 1
+                )
+                Log.d(TAG, "Skipping cloud upload for AUTO_APPROVED_UNLOCKED: ${approval.packageName}")
+                return@withContext true
+            }
+
+            val customUploader = firestoreUploader
+            if (customUploader != null) {
+                val uploaded = customUploader(approval)
+                if (uploaded) {
+                    approvalDao.markApprovalCloudSyncedIfMatchingBlocking(
+                        packageName = approval.packageName,
+                        expectedStatus = expectedStatus,
+                        expectedDecidedAt = expectedDecidedAt,
+                        isSynced = 1
+                    )
+                }
+                return@withContext uploaded
+            }
+
             val uid = FirebaseAuth.getInstance().currentUser?.uid
                 ?: AccountabilityRepository.getInstance(appContext).getCachedUid()
             if (uid.isBlank()) {
@@ -247,26 +409,120 @@ class ApprovalRepository(
             }
 
             val firestore = FirebaseFirestore.getInstance()
-            val data = mapOf(
+            val docRef = firestore.collection("policies")
+                .document(uid)
+                .collection("approvals")
+                .document(approval.packageName)
+
+            val resolvedAppName = approval.appName.takeIf { it.isNotBlank() && it != approval.packageName }
+                ?: resolveAppLabel(approval.packageName)
+            val fullData = mutableMapOf<String, Any>(
                 "packageName" to approval.packageName,
-                "appName" to approval.appName,
+                "appName" to resolvedAppName,
                 "wardUid" to uid,
                 "status" to approval.status,
                 "requestedAt" to approval.requestedAt
             )
-            firestore.collection("policies")
-                .document(uid)
-                .collection("approvals")
-                .document(approval.packageName)
-                .set(data)
-                .await()
+            if (approval.status == PendingApprovalEntity.STATUS_PENDING) {
+                approval.decidedBy?.takeIf { it.isNotBlank() }?.let { fullData["decidedBy"] = it }
+                approval.decidedAt?.takeIf { it > 0 }?.let { fullData["decidedAt"] = it }
+                try {
+                    docRef.set(fullData, SetOptions.merge()).await()
+                } catch (e: FirebaseFirestoreException) {
+                    if (e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                        reconcileWithCloudDocument(docRef, approval)
+                        return@withContext false
+                    }
+                    throw e
+                }
+            } else {
+                val decidedByValue = approval.decidedBy?.takeIf { it.isNotBlank() } ?: "SELF"
+                val decidedAtValue = approval.decidedAt?.takeIf { it > 0 } ?: currentTimeMillisProvider()
+                fullData["decidedBy"] = decidedByValue
+                fullData["decidedAt"] = decidedAtValue
 
-            approvalDao.markApprovalCloudSyncedBlocking(approval.packageName, 1)
+                val decisionUpdate = mapOf<String, Any>(
+                    "status" to approval.status,
+                    "decidedBy" to decidedByValue,
+                    "decidedAt" to decidedAtValue
+                )
+                try {
+                    docRef.update(decisionUpdate).await()
+                } catch (e: FirebaseFirestoreException) {
+                    when (e.code) {
+                        FirebaseFirestoreException.Code.NOT_FOUND -> {
+                            try {
+                                docRef.set(fullData, SetOptions.merge()).await()
+                            } catch (setEx: FirebaseFirestoreException) {
+                                if (setEx.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                                    reconcileWithCloudDocument(docRef, approval)
+                                    return@withContext false
+                                }
+                                throw setEx
+                            }
+                        }
+                        FirebaseFirestoreException.Code.PERMISSION_DENIED -> {
+                            reconcileWithCloudDocument(docRef, approval)
+                            return@withContext false
+                        }
+                        else -> throw e
+                    }
+                }
+            }
+
+            approvalDao.markApprovalCloudSyncedIfMatchingBlocking(
+                packageName = approval.packageName,
+                expectedStatus = expectedStatus,
+                expectedDecidedAt = expectedDecidedAt,
+                isSynced = 1
+            )
             Log.i(TAG, "Uploaded approval ticket to cloud for ${approval.packageName} under /policies/$uid/approvals")
             true
         } catch (e: Exception) {
             Log.e(TAG, "Error uploading approval ticket to Firestore for ${approval.packageName}", e)
             false
+        }
+    }
+
+    private suspend fun reconcileWithCloudDocument(
+        docRef: DocumentReference,
+        localApproval: PendingApprovalEntity
+    ) {
+        val packageName = localApproval.packageName
+        try {
+            val snapshot = docRef.get().await()
+            if (!snapshot.exists()) return
+            val cloudStatus = snapshot.getString("status") ?: return
+            val cloudDecidedBy = snapshot.getString("decidedBy")
+            when (cloudStatus) {
+                PendingApprovalEntity.STATUS_REJECTED -> {
+                    Log.w(TAG, "Reconciling local state for $packageName to cloud REJECTED (decidedBy=$cloudDecidedBy) after PERMISSION_DENIED")
+                    recordRejection(packageName, cloudDecidedBy, syncToCloud = false)
+                }
+                PendingApprovalEntity.STATUS_APPROVED -> {
+                    val isGuardianDecision = !cloudDecidedBy.isNullOrBlank() &&
+                        !cloudDecidedBy.equals("SELF", ignoreCase = true)
+                    if (isGuardianDecision) {
+                        Log.w(TAG, "Reconciling local state for $packageName to cloud guardian APPROVED (decidedBy=$cloudDecidedBy) after PERMISSION_DENIED")
+                        unsuspendAndApprove(
+                            packageName = packageName,
+                            decidedBy = cloudDecidedBy,
+                            syncToCloud = false,
+                            forceInventorySync = false
+                        )
+                    } else if (localApproval.isApproved) {
+                        Log.i(TAG, "Cloud already holds APPROVED ($cloudDecidedBy) for $packageName; marking local row synced")
+                        approvalDao.markApprovalCloudSyncedIfMatchingBlocking(
+                            packageName = packageName,
+                            expectedStatus = localApproval.status,
+                            expectedDecidedAt = localApproval.decidedAt,
+                            isSynced = 1
+                        )
+                    }
+                }
+            }
+        } catch (reconcileError: Exception) {
+            Log.w(TAG, "Failed reconciling cloud document for $packageName after PERMISSION_DENIED: ${reconcileError.message}")
         }
     }
 
@@ -286,107 +542,122 @@ class ApprovalRepository(
         decidedBy: String? = null,
         syncToCloud: Boolean = true,
         forceInventorySync: Boolean = false
-    ) {
+    ): ApprovalDecisionResult {
         // Under Unified Zero-Trust architecture, supervisor approval is unconditionally honored for all applications.
 
-        val policy = PolicyRepository.getInstance(appContext).getCurrentPolicy()
+        val policy = policyProvider()
         if (policy.customBlacklistPackages.contains(packageName)) {
             Log.w(TAG, "Security Alert: Cannot unsuspend $packageName - currently in custom blacklist! Skipping unsuspend without poisoning approval record.")
-            return
+            return ApprovalDecisionResult.BLOCKED_BLACKLISTED
         }
 
-        if (!com.drmohammed.antiporn.telemetry.SafeDpmGateway.isDeviceOwner(appContext)) return
+        val isSelf = decidedBy?.equals("SELF", ignoreCase = true) == true
+        // Security Guard: Prevent ward self-approval from overriding explicit guardian REJECTED status or forbidden self-control
+        if (isSelf) {
+            val existing = approvalDao.getApprovalByPackageNameBlocking(packageName)
+            if (existing?.status?.equals(PendingApprovalEntity.STATUS_REJECTED, ignoreCase = true) == true) {
+                Log.w(TAG, "Security Alert: Ward attempted self-approval for $packageName which was REJECTED by guardian! Aborting self-approval.")
+                return ApprovalDecisionResult.BLOCKED_REJECTED
+            }
+            if (syncToCloud) {
+                val isSupervised = policy.isSupervised || !policy.guardianUid.isNullOrBlank()
+                if (isSupervised && (!policy.isSelfControlAllowed || (!policy.selfControlNewAppsAllowed && !policy.selfControlAppsAllowed))) {
+                    Log.w(TAG, "Security Alert: Ward attempted self-approval for $packageName while self-control for new/app approvals is forbidden by supervisor!")
+                    return ApprovalDecisionResult.BLOCKED_SELF_CONTROL_FORBIDDEN
+                }
+            }
+        }
 
-        val isBlockActive = CurfewEnforcer.isEffectiveBlockActive(appContext)
+        if (!isDeviceOwnerProvider()) return ApprovalDecisionResult.FAILED_NOT_DEVICE_OWNER
+
+        val resolvedAppLabel = resolveAppLabel(packageName)
+        val now = currentTimeMillisProvider()
+        val targetSynced = if (syncToCloud) 0 else 1
+        val isBlockActive = isBlockActiveProvider()
         val isWhitelisted = CurfewConfig.STATIC_WHITELIST.contains(packageName) ||
-                CurfewAppResolver.resolveImmunePackages(appContext).contains(packageName) ||
+                immunePackagesProvider().contains(packageName) ||
                 policy.customCurfewWhitelistPackages.contains(packageName)
 
         if (isBlockActive && !isWhitelisted) {
             Log.i(TAG, "Package $packageName approved by $decidedBy, but kept suspended until curfew wakeup")
             approvalDao.upsertApprovalStatusBlocking(
                 packageName = packageName,
+                appName = resolvedAppLabel,
                 status = PendingApprovalEntity.STATUS_APPROVED,
                 decidedBy = decidedBy,
-                decidedAt = com.drmohammed.antiporn.core.time.TrustedTimeProvider.currentTimeMillis(appContext),
-                isSynced = 1
+                decidedAt = now,
+                isSynced = targetSynced
             )
-            ZeroTrustForegroundWatcher.syncWatcherState(appContext)
+            watcherSyncer()
             if (syncToCloud) {
-                syncApprovalDecisionToCloud(packageName, PendingApprovalEntity.STATUS_APPROVED, decidedBy)
+                cloudDecisionSyncer(packageName)
             }
-            postApprovalNotification(packageName, approved = true, isCurfewDeferred = true, decidedBy = decidedBy)
-            return
+            notificationDispatcher(packageName, true, true, decidedBy)
+            return ApprovalDecisionResult.APPROVED_CURFEW_DEFERRED
         }
 
-        try {
+        return try {
             // Unhide application if it was hidden via Fail-Secure fallback
             try {
-                if (com.drmohammed.antiporn.telemetry.SafeDpmGateway.isApplicationHiddenBlocking(appContext, packageName).getOrNull() == true) {
-                    val unhidden = com.drmohammed.antiporn.telemetry.SafeDpmGateway.setApplicationHiddenBlocking(appContext, packageName, false).getOrNull() ?: false
+                if (isAppHiddenProvider(packageName)) {
+                    val unhidden = setAppHiddenProvider(packageName, false)
                     Log.i(TAG, "Unhid package $packageName on approval: $unhidden")
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Exception unhiding package $packageName on approval", e)
             }
 
-            val dpmResult = try {
-                com.drmohammed.antiporn.telemetry.SafeDpmGateway.setPackagesSuspendedBlocking(appContext, arrayOf(packageName), false)
-            } catch (e: Exception) {
-                Log.w(TAG, "Exception calling setPackagesSuspended(false) for $packageName", e)
-                null
-            }
-
-            val failed = dpmResult?.getOrNull()
-            val isDpmSuccess = dpmResult is com.drmohammed.antiporn.telemetry.DpmExecutionResult.Success && failed?.contains(packageName) != true
+            val isDpmSuccess = setPackagesSuspendedProvider(arrayOf(packageName), false)
 
             if (!isDpmSuccess) {
-                val isInstalled = try {
-                    appContext.packageManager.getPackageInfo(packageName, 0)
-                    true
-                } catch (e: PackageManager.NameNotFoundException) {
-                    false
-                } catch (e: Exception) {
-                    Log.w(TAG, "Error checking package info for $packageName", e)
-                    false
-                }
+                val isInstalled = isPackageInstalledProvider(packageName)
 
                 if (!isInstalled) {
                     Log.i(TAG, "Package $packageName is uninstalled; marking pending approval as approved/resolved")
                     approvalDao.upsertApprovalStatusBlocking(
                         packageName = packageName,
+                        appName = resolvedAppLabel,
                         status = PendingApprovalEntity.STATUS_APPROVED,
                         decidedBy = decidedBy,
-                        decidedAt = com.drmohammed.antiporn.core.time.TrustedTimeProvider.currentTimeMillis(appContext),
-                        isSynced = 1
+                        decidedAt = now,
+                        isSynced = targetSynced
                     )
-                    ZeroTrustForegroundWatcher.syncWatcherState(appContext)
+                    watcherSyncer()
                     if (syncToCloud) {
-                        syncApprovalDecisionToCloud(packageName, PendingApprovalEntity.STATUS_APPROVED, decidedBy)
+                        cloudDecisionSyncer(packageName)
                     }
+                    ApprovalDecisionResult.APPROVED
                 } else {
-                    Log.e(TAG, "Failed unfreezing package $packageName: DPM returned failure ($dpmResult)")
+                    Log.e(TAG, "Failed unfreezing package $packageName: DPM returned failure")
+                    ApprovalDecisionResult.FAILED_DPM_ERROR
                 }
             } else {
                 approvalDao.upsertApprovalStatusBlocking(
                     packageName = packageName,
+                    appName = resolvedAppLabel,
                     status = PendingApprovalEntity.STATUS_APPROVED,
                     decidedBy = decidedBy,
-                    decidedAt = com.drmohammed.antiporn.core.time.TrustedTimeProvider.currentTimeMillis(appContext),
-                    isSynced = 1
+                    decidedAt = now,
+                    isSynced = targetSynced
                 )
                 Log.i(TAG, "Unfrozen and approved package: $packageName")
-                ZeroTrustForegroundWatcher.syncWatcherState(appContext)
+                watcherSyncer()
                 if (syncToCloud) {
-                    syncApprovalDecisionToCloud(packageName, PendingApprovalEntity.STATUS_APPROVED, decidedBy)
+                    cloudDecisionSyncer(packageName)
                 }
                 if (forceInventorySync) {
-                    AppInventoryManager.getInstance(appContext).syncInventoryToCloudAsync(force = true)
+                    try {
+                        AppInventoryManager.getInstance(appContext).syncInventoryToCloudAsync(force = true)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed triggering forced inventory sync after approval of $packageName", e)
+                    }
                 }
-                postApprovalNotification(packageName, approved = true, isCurfewDeferred = false, decidedBy = decidedBy)
+                notificationDispatcher(packageName, true, false, decidedBy)
+                ApprovalDecisionResult.APPROVED
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed unfreezing package $packageName", e)
+            ApprovalDecisionResult.FAILED_DPM_ERROR
         }
     }
 
@@ -395,8 +666,14 @@ class ApprovalRepository(
      */
     fun removePendingApproval(packageName: String) {
         try {
+            val existing = approvalDao.getApprovalByPackageNameBlocking(packageName)
+            if (existing?.isRejected == true) {
+                Log.i(TAG, "Preserving REJECTED approval record for $packageName on uninstall to prevent uninstall-reinstall bypass")
+                watcherSyncer()
+                return
+            }
             approvalDao.deletePendingApprovalBlocking(packageName)
-            ZeroTrustForegroundWatcher.syncWatcherState(appContext)
+            watcherSyncer()
             deleteApprovalFromCloud(packageName)
             Log.i(TAG, "Removed pending approval for package: $packageName")
         } catch (e: Exception) {
@@ -413,19 +690,32 @@ class ApprovalRepository(
         syncToCloud: Boolean = true
     ) {
         try {
+            if (isDeviceOwnerProvider() && isPackageInstalledProvider(packageName)) {
+                val suspendMessage = runCatching {
+                    stringProvider(R.string.toast_app_suspended_by_guardian)
+                }.getOrNull().orEmpty()
+                val suspended = suspendWithMessageProvider(packageName, suspendMessage)
+                if (!suspended) {
+                    Log.w(TAG, "Immediate re-freeze reported unconfirmed for rejected package: $packageName")
+                }
+            }
+            val resolvedAppLabel = resolveAppLabel(packageName)
+            val now = currentTimeMillisProvider()
+            val targetSynced = if (syncToCloud) 0 else 1
             approvalDao.upsertApprovalStatusBlocking(
                 packageName = packageName,
+                appName = resolvedAppLabel,
                 status = PendingApprovalEntity.STATUS_REJECTED,
                 decidedBy = decidedBy,
-                decidedAt = com.drmohammed.antiporn.core.time.TrustedTimeProvider.currentTimeMillis(appContext),
-                isSynced = 1
+                decidedAt = now,
+                isSynced = targetSynced
             )
             Log.i(TAG, "Recorded rejection for package: $packageName by $decidedBy")
-            ZeroTrustForegroundWatcher.syncWatcherState(appContext)
+            watcherSyncer()
             if (syncToCloud) {
-                syncApprovalDecisionToCloud(packageName, PendingApprovalEntity.STATUS_REJECTED, decidedBy)
+                cloudDecisionSyncer(packageName)
             }
-            postApprovalNotification(packageName, approved = false, isCurfewDeferred = false, decidedBy = decidedBy)
+            notificationDispatcher(packageName, false, false, decidedBy)
         } catch (e: Exception) {
             Log.e(TAG, "Failed recording rejection for package $packageName", e)
         }
@@ -436,7 +726,7 @@ class ApprovalRepository(
      */
     fun recordApproval(packageName: String, appName: String, decidedBy: String = "AUTO_APPROVED_UNLOCKED") {
         try {
-            val now = com.drmohammed.antiporn.core.time.TrustedTimeProvider.currentTimeMillis(appContext)
+            val now = currentTimeMillisProvider()
             val entity = PendingApprovalEntity(
                 packageName = packageName,
                 appName = appName,
@@ -444,7 +734,7 @@ class ApprovalRepository(
                 status = PendingApprovalEntity.STATUS_APPROVED,
                 decidedBy = decidedBy,
                 decidedAt = now,
-                isCloudSynced = false
+                isCloudSynced = true
             )
             approvalDao.savePendingApprovalBlocking(entity)
             Timber.tag(TAG).i("Recorded approval for $packageName decidedBy $decidedBy")
@@ -460,14 +750,9 @@ class ApprovalRepository(
         decidedBy: String?
     ) {
         try {
-            val pm = appContext.packageManager
-            val appLabel = try {
-                val appInfo = pm.getApplicationInfo(packageName, 0)
-                pm.getApplicationLabel(appInfo).toString()
-            } catch (e: Exception) {
-                packageName
-            }
+            val appLabel = resolveAppLabel(packageName)
 
+            val isSelf = decidedBy?.equals("SELF", ignoreCase = true) == true
             val guardianName = decidedBy?.takeUnless { it.isBlank() || it.equals("null", ignoreCase = true) }
                 ?: appContext.getString(R.string.guardian_default_name)
 
@@ -478,15 +763,27 @@ class ApprovalRepository(
             if (approved) {
                 title = appContext.getString(R.string.notif_approval_granted_title)
                 if (isCurfewDeferred) {
-                    desc = appContext.getString(R.string.notif_approval_deferred_curfew_desc, appLabel, guardianName)
+                    desc = if (isSelf) {
+                        appContext.getString(R.string.notif_self_qr_approval_deferred_curfew_desc, appLabel)
+                    } else {
+                        appContext.getString(R.string.notif_approval_deferred_curfew_desc, appLabel, guardianName)
+                    }
                     actionType = NotificationActionType.OPEN_CURFEW
                 } else {
-                    desc = appContext.getString(R.string.notif_approval_granted_desc, guardianName, appLabel)
+                    desc = if (isSelf) {
+                        appContext.getString(R.string.notif_self_qr_approval_granted_desc, appLabel)
+                    } else {
+                        appContext.getString(R.string.notif_approval_granted_desc, guardianName, appLabel)
+                    }
                     actionType = NotificationActionType.LAUNCH_APP
                 }
             } else {
                 title = appContext.getString(R.string.notif_approval_rejected_title)
-                desc = appContext.getString(R.string.notif_approval_rejected_desc, guardianName, appLabel)
+                desc = if (isSelf) {
+                    appContext.getString(R.string.notif_self_qr_approval_rejected_desc, appLabel)
+                } else {
+                    appContext.getString(R.string.notif_approval_rejected_desc, guardianName, appLabel)
+                }
                 actionType = NotificationActionType.NONE
             }
 
@@ -510,24 +807,11 @@ class ApprovalRepository(
         }
     }
 
-    private fun syncApprovalDecisionToCloud(packageName: String, status: String, decidedBy: String?) {
-        val myUid = AccountabilityRepository.getInstance(appContext).getCachedUid()
-        if (myUid.isBlank()) return
+    private fun syncApprovalDecisionToCloud(packageName: String) {
         scope.launch {
             try {
-                val firestore = FirebaseFirestore.getInstance()
-                val data = mapOf(
-                    "status" to status,
-                    "decidedBy" to (decidedBy ?: "SELF"),
-                    "decidedAt" to com.drmohammed.antiporn.core.time.TrustedTimeProvider.currentTimeMillis(appContext)
-                )
-                firestore.collection("policies")
-                    .document(myUid)
-                    .collection("approvals")
-                    .document(packageName)
-                    .set(data, SetOptions.merge())
-                    .await()
-                Log.i(TAG, "Synced approval decision for $packageName ($status) to cloud ($myUid)")
+                val entity = approvalDao.getApprovalByPackageNameBlocking(packageName) ?: return@launch
+                uploadSingleApprovalSync(entity)
             } catch (e: Exception) {
                 Log.w(TAG, "Failed syncing approval decision for $packageName to cloud: ${e.message}")
             }
@@ -535,7 +819,8 @@ class ApprovalRepository(
     }
 
     private fun deleteApprovalFromCloud(packageName: String) {
-        val myUid = AccountabilityRepository.getInstance(appContext).getCachedUid()
+        val myUid = FirebaseAuth.getInstance().currentUser?.uid
+            ?: AccountabilityRepository.getInstance(appContext).getCachedUid()
         if (myUid.isBlank()) return
         scope.launch {
             try {

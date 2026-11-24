@@ -68,19 +68,7 @@ class AccountabilityViewModelPairingTest {
             }
         )
 
-        val vm = AccountabilityViewModel(
-            application = fakeApp,
-            accountabilityRepo = repo,
-            approvalRepo = null,
-            googleAuthManager = null,
-            policyRepository = null,
-            ioDispatcher = Dispatchers.Unconfined,
-            mainDispatcher = Dispatchers.Unconfined,
-            policyProvider = { DevicePolicyBundle.defaultPolicy() },
-            startFirestoreSyncAction = {},
-            rollbackCloudSyncAction = {},
-            autoObserve = false
-        )
+        val vm = createViewModel(repo = repo)
 
         CloudSyncManager.setCloudSyncEnabled(fakeApp, true)
         vm.loadPairingCode()
@@ -122,19 +110,7 @@ class AccountabilityViewModelPairingTest {
             wardsList = listOf(activeWard)
         )
 
-        val vm = AccountabilityViewModel(
-            application = fakeApp,
-            accountabilityRepo = repo,
-            approvalRepo = null,
-            googleAuthManager = null,
-            policyRepository = null,
-            ioDispatcher = Dispatchers.Unconfined,
-            mainDispatcher = Dispatchers.Unconfined,
-            policyProvider = { DevicePolicyBundle.defaultPolicy() },
-            startFirestoreSyncAction = {},
-            rollbackCloudSyncAction = {},
-            autoObserve = false
-        )
+        val vm = createViewModel(repo = repo)
 
         vm.loadPairingCode()
 
@@ -157,21 +133,12 @@ class AccountabilityViewModelPairingTest {
             }
         )
 
-        val vm = AccountabilityViewModel(
-            application = fakeApp,
-            accountabilityRepo = repo,
-            approvalRepo = null,
-            googleAuthManager = null,
-            policyRepository = null,
-            ioDispatcher = Dispatchers.Unconfined,
-            mainDispatcher = Dispatchers.Unconfined,
-            policyProvider = { DevicePolicyBundle.defaultPolicy() },
-            startFirestoreSyncAction = {},
+        val vm = createViewModel(
+            repo = repo,
             rollbackCloudSyncAction = { app ->
                 rollbackInvoked = true
                 CloudSyncManager.setCloudSyncEnabled(app, false)
-            },
-            autoObserve = false
+            }
         )
 
         var callbackResult: Result<String>? = null
@@ -185,6 +152,29 @@ class AccountabilityViewModelPairingTest {
         assertEquals(0L, vm.uiState.value.pairingRemainingMs)
         assertFalse(vm.uiState.value.isCloudSyncEnabled)
         assertFalse(CloudSyncManager.isCloudSyncEnabled(fakeApp))
+    }
+
+    private fun createViewModel(
+        repo: FakeAccountabilityRepository,
+        policyProvider: suspend () -> DevicePolicyBundle = { DevicePolicyBundle.defaultPolicy() },
+        startFirestoreSyncAction: () -> Unit = {},
+        rollbackCloudSyncAction: suspend (Application) -> Unit = {}
+    ): AccountabilityViewModel {
+        return object : AccountabilityViewModel(
+            application = fakeApp,
+            accountabilityRepo = repo,
+            approvalRepo = null,
+            googleAuthManager = null,
+            policyRepository = null
+        ) {
+            override fun shouldAutoObserveOnInit(): Boolean = false
+        }.apply {
+            this.ioDispatcher = Dispatchers.Unconfined
+            this.mainDispatcher = Dispatchers.Unconfined
+            this.policyProvider = policyProvider
+            this.startFirestoreSyncAction = startFirestoreSyncAction
+            this.rollbackCloudSyncAction = rollbackCloudSyncAction
+        }
     }
 
     private class FakeAccountabilityRepository(

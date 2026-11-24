@@ -1,7 +1,7 @@
 package com.drmohammed.antiporn.notification.repository
 
 import android.content.Context
-import android.util.Log
+import com.drmohammed.antiporn.core.util.SafeAndroidLog as Log
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
 import com.drmohammed.antiporn.data.local.db.HisnRoomDatabase
 import com.drmohammed.antiporn.data.local.db.dao.InAppNotificationDao

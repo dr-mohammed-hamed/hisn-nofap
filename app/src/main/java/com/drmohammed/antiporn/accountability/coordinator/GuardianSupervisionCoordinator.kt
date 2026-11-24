@@ -1,7 +1,7 @@
 package com.drmohammed.antiporn.accountability.coordinator
 
 import android.content.Context
-import android.util.Log
+import com.drmohammed.antiporn.core.util.SafeAndroidLog as Log
 import androidx.annotation.VisibleForTesting
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
@@ -60,6 +60,16 @@ class GuardianSupervisionCoordinator(
 
     @VisibleForTesting
     var coordinatorScope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    @VisibleForTesting
+    internal var notificationPrefsName: String = "guardian_coordinator_prefs"
+
+    @VisibleForTesting
+    internal var stringProvider: (Int, Array<out Any>) -> String = { resId, args ->
+        if (args.isEmpty()) appContext.getString(resId) else appContext.getString(resId, *args)
+    }
+
+    private fun getStr(resId: Int, vararg args: Any): String = stringProvider(resId, args)
 
     private val appContext = context.applicationContext
 
@@ -268,6 +278,8 @@ class GuardianSupervisionCoordinator(
 
             val appName = doc.getString("appName") ?: pkg
             val status = doc.getString("status") ?: "PENDING"
+            val decidedBy = doc.getString("decidedBy")
+            val decidedAt = doc.getLong("decidedAt") ?: 0L
             val dedupKey = "guardian_req_${wardUid}_$pkg"
             val systemNotifId = computeSystemNotificationId(wardUid, pkg)
 
@@ -302,14 +314,31 @@ class GuardianSupervisionCoordinator(
                         notificationManager.cancelSystemNotification(systemNotifId)
 
                         // Update in-app notification record in SQLite so history reflects resolution
-                        updateInAppApprovalStatus(dedupKey, appName, wardName, status)
+                        updateInAppApprovalStatus(
+                            dedupKey = dedupKey,
+                            appName = appName,
+                            wardName = wardName,
+                            status = status,
+                            decidedBy = decidedBy,
+                            decidedAt = decidedAt,
+                            wardUid = wardUid,
+                            packageName = pkg
+                        )
                     }
                 }
 
                 DocumentChange.Type.REMOVED -> {
                     // Application uninstalled by ward; dismiss active status bar notification
                     notificationManager.cancelSystemNotification(systemNotifId)
-                    updateInAppApprovalStatus(dedupKey, appName, wardName, "REMOVED")
+                    updateInAppApprovalStatus(
+                        dedupKey = dedupKey,
+                        appName = appName,
+                        wardName = wardName,
+                        status = "REMOVED",
+                        decidedBy = null,
+                        wardUid = wardUid,
+                        packageName = pkg
+                    )
                 }
             }
         }
@@ -318,39 +347,113 @@ class GuardianSupervisionCoordinator(
     /**
      * Updates existing InAppNotification record in Room SQLite when an approval is resolved or cancelled.
      */
-    private suspend fun updateInAppApprovalStatus(
+    @VisibleForTesting
+    internal suspend fun updateInAppApprovalStatus(
         dedupKey: String,
         appName: String,
         wardName: String,
-        status: String
+        status: String,
+        decidedBy: String? = null,
+        decidedAt: Long = 0L,
+        wardUid: String? = null,
+        packageName: String? = null
     ) {
         try {
-            val existing = notificationRepository.getNotificationByDedupKey(dedupKey) ?: return
-            val guardianName = accountabilityRepository.getMyDisplayName()
-            val updatedTitle = if (status.equals("APPROVED", ignoreCase = true)) {
-                appContext.getString(R.string.notif_approval_granted_title)
-            } else if (status.equals("REJECTED", ignoreCase = true)) {
-                appContext.getString(R.string.notif_approval_rejected_title)
+            val isSelfApproved = isSelfApprovedDecision(status, decidedBy)
+            val isSelfRejected = isSelfRejectedDecision(status, decidedBy)
+            val actionPayload = if (!wardUid.isNullOrBlank() && !packageName.isNullOrBlank()) {
+                "$wardUid|$packageName"
             } else {
-                "${existing.title} (${appContext.getString(R.string.tab_approvals_rejected)})"
+                ""
+            }
+            val prefs = appContext.getSharedPreferences(notificationPrefsName, Context.MODE_PRIVATE)
+            val seenKey = "seen_decision_$dedupKey"
+            val decisionSignature = "$status:${decidedBy ?: ""}:$decidedAt"
+            val existing = notificationRepository.getNotificationByDedupKey(dedupKey)
+
+            if (existing == null) {
+                // Only create a new silent in-app notification for ward self-decisions not yet recorded
+                if (isSelfApproved || isSelfRejected) {
+                    val lastSeenSignature = prefs?.getString(seenKey, null)
+                    if (lastSeenSignature == decisionSignature) {
+                        return
+                    }
+
+                    val title = if (isSelfApproved) {
+                        getStr(R.string.notif_ward_self_qr_approved_title)
+                    } else {
+                        getStr(R.string.notif_ward_self_qr_rejected_title)
+                    }
+                    val message = if (isSelfApproved) {
+                        getStr(R.string.notif_ward_self_qr_approved_desc, "$appName ($wardName)")
+                    } else {
+                        getStr(R.string.notif_ward_self_qr_rejected_desc, "$appName ($wardName)")
+                    }
+
+                    notificationManager.postEventNotification(
+                        category = NotificationCategory.APPROVALS,
+                        title = title,
+                        message = message,
+                        dedupKey = dedupKey,
+                        cooldownMs = 0L,
+                        actionType = NotificationActionType.OPEN_APPROVALS_HUB,
+                        actionPayload = actionPayload,
+                        systemNotificationId = if (!wardUid.isNullOrBlank() && !packageName.isNullOrBlank()) {
+                            computeSystemNotificationId(wardUid, packageName)
+                        } else 0,
+                        channelId = NotificationRegistry.CHANNEL_ID_PROTECTION_EVENTS,
+                        postSystemNotification = false,
+                        importance = 2
+                    )
+                    prefs?.edit()?.putString(seenKey, decisionSignature)?.apply()
+                    Log.i(TAG, "Recorded silent in-app notification for $dedupKey (status=$status, decidedBy=$decidedBy)")
+                }
+                return
             }
 
-            val updatedMessage = if (status.equals("APPROVED", ignoreCase = true)) {
-                appContext.getString(R.string.notif_approval_granted_desc, guardianName, "$appName ($wardName)")
-            } else if (status.equals("REJECTED", ignoreCase = true)) {
-                appContext.getString(R.string.notif_approval_rejected_desc, guardianName, "$appName ($wardName)")
-            } else {
-                existing.message
+            val actorName = decidedBy?.takeIf { it.isNotBlank() && !it.equals("SELF", ignoreCase = true) }
+                ?: accountabilityRepository.getMyDisplayName()
+            val updatedTitle = when {
+                isSelfApproved -> getStr(R.string.notif_ward_self_qr_approved_title)
+                isSelfRejected -> getStr(R.string.notif_ward_self_qr_rejected_title)
+                status.equals("APPROVED", ignoreCase = true) -> getStr(R.string.notif_approval_granted_title)
+                status.equals("REJECTED", ignoreCase = true) -> getStr(R.string.notif_approval_rejected_title)
+                else -> {
+                    val rejectedSuffix = "(${getStr(R.string.tab_approvals_rejected)})"
+                    if (existing.title.endsWith(rejectedSuffix)) existing.title else "${existing.title} $rejectedSuffix"
+                }
+            }
+
+            val updatedMessage = when {
+                isSelfApproved -> getStr(R.string.notif_ward_self_qr_approved_desc, "$appName ($wardName)")
+                isSelfRejected -> getStr(R.string.notif_ward_self_qr_rejected_desc, "$appName ($wardName)")
+                status.equals("APPROVED", ignoreCase = true) -> getStr(R.string.notif_approval_granted_desc, actorName, "$appName ($wardName)")
+                status.equals("REJECTED", ignoreCase = true) -> getStr(R.string.notif_approval_rejected_desc, actorName, "$appName ($wardName)")
+                else -> existing.message
+            }
+
+            val updatedActionPayload = existing.actionPayload?.takeIf { it.isNotBlank() }
+                ?: actionPayload.takeIf { it.isNotBlank() }
+                ?: existing.actionPayload
+
+            if (existing.title == updatedTitle &&
+                existing.message == updatedMessage &&
+                existing.actionPayload == updatedActionPayload
+            ) {
+                return
             }
 
             notificationRepository.saveNotification(
                 existing.copy(
                     title = updatedTitle,
                     message = updatedMessage,
-                    actionType = NotificationActionType.OPEN_APPROVALS_HUB
+                    actionType = NotificationActionType.OPEN_APPROVALS_HUB,
+                    actionPayload = updatedActionPayload,
+                    isRead = false
                 ),
                 cooldownMs = 0L
             )
+            prefs?.edit()?.putString(seenKey, decisionSignature)?.apply()
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             Log.w(TAG, "Failed updating in-app approval status for $dedupKey", e)
@@ -535,6 +638,16 @@ class GuardianSupervisionCoordinator(
             return deactivationStatus.equals("PENDING", ignoreCase = true) &&
                 remoteTeardownRequestedAt <= 0L &&
                 deactivationUnlockAt > nowMs
+        }
+
+        internal fun isSelfApprovedDecision(status: String?, decidedBy: String?): Boolean {
+            return status?.equals("APPROVED", ignoreCase = true) == true &&
+                decidedBy?.equals("SELF", ignoreCase = true) == true
+        }
+
+        internal fun isSelfRejectedDecision(status: String?, decidedBy: String?): Boolean {
+            return status.equals("REJECTED", ignoreCase = true) &&
+                decidedBy?.equals("SELF", ignoreCase = true) == true
         }
 
         @Volatile

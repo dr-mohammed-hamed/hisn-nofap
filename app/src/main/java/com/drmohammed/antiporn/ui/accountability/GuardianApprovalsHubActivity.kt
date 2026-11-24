@@ -46,6 +46,7 @@ class GuardianApprovalsHubActivity : AppCompatActivity() {
     private var targetPackage: String? = null
     private var canonicalTargetWardId: String? = null
     private var hasScrolledToTarget = false
+    private var hasAutoSelectedTargetTab = false
 
     private val allApprovals = mutableListOf<WardApprovalModel>()
     private val wardMap = mutableMapOf<String, String>()
@@ -59,6 +60,7 @@ class GuardianApprovalsHubActivity : AppCompatActivity() {
         targetWardId = intent.getStringExtra(EXTRA_WARD_ID)
         targetPackage = intent.getStringExtra(EXTRA_TARGET_PACKAGE)
         hasScrolledToTarget = false
+        hasAutoSelectedTargetTab = false
 
         applyWindowInsets()
         initViews()
@@ -74,6 +76,7 @@ class GuardianApprovalsHubActivity : AppCompatActivity() {
         targetPackage = intent.getStringExtra(EXTRA_TARGET_PACKAGE)
         canonicalTargetWardId = null
         hasScrolledToTarget = false
+        hasAutoSelectedTargetTab = false
         loadWardsAndListenApprovals()
     }
 
@@ -237,6 +240,30 @@ class GuardianApprovalsHubActivity : AppCompatActivity() {
                                 allApprovals.removeAll { it.wardId == wardId }
                                 allApprovals.addAll(itemsForWard)
                                 updateTabBadges()
+
+                                if (!hasAutoSelectedTargetTab && !targetPackage.isNullOrBlank()) {
+                                    val targetItem = allApprovals.firstOrNull {
+                                        it.packageName == targetPackage &&
+                                            (targetWardId.isNullOrBlank() || it.wardId == targetWardId || it.wardId == canonicalTargetWardId)
+                                    }
+                                    if (targetItem != null) {
+                                        hasAutoSelectedTargetTab = true
+                                        val targetTabIndex = when (targetItem.status.uppercase()) {
+                                            "PENDING" -> 0
+                                            "APPROVED" -> 1
+                                            "REJECTED" -> 2
+                                            else -> 0
+                                        }
+                                        if (tabLayout.selectedTabPosition != targetTabIndex) {
+                                            val targetTab = tabLayout.getTabAt(targetTabIndex)
+                                            if (targetTab != null) {
+                                                targetTab.select()
+                                                return@withContext
+                                            }
+                                        }
+                                    }
+                                }
+
                                 filterAndDisplay()
                             }
                         }

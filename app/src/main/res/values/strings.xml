@@ -644,6 +644,9 @@
     <string name="toast_quick_unsuspend_local_success">تم فك تجميد %1$s بنجاح</string>
     <string name="toast_quick_unsuspend_remote_sent">تم إرسال أمر فك التجميد لتطبيق %1$s إلى هاتف %2$s بنجاح</string>
     <string name="toast_quick_unsuspend_failed">تعذر فك تجميد التطبيق: %1$s</string>
+    <string name="toast_quick_unsuspend_rejected">هذا التطبيق مرفوض من المشرف ولا يمكن إلغاء تجميده ذاتياً.</string>
+    <string name="toast_quick_unsuspend_blacklisted">هذا التطبيق مدرج في القائمة السوداء ولا يمكن إلغاء تجميده.</string>
+    <string name="toast_quick_unsuspend_forbidden">صلاحية الموافقة على التطبيقات غير مفعلة من المشرف.</string>
     <string name="btn_unsuspend_action">فك التجميد</string>
     <string name="btn_repair_stuck_apps">إصلاح وفك تجميد التطبيقات المعلقة</string>
     <string name="toast_repair_stuck_apps_success">تم فك تجميد %1$d تطبيق معلق بنجاح</string>
@@ -1228,6 +1231,17 @@
     <string name="notif_breakout_alert_desc">طلب %1$s فك حظر الطوارئ (متبقي %2$s). يمكنك الرفض لحماية المكفول.</string>
     <string name="notif_ward_approval_req_title">طلب تطبيق جديد للمراجعة</string>
     <string name="notif_ward_approval_req_desc">يطلب المكفول تثبيت واستخدام تطبيق (%1$s).</string>
+    <string name="notif_ward_self_qr_approved_title">تمت الموافقة ذاتياً عبر QR</string>
+    <string name="notif_ward_self_qr_approved_desc">وافق المكفول على تشغيل تطبيق %1$s عبر رمز QR (وفق صلاحياتك).</string>
+    <string name="notif_self_qr_approval_granted_desc">تمت الموافقة الذاتية عبر رمز QR على تشغيل تطبيق %1$s بنجاح.</string>
+    <string name="notif_self_qr_approval_deferred_curfew_desc">تمت الموافقة الذاتية على %1$s عبر رمز QR، وسيُتاح للاستخدام فور انتهاء موعد الحظر الصباحي.</string>
+    <string name="notif_self_qr_approval_rejected_desc">تم رفض تشغيل تطبيق %1$s ذاتياً ولا يمكن تشغيله إلا بموافقة المشرف.</string>
+    <string name="notif_ward_self_qr_rejected_title">تم الرفض ذاتياً من المكفول</string>
+    <string name="notif_ward_self_qr_rejected_desc">رفض المكفول تشغيل تطبيق %1$s ذاتياً من جهازه.</string>
+    <string name="label_decision_source_self_qr">تمت الموافقة ذاتياً عبر QR</string>
+    <string name="label_decision_source_self_rejected">تم الرفض ذاتياً</string>
+    <string name="label_decision_source_guardian">تمت الموافقة بواسطة: %1$s</string>
+    <string name="label_decision_source_rejected">تم الرفض بواسطة: %1$s</string>
     <string name="title_approvals_hub">مركز مراجعة التطبيقات</string>
     <string name="tab_approvals_pending">معلقة للمراجعة</string>
     <string name="tab_approvals_approved">تمت الموافقة</string>

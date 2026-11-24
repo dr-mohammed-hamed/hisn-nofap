@@ -35,6 +35,12 @@ interface PendingApprovalDao {
     @Query("SELECT * FROM pending_approvals WHERE is_synced = 0 ORDER BY requested_at ASC")
     fun getUnsyncedApprovalsBlocking(): List<PendingApprovalEntity>
 
+    @Query("SELECT * FROM pending_approvals WHERE package_name = :packageName LIMIT 1")
+    suspend fun getApprovalByPackageName(packageName: String): PendingApprovalEntity?
+
+    @Query("SELECT * FROM pending_approvals WHERE package_name = :packageName LIMIT 1")
+    fun getApprovalByPackageNameBlocking(packageName: String): PendingApprovalEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun savePendingApproval(approval: PendingApprovalEntity)
 
@@ -135,6 +141,20 @@ interface PendingApprovalDao {
 
     @Query("UPDATE pending_approvals SET is_synced = :isSynced WHERE package_name = :packageName")
     fun markApprovalCloudSyncedBlocking(packageName: String, isSynced: Int): Int
+
+    @Query("""
+        UPDATE pending_approvals
+        SET is_synced = :isSynced
+        WHERE package_name = :packageName
+          AND status = :expectedStatus
+          AND COALESCE(decided_at, 0) = COALESCE(:expectedDecidedAt, 0)
+    """)
+    fun markApprovalCloudSyncedIfMatchingBlocking(
+        packageName: String,
+        expectedStatus: String,
+        expectedDecidedAt: Long?,
+        isSynced: Int
+    ): Int
 
     @Query("DELETE FROM pending_approvals WHERE package_name = :packageName")
     suspend fun deletePendingApproval(packageName: String): Int

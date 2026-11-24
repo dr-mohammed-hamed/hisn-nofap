@@ -13,11 +13,10 @@ import com.drmohammed.antiporn.curfew.CurfewEnforcer
 import com.drmohammed.antiporn.data.model.InstalledAppDto
 import com.drmohammed.antiporn.data.repository.AccountabilityRepository
 import com.drmohammed.antiporn.data.repository.AppInventoryManager
+import com.drmohammed.antiporn.data.repository.ApprovalDecisionResult
 import com.drmohammed.antiporn.data.repository.ApprovalRepository
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.shields.AppSuspensionShield
-import com.drmohammed.antiporn.telemetry.DpmExecutionResult
-import com.drmohammed.antiporn.telemetry.SafeDpmGateway
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
@@ -443,56 +442,66 @@ class RemoteAppManagerViewModel(
             val context = getApplication<Application>()
             try {
                 if (state.isLocalMode) {
-                    var success = false
-                    var errorMsg: String? = null
-
-                    if (SafeDpmGateway.isDeviceOwner(context)) {
-                        val result = SafeDpmGateway.setPackagesSuspended(
-                            context = context,
-                            packages = arrayOf(pkg),
-                            suspended = false
-                        )
-                        when (result) {
-                            is DpmExecutionResult.Success -> {
-                                success = result.data.isEmpty()
-                                if (!success) errorMsg = context.getString(R.string.error_unknown)
+                    val decision = approvalRepository.unsuspendAndApprove(pkg, decidedBy = "SELF")
+                    when (decision) {
+                        ApprovalDecisionResult.APPROVED -> {
+                            _uiState.update { current ->
+                                current.copy(
+                                    allApps = current.allApps.map { if (it.packageName == pkg) it.copy(isSuspended = false) else it },
+                                    displayedApps = current.displayedApps.map { if (it.packageName == pkg) it.copy(isSuspended = false) else it }
+                                )
                             }
-                            is DpmExecutionResult.Failure -> {
-                                errorMsg = result.message
-                            }
-                        }
-                    } else {
-                        errorMsg = context.getString(R.string.toast_not_device_owner)
-                    }
-
-                    // Synchronize Zero-Trust approvals locally so it is never re-frozen
-                    try {
-                        approvalRepository.unsuspendAndApprove(pkg, decidedBy = "SELF")
-                        Log.i(TAG, "Quick unsuspend: Auto-approved package $pkg in local Zero-Trust baseline")
-                    } catch (e: Exception) {
-                        if (e is CancellationException) throw e
-                        Log.e(TAG, "Quick unsuspend: Error approving $pkg in local Zero-Trust", e)
-                    }
-
-                    if (success) {
-                        _uiState.update { current ->
-                            current.copy(
-                                allApps = current.allApps.map { if (it.packageName == pkg) it.copy(isSuspended = false) else it },
-                                displayedApps = current.displayedApps.map { if (it.packageName == pkg) it.copy(isSuspended = false) else it }
+                            _events.emit(
+                                RemoteAppManagerEvent.ShowToastString(
+                                    context.getString(R.string.toast_quick_unsuspend_local_success, displayName)
+                                )
                             )
                         }
-                        _events.emit(
-                            RemoteAppManagerEvent.ShowToastString(
-                                context.getString(R.string.toast_quick_unsuspend_local_success, displayName)
+                        ApprovalDecisionResult.APPROVED_CURFEW_DEFERRED -> {
+                            _events.emit(
+                                RemoteAppManagerEvent.ShowToastString(
+                                    context.getString(R.string.notif_self_qr_approval_deferred_curfew_desc, displayName),
+                                    isLong = true
+                                )
                             )
-                        )
-                    } else {
-                        _events.emit(
-                            RemoteAppManagerEvent.ShowToastString(
-                                context.getString(R.string.toast_quick_unsuspend_failed, errorMsg ?: context.getString(R.string.error_unknown)),
-                                isLong = true
+                        }
+                        ApprovalDecisionResult.BLOCKED_REJECTED -> {
+                            _events.emit(
+                                RemoteAppManagerEvent.ShowToastRes(R.string.toast_quick_unsuspend_rejected, isLong = true)
                             )
-                        )
+                        }
+                        ApprovalDecisionResult.BLOCKED_BLACKLISTED -> {
+                            _events.emit(
+                                RemoteAppManagerEvent.ShowToastRes(R.string.toast_quick_unsuspend_blacklisted, isLong = true)
+                            )
+                        }
+                        ApprovalDecisionResult.BLOCKED_SELF_CONTROL_FORBIDDEN -> {
+                            _events.emit(
+                                RemoteAppManagerEvent.ShowToastRes(R.string.toast_quick_unsuspend_forbidden, isLong = true)
+                            )
+                        }
+                        ApprovalDecisionResult.FAILED_NOT_DEVICE_OWNER -> {
+                            _events.emit(
+                                RemoteAppManagerEvent.ShowToastString(
+                                    context.getString(
+                                        R.string.toast_quick_unsuspend_failed,
+                                        context.getString(R.string.toast_not_device_owner)
+                                    ),
+                                    isLong = true
+                                )
+                            )
+                        }
+                        ApprovalDecisionResult.FAILED_DPM_ERROR -> {
+                            _events.emit(
+                                RemoteAppManagerEvent.ShowToastString(
+                                    context.getString(
+                                        R.string.toast_quick_unsuspend_failed,
+                                        context.getString(R.string.error_unknown)
+                                    ),
+                                    isLong = true
+                                )
+                            )
+                        }
                     }
                 } else {
                     val updatedBlacklist = state.customBlacklist - pkg

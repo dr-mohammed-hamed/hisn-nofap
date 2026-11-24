@@ -110,6 +110,17 @@
             android:textSize="11sp"
             tools:text="وقت الطلب: منذ 15 دقيقة" />
 
+        <TextView
+            android:id="@+id/tvDecisionSource"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:visibility="gone"
+            tools:visibility="visible"
+            tools:text="تمت الموافقة ذاتياً عبر QR" />
+
         <!-- Actions Row for Pending items -->
         <LinearLayout
             android:id="@+id/layoutPendingActions"

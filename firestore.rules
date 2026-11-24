@@ -30,6 +30,38 @@ service cloud.firestore {
       );
     }
 
+    // Verifies if ward is unsupervised (no policy doc yet or no guardian claimed)
+    function isUnsupervisedOwner(wardUid) {
+      return !exists(/databases/$(database)/documents/policies/$(wardUid)) ||
+        get(/databases/$(database)/documents/policies/$(wardUid)).data.get('guardianUid', null) == null;
+    }
+
+    // Verifies if ward is allowed to make self-control app decisions (approve or reject)
+    function isSelfAppDecisionAllowed(wardUid) {
+      return isUnsupervisedOwner(wardUid) || (
+        exists(/databases/$(database)/documents/policies/$(wardUid)) &&
+        get(/databases/$(database)/documents/policies/$(wardUid)).data.get('isSelfControlAllowed', false) == true &&
+        (
+          get(/databases/$(database)/documents/policies/$(wardUid)).data.get('selfControlNewAppsAllowed', false) == true ||
+          get(/databases/$(database)/documents/policies/$(wardUid)).data.get('selfControlAppsAllowed', false) == true
+        )
+      );
+    }
+
+    // Helper using let binding to verify packageId is not in customBlacklistPackages (only called when policy doc exists)
+    function isPackageNotBlacklistedInPolicy(wardUid, packageId) {
+      let blacklist = get(/databases/$(database)/documents/policies/$(wardUid)).data.get('customBlacklistPackages', []);
+      return !(blacklist is list && packageId in blacklist);
+    }
+
+    // Verifies if ward is legitimately allowed to self-approve an application via QR or App Management
+    function isSelfAppApprovalAllowed(wardUid, packageId) {
+      return isSelfAppDecisionAllowed(wardUid) && (
+        !exists(/databases/$(database)/documents/policies/$(wardUid)) ||
+        isPackageNotBlacklistedInPolicy(wardUid, packageId)
+      );
+    }
+
     // 1. Pairings: Exchange and resolve 6-character alphanumeric pairing codes (with 15-min expiration & one-time use)
     match /pairings/{code} {
       allow get: if request.auth != null;
@@ -169,11 +201,49 @@ service cloud.firestore {
     match /policies/{wardUid}/approvals/{ticketId} {
       allow read: if isOwner(wardUid) || isGuardianOf(wardUid);
       allow create: if request.auth != null && (
-        (request.auth.uid == wardUid && request.resource.data.status == 'PENDING') ||
-        isGuardianOf(wardUid)
+        isGuardianOf(wardUid) ||
+        (
+          isOwner(wardUid) &&
+          request.resource.data.get('packageName', '') == ticketId &&
+          request.resource.data.get('wardUid', '') == wardUid &&
+          (
+            request.resource.data.get('status', '') == 'PENDING' ||
+            (
+              request.resource.data.get('status', '') == 'APPROVED' &&
+              request.resource.data.get('decidedBy', '') == 'SELF' &&
+              isSelfAppApprovalAllowed(wardUid, ticketId)
+            ) ||
+            (
+              request.resource.data.get('status', '') == 'REJECTED' &&
+              request.resource.data.get('decidedBy', '') == 'SELF' &&
+              isSelfAppDecisionAllowed(wardUid)
+            )
+          )
+        )
       );
-      allow update: if request.auth != null && isGuardianOf(wardUid);
-      allow delete: if request.auth != null && (request.auth.uid == wardUid || isGuardianOf(wardUid));
+      allow update: if request.auth != null && (
+        isGuardianOf(wardUid) ||
+        (
+          isOwner(wardUid) &&
+          resource.data.get('status', '') == 'PENDING' &&
+          request.resource.data.get('decidedBy', '') == 'SELF' &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'decidedBy', 'decidedAt']) &&
+          (
+            (
+              request.resource.data.get('status', '') == 'APPROVED' &&
+              isSelfAppApprovalAllowed(wardUid, ticketId)
+            ) ||
+            (
+              request.resource.data.get('status', '') == 'REJECTED' &&
+              isSelfAppDecisionAllowed(wardUid)
+            )
+          )
+        )
+      );
+      allow delete: if request.auth != null && (
+        isGuardianOf(wardUid) ||
+        (isOwner(wardUid) && resource.data.get('status', '') != 'REJECTED')
+      );
     }
 
     // Legacy Approvals: Root approvals collection kept for backward compatibility

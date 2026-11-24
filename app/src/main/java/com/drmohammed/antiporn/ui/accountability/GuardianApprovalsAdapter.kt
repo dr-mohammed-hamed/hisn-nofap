@@ -55,6 +55,7 @@ class GuardianApprovalsAdapter(
         private val tvRiskBadge: TextView = itemView.findViewById(R.id.tvRiskBadge)
         private val tvStatusBadge: TextView = itemView.findViewById(R.id.tvStatusBadge)
         private val tvTimestamp: TextView = itemView.findViewById(R.id.tvTimestamp)
+        private val tvDecisionSource: TextView = itemView.findViewById(R.id.tvDecisionSource)
 
         private val layoutPendingActions: LinearLayout = itemView.findViewById(R.id.layoutPendingActions)
         private val btnApprove: MaterialButton = itemView.findViewById(R.id.btnApprove)
@@ -103,6 +104,7 @@ class GuardianApprovalsAdapter(
 
             when (item.status.uppercase()) {
                 "PENDING" -> {
+                    tvDecisionSource.visibility = View.GONE
                     updateStatusBadge(
                         badgeView = tvStatusBadge,
                         text = ctx.getString(R.string.tab_approvals_pending),
@@ -153,6 +155,25 @@ class GuardianApprovalsAdapter(
                         bgColorRes = R.color.status_green_bg
                     )
 
+                    val decidedBy = item.decidedBy
+                    if (decidedBy?.equals("SELF", ignoreCase = true) == true) {
+                        tvDecisionSource.visibility = View.VISIBLE
+                        tvDecisionSource.text = ctx.getString(R.string.label_decision_source_self_qr)
+                        tvDecisionSource.setTextColor(ContextCompat.getColor(ctx, R.color.status_green))
+                    } else if (!decidedBy.isNullOrBlank()) {
+                        tvDecisionSource.visibility = View.VISIBLE
+                        tvDecisionSource.text = ctx.getString(R.string.label_decision_source_guardian, decidedBy)
+                        tvDecisionSource.setTextColor(
+                            com.google.android.material.color.MaterialColors.getColor(
+                                cardApproval,
+                                com.google.android.material.R.attr.colorOnSurfaceVariant,
+                                Color.GRAY
+                            )
+                        )
+                    } else {
+                        tvDecisionSource.visibility = View.GONE
+                    }
+
                     layoutPendingActions.visibility = View.GONE
                     layoutResolvedActions.visibility = View.VISIBLE
 
@@ -181,6 +202,19 @@ class GuardianApprovalsAdapter(
                         bgColorRes = R.color.status_red_bg
                     )
 
+                    val decidedBy = item.decidedBy
+                    if (decidedBy?.equals("SELF", ignoreCase = true) == true) {
+                        tvDecisionSource.visibility = View.VISIBLE
+                        tvDecisionSource.text = ctx.getString(R.string.label_decision_source_self_rejected)
+                        tvDecisionSource.setTextColor(ContextCompat.getColor(ctx, R.color.status_red))
+                    } else if (!decidedBy.isNullOrBlank()) {
+                        tvDecisionSource.visibility = View.VISIBLE
+                        tvDecisionSource.text = ctx.getString(R.string.label_decision_source_rejected, decidedBy)
+                        tvDecisionSource.setTextColor(ContextCompat.getColor(ctx, R.color.status_red))
+                    } else {
+                        tvDecisionSource.visibility = View.GONE
+                    }
+
                     layoutPendingActions.visibility = View.GONE
                     layoutResolvedActions.visibility = View.VISIBLE
 
@@ -200,6 +234,9 @@ class GuardianApprovalsAdapter(
                             }
                         }
                     }
+                }
+                else -> {
+                    tvDecisionSource.visibility = View.GONE
                 }
             }
         }

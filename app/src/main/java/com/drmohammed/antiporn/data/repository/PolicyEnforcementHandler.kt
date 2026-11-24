@@ -472,7 +472,11 @@ internal class PolicyEnforcementHandler(
         label: String
     ) {
         try {
-            approvalRepo.unsuspendAndApprove(pkg, guardianName)
+            approvalRepo.unsuspendAndApprove(
+                packageName = pkg,
+                decidedBy = guardianName,
+                syncToCloud = false
+            )
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             Log.e(TAG, "Failed auto-approving $label '$pkg'", e)

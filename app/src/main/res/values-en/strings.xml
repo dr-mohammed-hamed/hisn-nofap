@@ -106,6 +106,9 @@
     <string name="toast_quick_unsuspend_local_success">Successfully unfrozen %1$s</string>
     <string name="toast_quick_unsuspend_remote_sent">Instant unfreeze command for %1$s sent to %2$s</string>
     <string name="toast_quick_unsuspend_failed">Failed to unfreeze application: %1$s</string>
+    <string name="toast_quick_unsuspend_rejected">This app was rejected and cannot be unsuspended without guardian approval.</string>
+    <string name="toast_quick_unsuspend_blacklisted">This app is blacklisted and cannot be unsuspended.</string>
+    <string name="toast_quick_unsuspend_forbidden">Self-approval for apps is not permitted by your guardian.</string>
     <string name="btn_unsuspend_action">Unfreeze</string>
     <string name="btn_repair_stuck_apps">Fix &amp; Unfreeze Stuck Apps</string>
     <string name="toast_repair_stuck_apps_success">Successfully unsuspended %1$d stuck apps</string>
@@ -908,6 +911,17 @@
     <string name="notif_breakout_alert_desc">%1$s requested an emergency unlock (%2$s remaining). You can reject to protect your ward.</string>
     <string name="notif_ward_approval_req_title">New application review request</string>
     <string name="notif_ward_approval_req_desc">Ward is requesting permission to install and use (%1$s).</string>
+    <string name="notif_ward_self_qr_approved_title">Self-Approved via QR Code</string>
+    <string name="notif_ward_self_qr_approved_desc">Ward approved running application %1$s via QR code (per your permissions).</string>
+    <string name="notif_self_qr_approval_granted_desc">Self-approved %1$s via QR code successfully.</string>
+    <string name="notif_self_qr_approval_deferred_curfew_desc">%1$s was self-approved via QR code and will be available after curfew ends.</string>
+    <string name="notif_self_qr_approval_rejected_desc">Self-rejected %1$s. It remains blocked unless approved by your guardian.</string>
+    <string name="notif_ward_self_qr_rejected_title">Self-Rejected by Ward</string>
+    <string name="notif_ward_self_qr_rejected_desc">Ward self-rejected running application %1$s from their device.</string>
+    <string name="label_decision_source_self_qr">Self-approved via QR</string>
+    <string name="label_decision_source_self_rejected">Self-rejected</string>
+    <string name="label_decision_source_guardian">Approved by: %1$s</string>
+    <string name="label_decision_source_rejected">Rejected by: %1$s</string>
     <string name="title_approvals_hub">Application Approvals Center</string>
     <string name="tab_approvals_pending">Pending Review</string>
     <string name="tab_approvals_approved">Approved</string>
