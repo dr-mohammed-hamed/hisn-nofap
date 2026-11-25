@@ -15,7 +15,7 @@
     <string name="watchdog_notification_desc">Hisn app is active.</string>
     <string name="admin_disable_warning">Security Warning: Hisn protection cannot be disabled to prevent bypass!</string>
     <string name="curfew_vpn_session_name">Hisn Curfew Blackhole</string>
-    <string name="curfew_vpn_dns_filter_session">Hisn Local DNS Filter</string>
+    <string name="curfew_vpn_dns_filter_session">Hisn Protection</string>
     <string name="curfew_vpn_channel_name">Curfew Network Blackhole</string>
     <string name="curfew_vpn_channel_desc">Notification channel for full internet blackout during sleep hours</string>
     <string name="curfew_vpn_notification_title">Night Curfew Active: Internet Isolated</string>
@@ -30,6 +30,8 @@
     <string name="protection_events_channel_desc">Alerts for guardian responses and timer completions</string>
     <string name="critical_alerts_channel_name">Critical Security Alerts</string>
     <string name="critical_alerts_channel_desc">Urgent alerts for security tampering and protection bypass attempts</string>
+    <string name="info_quiet_channel_name">Quiet Status Updates</string>
+    <string name="info_quiet_channel_desc">Silent informational updates without sound or vibration</string>
 
     <string name="notif_guardian_lockdown_title">Full Internet Blocked by Guardian</string>
     <string name="notif_guardian_lockdown_desc">The guardian has completely isolated device internet data. Calls and SMS work normally.</string>

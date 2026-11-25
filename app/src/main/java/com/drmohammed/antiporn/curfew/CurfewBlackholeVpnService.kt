@@ -1,5 +1,6 @@
 package com.drmohammed.antiporn.curfew
 
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -54,6 +55,12 @@ class CurfewBlackholeVpnService : VpnService() {
         CURFEW_BLACKHOLE
     }
 
+    internal enum class StartForegroundAction {
+        PROMOTE_FGS_ONLY,
+        PROMOTE_THEN_DEMOTE,
+        SKIP_SILENT_BOUND
+    }
+
     internal sealed class VpnCommand {
         data class StartOrUpdate(val forceRebuild: Boolean = false) : VpnCommand()
         data class StopIfAllowed(val startId: Int = -1) : VpnCommand()
@@ -80,6 +87,12 @@ class CurfewBlackholeVpnService : VpnService() {
             Timber.tag(TAG).i("Flushed DNS cache, DoT pool & circuit breaker on network change ($reason)")
         }
     )
+
+    private val foregroundLock = Any()
+
+    @Volatile
+    internal var isForegroundActive: Boolean = false
+        private set
 
     @Volatile
     internal var isServiceDestroyed: Boolean = false
@@ -149,17 +162,32 @@ class CurfewBlackholeVpnService : VpnService() {
             CurfewVpnStateCoordinator.isStartPending = false
         }
         lastStartId = startId
-        safeStartForegroundNotification()
+        val startedAsFgs = intent?.getBooleanExtra(EXTRA_STARTED_AS_FGS, false) == true
+        val forceKeepFgs = intent?.getBooleanExtra(EXTRA_FORCE_KEEP_FGS, false) == true
 
         val action = intent?.action
         if (action == ACTION_FORCE_TEARDOWN || shouldAbortForPostTeardown(appContext)) {
+            if (startedAsFgs) safeStartForegroundNotification()
             isServiceRevoked = true
             commandChannel.trySend(VpnCommand.ForceTeardown)
             return START_NOT_STICKY
         }
         if (action == ACTION_STOP) {
+            if (startedAsFgs) safeStartForegroundNotification()
             commandChannel.trySend(VpnCommand.StopIfAllowed(startId = startId))
             return START_NOT_STICKY
+        }
+
+        val canRunSilently = !forceKeepFgs && CurfewVpnStateCoordinator.canRunDnsVpnSilently(appContext)
+        when (resolveStartForegroundAction(startedAsFgs, canRunSilently)) {
+            StartForegroundAction.PROMOTE_FGS_ONLY -> safeStartForegroundNotification()
+            StartForegroundAction.PROMOTE_THEN_DEMOTE -> {
+                safeStartForegroundNotification()
+                if (isForegroundActive) {
+                    demoteFromForegroundSilently(appContext)
+                }
+            }
+            StartForegroundAction.SKIP_SILENT_BOUND -> Unit
         }
 
         isServiceRevoked = false
@@ -174,7 +202,6 @@ class CurfewBlackholeVpnService : VpnService() {
         if (intent?.action == SERVICE_INTERFACE) {
             if (shouldAbortForPostTeardown(appContext)) {
                 isServiceRevoked = true
-                safeStartForegroundNotification()
                 commandChannel.trySend(VpnCommand.ForceTeardown)
                 return super.onBind(intent)
             }
@@ -184,8 +211,10 @@ class CurfewBlackholeVpnService : VpnService() {
                 CurfewVpnStateCoordinator.activeService = WeakReference(this)
                 CurfewVpnStateCoordinator.isStartPending = false
             }
-            Timber.tag(TAG).i("Always-On OS direct bind received; promoting foreground and ensuring tunnel")
-            safeStartForegroundNotification()
+            Timber.tag(TAG).i("Always-On OS direct bind received; ensuring tunnel")
+            if (!CurfewVpnStateCoordinator.canRunDnsVpnSilently(appContext)) {
+                safeStartForegroundNotification()
+            }
             commandChannel.trySend(VpnCommand.StartOrUpdate(forceRebuild = false))
         }
         return super.onBind(intent)
@@ -433,20 +462,62 @@ class CurfewBlackholeVpnService : VpnService() {
     }
 
     private fun safeStartForegroundNotification() {
-        try {
-            val notification = ProtectionNotificationCoordinator.buildProtectionNotification(this)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-            } else {
-                startForeground(NOTIFICATION_ID, notification)
+        synchronized(foregroundLock) {
+            try {
+                val notification = ProtectionNotificationCoordinator.buildProtectionNotification(this)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+                } else {
+                    startForeground(NOTIFICATION_ID, notification)
+                }
+                isForegroundActive = true
+            } catch (e: Exception) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    e is android.app.ForegroundServiceStartNotAllowedException
+                ) {
+                    Timber.tag(TAG).w(e, "FGS promotion rejected by OS background restrictions")
+                } else {
+                    Timber.tag(TAG).e(e, "Failed promoting CurfewBlackholeVpnService to foreground")
+                }
             }
-        } catch (e: Exception) {
-            Timber.tag(TAG).e(e, "Failed promoting CurfewBlackholeVpnService to foreground")
+        }
+    }
+
+    @Synchronized
+    internal fun syncForegroundPresentation() {
+        val appContext = applicationContext ?: this
+        if (isServiceDestroyed || isServiceRevoked || ProtectionTransitionGuard.isTeardownInProgress) return
+        if (currentMode == VpnMode.IDLE) return
+        if (currentMode == VpnMode.DNS_FILTERING_ONLY && CurfewVpnStateCoordinator.canRunDnsVpnSilently(appContext)) {
+            demoteFromForegroundSilently(appContext)
+        } else {
+            safeStartForegroundNotification()
+        }
+    }
+
+    private fun demoteFromForegroundSilently(appContext: Context) {
+        synchronized(foregroundLock) {
+            try {
+                if (isForegroundActive) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        stopForeground(true)
+                    }
+                    isForegroundActive = false
+                }
+                val nm = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                nm?.cancel(NOTIFICATION_ID)
+            } catch (e: Exception) {
+                Timber.tag(TAG).w(e, "Failed demoting VPN service to silent bound mode")
+            }
         }
     }
 
     private fun syncNotificationSafely(appContext: Context) {
         try {
+            syncForegroundPresentation()
             ProtectionNotificationCoordinator.syncProtectionNotification(appContext)
         } catch (e: Exception) {
             Timber.tag(TAG).w(e, "Error syncing protection notification from VPN service")
@@ -513,10 +584,13 @@ class CurfewBlackholeVpnService : VpnService() {
             CurfewVpnStateCoordinator.completeTunnelStoppedWaiters(true)
         }
 
-        try {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        } catch (e: Exception) {
-            Timber.tag(TAG).w(e, "Error stopping foreground notification")
+        synchronized(foregroundLock) {
+            try {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                isForegroundActive = false
+            } catch (e: Exception) {
+                Timber.tag(TAG).w(e, "Error stopping foreground notification")
+            }
         }
     }
 
@@ -644,6 +718,17 @@ class CurfewBlackholeVpnService : VpnService() {
         const val ACTION_START = "com.drmohammed.antiporn.curfew.ACTION_START_VPN"
         const val ACTION_STOP = "com.drmohammed.antiporn.curfew.ACTION_STOP_VPN"
         const val ACTION_FORCE_TEARDOWN = "com.drmohammed.antiporn.curfew.ACTION_FORCE_TEARDOWN"
+        const val EXTRA_STARTED_AS_FGS = "extra_started_as_fgs"
+        const val EXTRA_FORCE_KEEP_FGS = "extra_force_keep_fgs"
+
+        internal fun resolveStartForegroundAction(
+            startedAsFgs: Boolean,
+            canRunSilently: Boolean
+        ): StartForegroundAction = when {
+            startedAsFgs && canRunSilently -> StartForegroundAction.PROMOTE_THEN_DEMOTE
+            startedAsFgs || !canRunSilently -> StartForegroundAction.PROMOTE_FGS_ONLY
+            else -> StartForegroundAction.SKIP_SILENT_BOUND
+        }
 
         val isRunning: Boolean
             get() = CurfewVpnStateCoordinator.isRunning

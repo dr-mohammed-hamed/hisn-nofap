@@ -22,6 +22,7 @@ object OtaPackageInstaller {
 
     private const val TAG = "AntiPorn_OtaInstaller"
     const val ACTION_OTA_INSTALL_STATUS = "com.drmohammed.antiporn.ACTION_OTA_INSTALL_STATUS"
+    const val EXTRA_SHOW_RESULT_NOTIFICATIONS = "extra_show_result_notifications"
     private const val BUFFER_SIZE = 64 * 1024 // 64KB buffer
 
     /**
@@ -29,9 +30,14 @@ object OtaPackageInstaller {
      *
      * @param context Application or component context.
      * @param apkFile The verified APK binary file on disk.
+     * @param showResultNotifications Whether [OtaInstallReceiver] should display system tray result notifications.
      * @return [Result] wrapping the created session ID on success, or an exception on failure.
      */
-    fun installApk(context: Context, apkFile: File): Result<Int> {
+    fun installApk(
+        context: Context,
+        apkFile: File,
+        showResultNotifications: Boolean = true
+    ): Result<Int> {
         if (!apkFile.exists() || apkFile.length() <= 0L) {
             val error = FileNotFoundException("APK file does not exist or is empty: ${apkFile.absolutePath}")
             Log.e(TAG, error.message.orEmpty())
@@ -70,6 +76,7 @@ object OtaPackageInstaller {
 
             val intent = Intent(context, OtaInstallReceiver::class.java).apply {
                 action = ACTION_OTA_INSTALL_STATUS
+                putExtra(EXTRA_SHOW_RESULT_NOTIFICATIONS, showResultNotifications)
             }
 
             val flags = PendingIntent.FLAG_UPDATE_CURRENT or (

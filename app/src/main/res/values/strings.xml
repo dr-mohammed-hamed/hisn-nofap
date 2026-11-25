@@ -284,7 +284,7 @@
     <string name="dns_vpn_notification_desc">فلترة شبكة DNS المحلية وحظر المحتوى الإباحي تعمل في الخلفية</string>
 
     <string name="curfew_vpn_session_name">عزل شبكة الحظر الليلي (حِصْن)</string>
-    <string name="curfew_vpn_dns_filter_session">فلترة حماية شبكة DNS المحلية</string>
+    <string name="curfew_vpn_dns_filter_session">حماية حصن</string>
 
     <!-- Unified Protection & Curfew Notification Strings -->
     <string name="protection_vpn_channel_name">درع الحماية وفلترة الشبكة (حِصْن)</string>
@@ -293,6 +293,8 @@
     <string name="protection_events_channel_desc">تنبيهات استجابات المشرف وانتهاء فترات الحظر</string>
     <string name="critical_alerts_channel_name">تنبيهات الأمان الحرجة</string>
     <string name="critical_alerts_channel_desc">إشعارات عاجلة لمحاولات التلاعب الأمني وتجاوز الحماية</string>
+    <string name="info_quiet_channel_name">تحديثات صامتة</string>
+    <string name="info_quiet_channel_desc">إشعارات معلوماتية صامتة بدون صوت أو اهتزاز</string>
 
     <string name="notif_guardian_lockdown_title">تم حظر الإنترنت بالكامل من المشرف</string>
     <string name="notif_guardian_lockdown_desc">قام المشرف بعزل بيانات الإنترنت عن الجهاز. المكالمات وSMS تعمل بشكل طبيعي.</string>

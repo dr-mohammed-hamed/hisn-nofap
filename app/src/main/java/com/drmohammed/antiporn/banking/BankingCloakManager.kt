@@ -576,14 +576,16 @@ object BankingCloakManager {
                 else R.string.notif_banking_cloak_active_manual_msg
             )
 
-            val notification = NotificationCompat.Builder(appContext, NotificationRegistry.CHANNEL_ID_PROTECTION_EVENTS)
+            val notification = NotificationCompat.Builder(appContext, NotificationRegistry.CHANNEL_ID_INFO_QUIET)
                 .setSmallIcon(R.drawable.ic_shield_device_owner)
                 .setContentTitle(title)
                 .setContentText(message)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(message))
                 .setOngoing(true)
                 .setAutoCancel(false)
-                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setSilent(true)
+                .setOnlyAlertOnce(true)
                 .setContentIntent(pendingIntent)
                 .build()
 

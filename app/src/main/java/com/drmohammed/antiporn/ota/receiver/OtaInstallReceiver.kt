@@ -53,6 +53,10 @@ class OtaInstallReceiver : BroadcastReceiver() {
 
         val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
         val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
+        val shouldShowResultNotifications = intent.getBooleanExtra(
+            OtaPackageInstaller.EXTRA_SHOW_RESULT_NOTIFICATIONS,
+            false
+        )
 
         when (status) {
             PackageInstaller.STATUS_SUCCESS -> {
@@ -61,9 +65,12 @@ class OtaInstallReceiver : BroadcastReceiver() {
                 val installedVersion = try {
                     context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0"
                 } catch (e: Exception) {
+                    Log.w(TAG, "Failed reading installed version name; defaulting to 1.0", e)
                     "1.0"
                 }
-                OtaNotificationManager.showSuccessNotification(context, installedVersion)
+                if (shouldShowResultNotifications) {
+                    OtaNotificationManager.showSuccessNotification(context, installedVersion)
+                }
                 try {
                     AppNotificationManager.getInstance(context).postEventNotification(
                         category = NotificationCategory.OTA,
@@ -72,7 +79,6 @@ class OtaInstallReceiver : BroadcastReceiver() {
                         dedupKey = "ota_success_$installedVersion",
                         cooldownMs = 24 * 60 * 60 * 1000L,
                         actionType = NotificationActionType.NONE,
-                        systemNotificationId = NotificationRegistry.EVENT_OTA_FAILED_ID,
                         channelId = NotificationRegistry.CHANNEL_ID_PROTECTION_EVENTS,
                         postSystemNotification = false,
                         importance = 1
@@ -115,7 +121,7 @@ class OtaInstallReceiver : BroadcastReceiver() {
                         actionType = NotificationActionType.NONE,
                         systemNotificationId = NotificationRegistry.EVENT_OTA_FAILED_ID,
                         channelId = NotificationRegistry.CHANNEL_ID_PROTECTION_EVENTS,
-                        postSystemNotification = true,
+                        postSystemNotification = shouldShowResultNotifications,
                         importance = 2
                     )
                 } catch (e: Exception) {

@@ -139,10 +139,22 @@ class AppNotificationManager(
             setShowBadge(false)
         }
 
+        // 9. Quiet Informational Updates Channel (LOW, silent)
+        val channelInfoQuiet = NotificationChannel(
+            NotificationRegistry.CHANNEL_ID_INFO_QUIET,
+            appContext.getString(R.string.info_quiet_channel_name),
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = appContext.getString(R.string.info_quiet_channel_desc)
+            setShowBadge(false)
+            enableVibration(false)
+            setSound(null, null)
+        }
+
         manager.createNotificationChannels(
-            listOf(channelVpn, channelAi, channelOta, channelEvents, channelPairing, channelCritical, channelWaqfa)
+            listOf(channelVpn, channelAi, channelOta, channelEvents, channelPairing, channelCritical, channelWaqfa, channelInfoQuiet)
         )
-        Log.i(TAG, "All 7 NotificationChannels created/verified centrally via NotificationRegistry")
+        Log.i(TAG, "All 8 NotificationChannels created/verified centrally via NotificationRegistry")
     }
 
     /**
@@ -230,6 +242,13 @@ class AppNotificationManager(
 
         val smallIconRes = resolveCategoryIcon(category)
 
+        val priority = when (channelId) {
+            NotificationRegistry.CHANNEL_ID_CRITICAL_ALERTS,
+            NotificationRegistry.CHANNEL_ID_PROTECTION_EVENTS -> NotificationCompat.PRIORITY_HIGH
+            NotificationRegistry.CHANNEL_ID_INFO_QUIET -> NotificationCompat.PRIORITY_LOW
+            else -> NotificationCompat.PRIORITY_DEFAULT
+        }
+
         val builder = NotificationCompat.Builder(appContext, channelId)
             .setSmallIcon(smallIconRes)
             .setContentTitle(title)
@@ -237,11 +256,11 @@ class AppNotificationManager(
             .setStyle(NotificationCompat.BigTextStyle().bigText(message))
             .setContentIntent(contentPendingIntent)
             .setAutoCancel(true)
-            .setPriority(
-                if (channelId == NotificationRegistry.CHANNEL_ID_PROTECTION_EVENTS)
-                    NotificationCompat.PRIORITY_HIGH
-                else NotificationCompat.PRIORITY_DEFAULT
-            )
+            .setPriority(priority)
+
+        if (channelId == NotificationRegistry.CHANNEL_ID_INFO_QUIET) {
+            builder.setSilent(true)
+        }
 
         notificationManager.notify(id, builder.build())
     }

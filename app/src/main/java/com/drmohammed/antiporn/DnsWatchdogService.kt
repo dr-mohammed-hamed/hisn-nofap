@@ -172,6 +172,8 @@ class DnsWatchdogService : Service() {
                 .setSmallIcon(R.drawable.ic_shield_dns)
                 .setOngoing(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setSilent(true)
+                .setOnlyAlertOnce(true)
                 .build()
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {

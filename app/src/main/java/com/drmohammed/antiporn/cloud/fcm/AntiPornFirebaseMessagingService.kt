@@ -68,7 +68,7 @@ class AntiPornFirebaseMessagingService : FirebaseMessagingService() {
                         dedupKey = "policy_update_fcm",
                         cooldownMs = 60_000L,
                         actionType = NotificationActionType.NONE,
-                        postSystemNotification = true
+                        postSystemNotification = false
                     )
                 } catch (e: Exception) {
                     Log.w(TAG, "Error posting policy update notification", e)

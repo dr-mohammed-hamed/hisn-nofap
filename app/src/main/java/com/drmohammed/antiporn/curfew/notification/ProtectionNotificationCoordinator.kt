@@ -1,14 +1,13 @@
 package com.drmohammed.antiporn.curfew.notification
 
 import android.app.Notification
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.text.format.DateFormat
-import android.util.Log
+import timber.log.Timber
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.drmohammed.antiporn.MainActivity
@@ -18,6 +17,7 @@ import com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService
 import com.drmohammed.antiporn.curfew.CurfewConfig
 import com.drmohammed.antiporn.curfew.CurfewEnforcer
 import com.drmohammed.antiporn.curfew.CurfewScheduleExt
+import com.drmohammed.antiporn.curfew.CurfewVpnStateCoordinator
 import com.drmohammed.antiporn.curfew.NapController
 import com.drmohammed.antiporn.notification.manager.AppNotificationManager
 import com.drmohammed.antiporn.notification.model.NotificationActionType
@@ -158,6 +158,7 @@ object ProtectionNotificationCoordinator {
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOnlyAlertOnce(true)
+            .setSilent(true)
 
         when (state) {
             is ProtectionState.GuardianLockdown -> {
@@ -278,75 +279,71 @@ object ProtectionNotificationCoordinator {
 
     @Synchronized
     fun syncProtectionNotification(context: Context) {
-        val state = resolveCurrentState(context)
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+        syncProtectionNotificationInternal(
+            context = context,
+            onCancel = { id ->
+                try {
+                    notificationManager.cancel(id)
+                } catch (e: Exception) {
+                    Timber.tag(TAG).w(e, "Error cancelling protection notification")
+                }
+            },
+            onPost = { id, state ->
+                if (canPostNotification(context)) {
+                    try {
+                        notificationManager.notify(id, buildProtectionNotification(context, state))
+                    } catch (e: Exception) {
+                        Timber.tag(TAG).e(e, "Error posting protection notification")
+                    }
+                }
+            }
+        )
+    }
+
+    @androidx.annotation.VisibleForTesting
+    internal fun syncProtectionNotificationInternal(
+        context: Context,
+        onCancel: (Int) -> Unit,
+        onPost: (Int, ProtectionState) -> Unit
+    ) {
+        val state = resolveCurrentState(context)
 
         if (state is ProtectionState.Inactive) {
-            if (!CurfewBlackholeVpnService.isServiceOrTunnelActive()) {
-                try {
-                    notificationManager.cancel(NOTIFICATION_ID_PROTECTION)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Error cancelling protection notification", e)
-                }
-                return
+            val activeService = CurfewVpnStateCoordinator.activeService?.get()
+            if (!CurfewBlackholeVpnService.isServiceOrTunnelActive() || activeService?.isForegroundActive != true) {
+                onCancel(NOTIFICATION_ID_PROTECTION)
             }
-            // Fall through to replace any stale Curfew/Nap notification with daytime DNS filtering status
+            return
         }
 
-        if (canPostNotification(context)) {
-            try {
-                notificationManager.notify(NOTIFICATION_ID_PROTECTION, buildProtectionNotification(context, state))
-            } catch (e: Exception) {
-                Log.e(TAG, "Error posting protection notification", e)
-            }
+        if (state is ProtectionState.DnsFilteringActive && CurfewVpnStateCoordinator.canRunDnsVpnSilently(context)) {
+            CurfewVpnStateCoordinator.syncForegroundPresentation()
+            onCancel(NOTIFICATION_ID_PROTECTION)
+            return
         }
+
+        onPost(NOTIFICATION_ID_PROTECTION, state)
     }
 
     fun postNapEndedNotification(context: Context) {
-        if (!canPostNotification(context)) return
         try {
-            ensureChannels(context)
-            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
-            val openAppIntent = Intent(context, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            }
-            val contentPendingIntent = PendingIntent.getActivity(
-                context,
-                0,
-                openAppIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
-            )
             val descRes = if (CurfewEnforcer.isEffectiveBlockActive(context)) {
                 R.string.notif_nap_ended_desc_curfew_still_active
             } else {
                 R.string.notif_nap_ended_desc
             }
-            val notification = NotificationCompat.Builder(context, CHANNEL_ID_EVENTS)
-                .setSmallIcon(R.drawable.ic_shield_curfew)
-                .setContentTitle(context.getString(R.string.notif_nap_ended_title))
-                .setContentText(context.getString(descRes))
-                .setContentIntent(contentPendingIntent)
-                .setAutoCancel(true)
-                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-                .build()
-
-            notificationManager.notify(NOTIFICATION_ID_EVENTS, notification)
-
-            try {
-                AppNotificationManager.getInstance(context).postEventNotification(
-                    category = NotificationCategory.CURFEW,
-                    title = context.getString(R.string.notif_nap_ended_title),
-                    message = context.getString(descRes),
-                    dedupKey = "nap_ended_${TrustedTimeProvider.currentTimeMillis(context) / 60000}",
-                    cooldownMs = 60_000L,
-                    actionType = NotificationActionType.NONE,
-                    postSystemNotification = false
-                )
-            } catch (e: Exception) {
-                Log.w(TAG, "Error recording nap ended in notification center", e)
-            }
+            AppNotificationManager.getInstance(context).postEventNotification(
+                category = NotificationCategory.CURFEW,
+                title = context.getString(R.string.notif_nap_ended_title),
+                message = context.getString(descRes),
+                dedupKey = "nap_ended_${TrustedTimeProvider.currentTimeMillis(context) / 60000}",
+                cooldownMs = 60_000L,
+                actionType = NotificationActionType.NONE,
+                postSystemNotification = false
+            )
         } catch (e: Exception) {
-            Log.e(TAG, "Error posting nap ended notification", e)
+            Timber.tag(TAG).e(e, "Error recording nap ended in notification center")
         }
     }
 }

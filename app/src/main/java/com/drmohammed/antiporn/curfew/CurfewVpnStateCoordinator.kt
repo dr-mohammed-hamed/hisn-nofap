@@ -1,17 +1,25 @@
 package com.drmohammed.antiporn.curfew
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Looper
+import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.core.network.dns.DnsResilienceManager
 import com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService.VpnCommand
 import com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService.VpnMode
+import com.drmohammed.antiporn.curfew.notification.ProtectionNotificationCoordinator
 import com.drmohammed.antiporn.data.repository.PolicyRepository
+import com.drmohammed.antiporn.telemetry.SafeDpmGateway
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import timber.log.Timber
@@ -25,6 +33,7 @@ internal object CurfewVpnStateCoordinator {
 
     private const val TAG = "AntiPorn_UnifiedVpn"
     internal val companionStateLock = Any()
+    private val presentationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     @Volatile
     internal var activeService: WeakReference<CurfewBlackholeVpnService>? = null
@@ -128,6 +137,31 @@ internal object CurfewVpnStateCoordinator {
         isRunning || isStartPending || activeService?.get() != null
     }
 
+    @SuppressLint("NewApi") // Guarded by sdkInt < O at runtime while keeping sdkInt injectable for JVM unit tests
+    fun canRunDnsVpnSilently(context: Context, sdkInt: Int = Build.VERSION.SDK_INT): Boolean {
+        if (sdkInt < Build.VERSION_CODES.O) return false
+        if (ProtectionTransitionGuard.isTeardownInProgress) return false
+        if (!SafeDpmGateway.isDeviceOwner(context)) return false
+        if (!isDeviceAdminServiceBoundApi26()) return false
+        return ProtectionNotificationCoordinator.resolveCurrentState(context) is
+            ProtectionNotificationCoordinator.ProtectionState.DnsFilteringActive
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    private fun isDeviceAdminServiceBoundApi26(): Boolean =
+        com.drmohammed.antiporn.HisnDeviceAdminService.isBound
+
+    fun syncForegroundPresentation() {
+        val service = synchronized(companionStateLock) { activeService?.get() }
+        if (service != null && !service.isServiceDestroyed) {
+            presentationScope.launch {
+                if (!service.isServiceDestroyed) {
+                    service.syncForegroundPresentation()
+                }
+            }
+        }
+    }
+
     fun getLiveStateSummary(): String = synchronized(companionStateLock) {
         if (!isRunning && !isStartPending && activeService?.get() == null) "INACTIVE" else "ACTIVE (${currentMode.name})"
     }
@@ -226,10 +260,21 @@ internal object CurfewVpnStateCoordinator {
                 isStartPending = true
                 prepareTunnelWaiter()
             }
+            val canRunSilently = canRunDnsVpnSilently(appContext)
             val intent = Intent(appContext, CurfewBlackholeVpnService::class.java).apply {
                 action = CurfewBlackholeVpnService.ACTION_START
+                putExtra(CurfewBlackholeVpnService.EXTRA_STARTED_AS_FGS, !canRunSilently)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (canRunSilently) {
+                try {
+                    appContext.startService(intent)
+                } catch (e: IllegalStateException) {
+                    Timber.tag(TAG).w(e, "Silent startService rejected by OS/ROM; falling back to startForegroundService")
+                    intent.putExtra(CurfewBlackholeVpnService.EXTRA_STARTED_AS_FGS, true)
+                    intent.putExtra(CurfewBlackholeVpnService.EXTRA_FORCE_KEEP_FGS, true)
+                    ContextCompat.startForegroundService(appContext, intent)
+                }
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 ContextCompat.startForegroundService(appContext, intent)
             } else {
                 appContext.startService(intent)
