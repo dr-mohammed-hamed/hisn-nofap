@@ -1783,6 +1783,6 @@
     <string name="waqf_share_card_body">قد لا تتيسر المساهمة المالية الآن، لكن دلالتك على هذا التطبيق لمن يحتاجه أو نشره بين أصدقائك قد تكون سبباً في نجاة قلب وصلاح بيت، ولك مثل أجر كل من ينتفع به بإذن الله.</string>
     <string name="waqf_share_btn_label">شارك التطبيق واكسب الأجر</string>
     <string name="waqf_share_chooser_title">مشاركة تطبيق حِصن عبر...</string>
-    <string name="waqf_share_message">تطبيق «حِصن» — رفيق التعافي وغض البصر والحماية الأسرية على أندرويد.\nمشروع مجاني مفتوح المصدر بالكامل لوجه الله، بلا إعلانات ولا اشتراكات.\n\nتعرّف عليه وحمّله من GitHub:\nhttps://github.com/dr-mohammed-hamed/antiporn</string>
+    <string name="waqf_share_message">تطبيق «حِصْن» — أول تطبيق يستخدم أقوى صلاحية في نظام أندرويد (Device Owner) لمنع الفتنة والإدمان الرقمي، ليُحرّر الإنسان من ذلّ العبودية الحديثة ويعيد الإرادة لمن سُلبت منه.\n\nمشروع وقفي مجاني 100% لوجه الله، بلا إعلانات ولا اشتراكات.\n\nالموقع الرسمي:\nhttps://hisn.uk/\n\nقناة تيليجرام:\nhttps://t.me/hisn_org</string>
     <string name="waqf_share_failed">تعذر فتح نافذة المشاركة</string>
 </resources>

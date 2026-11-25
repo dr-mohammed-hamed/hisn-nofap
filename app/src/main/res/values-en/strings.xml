@@ -1505,6 +1505,6 @@
     <string name="waqf_share_card_body">Even if you cannot contribute financially today, sharing Hisn with someone who needs it or spreading the word may protect a heart and strengthen a home — earning you a share of the reward, God willing.</string>
     <string name="waqf_share_btn_label">Share App &amp; Earn Reward</string>
     <string name="waqf_share_chooser_title">Share Hisn via...</string>
-    <string name="waqf_share_message">Hisn — An open-source Android companion for digital purity, focus, and family protection.\n100% free, ad-free, and open-source.\n\nExplore &amp; download on GitHub:\nhttps://github.com/dr-mohammed-hamed/antiporn</string>
+    <string name="waqf_share_message">Hisn — The first Android app to harness Android’s strongest system privilege (Device Owner) to block fitnah and digital addiction, freeing people from modern digital slavery and restoring willpower to those who lost it.\n\n100% free, ad-free digital Waqf for the sake of Allah.\n\nOfficial Website:\nhttps://hisn.uk/\n\nTelegram Channel:\nhttps://t.me/hisn_org</string>
     <string name="waqf_share_failed">Could not open share dialog</string>
 </resources>
