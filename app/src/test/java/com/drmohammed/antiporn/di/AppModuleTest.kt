@@ -17,6 +17,7 @@ import com.drmohammed.antiporn.ui.accountability.AccountabilityViewModel
 import com.drmohammed.antiporn.ui.accountability.GuardianControlViewModel
 import com.drmohammed.antiporn.ui.accountability.RemoteAppManagerViewModel
 import com.drmohammed.antiporn.ui.control.SelfControlViewModel
+import com.drmohammed.antiporn.ui.control.web.WebFilterViewModel
 import com.drmohammed.antiporn.ui.home.HomeViewModel
 import com.drmohammed.antiporn.ui.main.MainViewModel
 import com.drmohammed.antiporn.ui.settings.SettingsViewModel
@@ -89,6 +90,7 @@ class AppModuleTest : KoinTest {
             MainViewModel::class,
             HomeViewModel::class,
             SelfControlViewModel::class,
+            WebFilterViewModel::class,
             AccountabilityViewModel::class,
             RemoteAppManagerViewModel::class,
             GuardianControlViewModel::class,
@@ -113,7 +115,7 @@ class AppModuleTest : KoinTest {
                 registeredTypes.contains(expected)
             )
         }
-        assertEquals(34, registeredTypes.size)
+        assertEquals(35, registeredTypes.size)
     }
 
     @Test

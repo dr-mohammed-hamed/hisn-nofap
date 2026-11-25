@@ -40,6 +40,9 @@ object NotificationRegistry {
     /** Low-priority persistent live countdown channel for active Waqfa sessions. */
     const val CHANNEL_ID_WAQFA_ONGOING = "antiporn_waqfa_ongoing"
 
+    /** Silent informational channel without sound or vibration. */
+    const val CHANNEL_ID_INFO_QUIET = "antiporn_info_quiet"
+
     // ==========================================
     // Foreground Service Notification Identifiers (Unique per service)
     // ==========================================
@@ -113,6 +116,9 @@ object NotificationRegistry {
 
     /** Pre-timeout 60-second warning notification ID. */
     const val NOTIF_WAQFA_WARNING_ID = 6002
+
+    /** Base ID for per-app Waqfa cooldown notifications. */
+    const val NOTIF_WAQFA_COOLDOWN_BASE_ID = 6100
 
     /** Page Shield freeze started event notification ID. */
     const val EVENT_PAGE_SHIELD_FROZEN_ID = 9001

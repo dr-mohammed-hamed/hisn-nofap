@@ -673,6 +673,8 @@ class ApprovalRepository(
                 return
             }
             approvalDao.deletePendingApprovalBlocking(packageName)
+            AppNotificationManager.getInstance(appContext)
+                .cancelSystemNotification("zero_trust_freeze_$packageName".hashCode())
             watcherSyncer()
             deleteApprovalFromCloud(packageName)
             Log.i(TAG, "Removed pending approval for package: $packageName")
@@ -789,7 +791,9 @@ class ApprovalRepository(
 
             val dedupKey = if (approved) "approval_${packageName}_APPROVED" else "approval_${packageName}_REJECTED"
 
-            AppNotificationManager.getInstance(appContext).postEventNotification(
+            val notifManager = AppNotificationManager.getInstance(appContext)
+            notifManager.cancelSystemNotification("zero_trust_freeze_$packageName".hashCode())
+            notifManager.postEventNotification(
                 category = NotificationCategory.APPROVALS,
                 title = title,
                 message = desc,

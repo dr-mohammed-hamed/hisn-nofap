@@ -374,17 +374,23 @@ class PolicyRepository(
         transform = transform
     )
 
-    suspend fun saveAndEnforceSelfPolicy(bundle: DevicePolicyBundle): Boolean = withContext(Dispatchers.IO) {
+    suspend fun saveAndEnforceSelfPolicy(bundle: DevicePolicyBundle): Boolean =
+        mergeAndSaveSelfPolicyPatch { bundle } != null
+
+    suspend fun mergeAndSaveSelfPolicyPatch(
+        transform: (DevicePolicyBundle) -> DevicePolicyBundle
+    ): DevicePolicyBundle? = withContext(Dispatchers.IO) {
         try {
             val repoSupervised = try {
                 AccountabilityRepository.getInstance(appContext).isSupervised()
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                Log.w(TAG, "Failed to query accountability supervision in saveAndEnforceSelfPolicy", e)
+                Log.w(TAG, "Failed to query accountability supervision in mergeAndSaveSelfPolicyPatch", e)
                 false
             }
             val acceptedPair = synchronized(policyStateLock) {
                 val current = _currentPolicyFlow.value
+                val bundle = transform(current)
                 val isSupervised = current.isSupervised || bundle.isSupervised || repoSupervised
                 Log.i(TAG, "[SelfControlDiag] saveAndEnforceSelfPolicy called: isSupervised=$isSupervised, current.isSelfControlAllowed=${current.isSelfControlAllowed}, bundle.isSelfControlAllowed=${bundle.isSelfControlAllowed}")
 
@@ -430,7 +436,7 @@ class PolicyRepository(
                     isSuccess = false,
                     error = "Access denied: self-control is disabled by supervisor"
                 )
-                return@withContext false
+                return@withContext null
             }
 
             val (previous, updated) = acceptedPair
@@ -443,15 +449,16 @@ class PolicyRepository(
             )
             val myUid = AccountabilityRepository.getInstance(appContext).getCachedUid()
             cloudSyncBridge.syncPolicyToCloudAsync(myUid, updated)
-            true
+            updated
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            Log.e(TAG, "Error in saveAndEnforceSelfPolicy", e)
-            false
+            Log.e(TAG, "Error in mergeAndSaveSelfPolicyPatch", e)
+            null
         }
     }
 
-    private fun sanitizeSupervisedSelfPolicy(
+    @VisibleForTesting
+    internal fun sanitizeSupervisedSelfPolicy(
         bundle: DevicePolicyBundle,
         current: DevicePolicyBundle
     ): DevicePolicyBundle {
@@ -499,7 +506,8 @@ class PolicyRepository(
                 isYouTubeRestrictedModeEnabled = current.isYouTubeRestrictedModeEnabled,
                 isAdBlockingEnabled = current.isAdBlockingEnabled,
                 isTelegramWebBlocked = current.isTelegramWebBlocked,
-                isIncognitoBlocked = current.isIncognitoBlocked
+                isIncognitoBlocked = current.isIncognitoBlocked,
+                isBlockExternalVpnEnabled = current.isBlockExternalVpnEnabled
             )
         }
         if (!current.selfControlAppsAllowed) {

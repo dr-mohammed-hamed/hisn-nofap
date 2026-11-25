@@ -78,6 +78,8 @@ object WaqfaNotificationHelper {
                 .setShowWhen(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setCategory(NotificationCompat.CATEGORY_STATUS)
+                .setOnlyAlertOnce(true)
+                .setSilent(true)
                 .addAction(
                     android.R.drawable.ic_menu_close_clear_cancel,
                     appContext.getString(R.string.waqfa_notif_btn_early_exit),
@@ -185,7 +187,15 @@ object WaqfaNotificationHelper {
         }
     }
 
-    fun postCooldownStartedNotification(context: Context, appName: String, cooldownMinutes: Int) {
+    fun computeCooldownNotificationId(packageName: String): Int =
+        NotificationRegistry.NOTIF_WAQFA_COOLDOWN_BASE_ID + ((packageName.hashCode() and 0x7FFFFFFF) % 500)
+
+    fun postCooldownStartedNotification(
+        context: Context,
+        appName: String,
+        cooldownMinutes: Int,
+        packageName: String? = null
+    ) {
         try {
             val title = context.getString(R.string.waqfa_notif_cooldown_started_title)
             val message = context.getString(R.string.waqfa_notif_cooldown_started_msg, appName, cooldownMinutes)
@@ -195,6 +205,8 @@ object WaqfaNotificationHelper {
                 message = message,
                 dedupKey = "waqfa_freeze_${appName}_${System.currentTimeMillis() / 60_000}",
                 cooldownMs = 10_000L,
+                systemNotificationId = packageName?.takeUnless { it.isBlank() }?.let { computeCooldownNotificationId(it) },
+                channelId = NotificationRegistry.CHANNEL_ID_INFO_QUIET,
                 postSystemNotification = true,
                 importance = 2
             )
@@ -203,17 +215,21 @@ object WaqfaNotificationHelper {
         }
     }
 
-    fun postCooldownEndedNotification(context: Context, appName: String) {
+    fun postCooldownEndedNotification(context: Context, appName: String, packageName: String? = null) {
         try {
+            val notifManager = AppNotificationManager.getInstance(context.applicationContext)
+            if (!packageName.isNullOrBlank()) {
+                notifManager.cancelSystemNotification(computeCooldownNotificationId(packageName))
+            }
             val title = context.getString(R.string.waqfa_notif_cooldown_ended_title)
             val message = context.getString(R.string.waqfa_notif_cooldown_ended_msg, appName)
-            AppNotificationManager.getInstance(context.applicationContext).postEventNotification(
+            notifManager.postEventNotification(
                 category = NotificationCategory.SHIELDS,
                 title = title,
                 message = message,
                 dedupKey = "waqfa_unfreeze_${appName}_${System.currentTimeMillis() / 60_000}",
                 cooldownMs = 10_000L,
-                postSystemNotification = true,
+                postSystemNotification = false,
                 importance = 1
             )
         } catch (e: Exception) {

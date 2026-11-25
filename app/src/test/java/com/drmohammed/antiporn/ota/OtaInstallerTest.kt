@@ -22,6 +22,10 @@ class OtaInstallerTest {
             "com.drmohammed.antiporn.ACTION_OTA_INSTALL_STATUS",
             OtaPackageInstaller.ACTION_OTA_INSTALL_STATUS
         )
+        assertEquals(
+            "extra_show_result_notifications",
+            OtaPackageInstaller.EXTRA_SHOW_RESULT_NOTIFICATIONS
+        )
     }
 
     @Test

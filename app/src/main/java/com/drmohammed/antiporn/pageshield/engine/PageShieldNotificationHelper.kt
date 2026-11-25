@@ -26,6 +26,7 @@ object PageShieldNotificationHelper {
                 cooldownMs = 5_000L,
                 postSystemNotification = true,
                 systemNotificationId = NotificationRegistry.EVENT_PAGE_SHIELD_FROZEN_ID,
+                channelId = NotificationRegistry.CHANNEL_ID_INFO_QUIET,
                 importance = 2
             )
         } catch (e: Exception) {
@@ -37,13 +38,15 @@ object PageShieldNotificationHelper {
         try {
             val title = context.getString(R.string.page_shield_notif_unfrozen_title)
             val message = context.getString(R.string.page_shield_notif_unfrozen_msg, appName)
-            AppNotificationManager.getInstance(context.applicationContext).postEventNotification(
+            val notifManager = AppNotificationManager.getInstance(context.applicationContext)
+            notifManager.cancelSystemNotification(NotificationRegistry.EVENT_PAGE_SHIELD_FROZEN_ID)
+            notifManager.postEventNotification(
                 category = NotificationCategory.SHIELDS,
                 title = title,
                 message = message,
                 dedupKey = "page_shield_unfreeze_${appName}_${System.currentTimeMillis() / 60_000}",
                 cooldownMs = 5_000L,
-                postSystemNotification = true,
+                postSystemNotification = false,
                 systemNotificationId = NotificationRegistry.EVENT_PAGE_SHIELD_UNFROZEN_ID,
                 importance = 1
             )

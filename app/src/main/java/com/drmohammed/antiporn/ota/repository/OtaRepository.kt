@@ -55,11 +55,6 @@ class OtaRepository(private val appContext: Context) {
         OtaInstallReceiver.statusListener = object : OtaInstallReceiver.Companion.InstallStatusListener {
             override fun onInstallSuccess() {
                 Log.i(TAG, "OTA self-update installed successfully via receiver")
-                OtaNotificationManager.cancelNotification(appContext)
-                val targetVersion = lastTargetVersionName
-                if (!targetVersion.isNullOrBlank()) {
-                    OtaNotificationManager.showSuccessNotification(appContext, targetVersion)
-                }
             }
 
             override fun onPendingUserAction() {
@@ -195,7 +190,7 @@ class OtaRepository(private val appContext: Context) {
             }
 
             Log.i(TAG, "Integrity verified. Initiating package installation session...")
-            val installResult = OtaPackageInstaller.installApk(context, downloadedFile)
+            val installResult = OtaPackageInstaller.installApk(context, downloadedFile, showNotification)
             if (installResult.isSuccess) {
                 Log.i(TAG, "PackageInstaller session successfully committed (sessionId=${installResult.getOrNull()})")
                 Result.success(Unit)
@@ -219,7 +214,7 @@ class OtaRepository(private val appContext: Context) {
                         actionType = NotificationActionType.NONE,
                         systemNotificationId = NotificationRegistry.EVENT_OTA_FAILED_ID,
                         channelId = NotificationRegistry.CHANNEL_ID_PROTECTION_EVENTS,
-                        postSystemNotification = true,
+                        postSystemNotification = showNotification,
                         importance = 2
                     )
                 } catch (e: Exception) {
@@ -252,7 +247,7 @@ class OtaRepository(private val appContext: Context) {
                     actionType = NotificationActionType.NONE,
                     systemNotificationId = NotificationRegistry.EVENT_OTA_FAILED_ID,
                     channelId = NotificationRegistry.CHANNEL_ID_PROTECTION_EVENTS,
-                    postSystemNotification = true,
+                    postSystemNotification = showNotification,
                     importance = 2
                 )
             } catch (ex: Exception) {
@@ -283,7 +278,7 @@ class OtaRepository(private val appContext: Context) {
                 return Result.success(Unit)
             }
             Log.i(TAG, "New OTA version ${info.versionName} detected in background. Executing auto-install...")
-            downloadAndInstall(context, info, showNotification = true)
+            downloadAndInstall(context, info, showNotification = false)
         } else {
             Log.d(TAG, "Autonomous OTA check finished: no newer updates available")
             Result.success(Unit)

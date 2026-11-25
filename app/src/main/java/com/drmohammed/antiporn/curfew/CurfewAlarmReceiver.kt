@@ -109,6 +109,8 @@ class CurfewAlarmReceiver : BroadcastReceiver() {
 
                 if (action == ACTION_CURFEW_START) {
                     try {
+                        AppNotificationManager.getInstance(appContext)
+                            .cancelSystemNotification(NotificationRegistry.EVENT_CURFEW_PRE_WARNING_ID)
                         val yyyyMMdd = formatTargetDateKey(appContext)
                         AppNotificationManager.getInstance(appContext).postEventNotification(
                             category = NotificationCategory.CURFEW,
@@ -119,7 +121,7 @@ class CurfewAlarmReceiver : BroadcastReceiver() {
                             actionType = NotificationActionType.OPEN_CURFEW,
                             systemNotificationId = NotificationRegistry.EVENT_CURFEW_STARTED_ID,
                             channelId = NotificationRegistry.CHANNEL_ID_PROTECTION_EVENTS,
-                            postSystemNotification = true,
+                            postSystemNotification = false,
                             importance = 2
                         )
                     } catch (e: Exception) {
@@ -139,7 +141,7 @@ class CurfewAlarmReceiver : BroadcastReceiver() {
                             actionType = NotificationActionType.NONE,
                             systemNotificationId = NotificationRegistry.EVENT_CURFEW_ENDED_ID,
                             channelId = NotificationRegistry.CHANNEL_ID_PROTECTION_EVENTS,
-                            postSystemNotification = true,
+                            postSystemNotification = false,
                             importance = 1
                         )
                     } catch (e: Exception) {

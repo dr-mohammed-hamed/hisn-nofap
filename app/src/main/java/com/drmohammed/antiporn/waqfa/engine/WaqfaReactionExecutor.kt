@@ -76,7 +76,8 @@ object WaqfaReactionExecutor {
                 WaqfaNotificationHelper.postCooldownStartedNotification(
                     context = appContext,
                     appName = session.appName,
-                    cooldownMinutes = cooldownMinutes
+                    cooldownMinutes = cooldownMinutes,
+                    packageName = session.packageName
                 )
             }
 
@@ -116,6 +117,6 @@ object WaqfaReactionExecutor {
         WaqfaAlarmScheduler.cancelCooldownEndAlarm(appContext, packageName)
 
         // 4. إشعار فك التجميد
-        WaqfaNotificationHelper.postCooldownEndedNotification(appContext, appName)
+        WaqfaNotificationHelper.postCooldownEndedNotification(appContext, appName, packageName = packageName)
     }
 }

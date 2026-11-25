@@ -50,6 +50,7 @@ class HisnDeviceAdminService : DeviceAdminService() {
             context = appContext,
             host = ProtectionWatchdogRuntime.WatchdogHost.DEVICE_ADMIN_SERVICE
         )
+        com.drmohammed.antiporn.curfew.CurfewVpnStateCoordinator.syncForegroundPresentation()
 
         // 2. Seamless OTA Migration / Fallback cleanup:
         // If legacy DnsWatchdogService is running with an active notification, stop it immediately.
@@ -83,6 +84,7 @@ class HisnDeviceAdminService : DeviceAdminService() {
     override fun onDestroy() {
         Timber.tag(TAG).w("HisnDeviceAdminService destroyed / unbound by DPMS")
         isBound = false
+        com.drmohammed.antiporn.curfew.CurfewVpnStateCoordinator.syncForegroundPresentation()
 
         val appContext = applicationContext ?: this
         ProtectionWatchdogRuntime.detach(ProtectionWatchdogRuntime.WatchdogHost.DEVICE_ADMIN_SERVICE)

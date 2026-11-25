@@ -15,7 +15,7 @@
     <string name="watchdog_notification_desc">Hisn app is active.</string>
     <string name="admin_disable_warning">Security Warning: Hisn protection cannot be disabled to prevent bypass!</string>
     <string name="curfew_vpn_session_name">Hisn Curfew Blackhole</string>
-    <string name="curfew_vpn_dns_filter_session">Hisn Local DNS Filter</string>
+    <string name="curfew_vpn_dns_filter_session">Hisn Protection</string>
     <string name="curfew_vpn_channel_name">Curfew Network Blackhole</string>
     <string name="curfew_vpn_channel_desc">Notification channel for full internet blackout during sleep hours</string>
     <string name="curfew_vpn_notification_title">Night Curfew Active: Internet Isolated</string>
@@ -30,6 +30,8 @@
     <string name="protection_events_channel_desc">Alerts for guardian responses and timer completions</string>
     <string name="critical_alerts_channel_name">Critical Security Alerts</string>
     <string name="critical_alerts_channel_desc">Urgent alerts for security tampering and protection bypass attempts</string>
+    <string name="info_quiet_channel_name">Quiet Status Updates</string>
+    <string name="info_quiet_channel_desc">Silent informational updates without sound or vibration</string>
 
     <string name="notif_guardian_lockdown_title">Full Internet Blocked by Guardian</string>
     <string name="notif_guardian_lockdown_desc">The guardian has completely isolated device internet data. Calls and SMS work normally.</string>
@@ -709,11 +711,11 @@
     <string name="dns_col_porn">Adult</string>
     <string name="dns_col_ads">Ads</string>
     <string name="dns_col_youtube">YouTube</string>
-    <string name="dns_col_speed">Speed (EG)</string>
+    <string name="dns_col_speed">Speed</string>
     <string name="cd_dns_feature_supported">Supported</string>
     <string name="cd_dns_feature_not_supported">Not supported</string>
     <string name="dns_speed_fast">Ultra (15ms)</string>
-    <string name="dns_speed_warn">Slow (EU)</string>
+    <string name="dns_speed_warn">Moderate</string>
     <string name="dns_speed_medium">Medium</string>
     <string name="dns_preset_cloudflare_title">Cloudflare Family (Default)</string>
     <string name="dns_preset_controld_title">Control D (Light)</string>
@@ -1364,4 +1366,56 @@
     <string name="notif_guardian_remote_teardown_completed_msg">\"%1$s\"\'s phone successfully completed full Device Owner removal and supervision has safely ended.</string>
     <string name="notif_ward_remote_teardown_completed_title">Device Owner Permissions Removed</string>
     <string name="notif_ward_remote_teardown_completed_msg">Your guardian removed Device Owner permissions and lifted all restrictions from your phone. You may now safely uninstall the app if desired.</string>
+
+    <!-- Hierarchical Clarity Web Filter & BottomSheets -->
+    <string name="web_engine_status_light_title">Light Mode (Private DNS)</string>
+    <string name="web_engine_status_light_desc">Zero battery drain • Protected via Private DNS &amp; browsers</string>
+    <string name="web_engine_status_vpn_title">Local Filtering Active (Local VPN)</string>
+    <string name="web_engine_status_vpn_reason_full">Covers entire device • Reason: Full-system filtering</string>
+    <string name="web_engine_status_vpn_reason_ads">Covers entire device • Reason: Ad blocking</string>
+    <string name="web_engine_status_vpn_reason_both">Covers entire device • Reason: Full-system &amp; ad blocking</string>
+
+    <string name="web_card_network_title">Network &amp; DNS Security</string>
+    <string name="web_dns_active_label">Encrypted DNS Server</string>
+    <string name="web_dns_btn_change">Change</string>
+    <string name="web_dns_summary_cloudflare">Cloudflare Family • Adult + YouTube</string>
+    <string name="web_dns_summary_controld">Control D • Adult + Ads + YouTube</string>
+    <string name="web_dns_summary_adguard">AdGuard Family • Adult + Ads</string>
+    <string name="web_dns_summary_custom_format">%1$s • Custom</string>
+    <string name="switch_block_external_vpn_desc">Prevents external VPN apps from bypassing Hisn protection</string>
+
+    <string name="web_card_content_title">Browsing &amp; Content Rules</string>
+    <string name="switch_block_incognito_desc">Disables private browsing in supported browsers</string>
+    <string name="switch_block_telegram_web_desc">Blocks Telegram Web access in browsers and web links</string>
+    <string name="switch_youtube_restricted_desc">Filters mature content and restricted comments</string>
+    <string name="web_scope_badge_browsers">Browsers</string>
+    <string name="web_scope_badge_all_device">All Device</string>
+    <string name="web_sites_mode_blocklist">Block Specific Sites</string>
+    <string name="web_sites_mode_whitelist">Study Mode: Allowed Only</string>
+    <string name="web_sites_summary_format">%1$d blocked • %2$d allowed</string>
+    <string name="web_sites_btn_manage">Manage List</string>
+    <string name="web_whitelist_inline_warning">Study Mode with full-system VPN may block background apps. Disabling full-system filtering is recommended.</string>
+    <string name="web_whitelist_btn_disable_full">Disable System Filter</string>
+
+    <string name="web_card_vpn_expand_title">Extend Protection Beyond Browsers</string>
+    <string name="web_badge_local_vpn">Local VPN</string>
+    <string name="switch_full_system_filter_title">Apply Rules Across Entire Device</string>
+    <string name="switch_full_system_filter_desc">Enforces site lists, Telegram Web, and YouTube Restricted across all apps</string>
+    <string name="switch_block_ads_desc">Blocks ads and trackers via on-device local DNS filter</string>
+    <string name="web_ads_dns_confirmed_hint">Your selected DNS server already blocks ads without needing Local VPN.</string>
+    <string name="web_ads_dns_custom_hint">If your custom DNS already blocks ads, you don\'t need Local VPN ad blocking.</string>
+    <string name="web_unaffiliated_inline_warning">A secondary profile or dual app prevents Local VPN filtering. Core DNS protection remains active.</string>
+
+    <string name="web_trust_footer_text">Always active in supported browsers (Chrome, Brave, Edge, Samsung, Vivaldi): SafeSearch, SafeSites, Guest Mode lock, and browser DNS lock.</string>
+
+    <string name="dns_picker_title">Select Encrypted DNS Server</string>
+    <string name="dns_picker_desc">Choose a filtering DNS provider for Private DNS protection</string>
+    <string name="dns_preset_custom_title">Custom DoT Server</string>
+    <string name="dns_picker_btn_confirm">Confirm Server</string>
+    <string name="dns_picker_validating">Validating DNS server...</string>
+
+    <string name="website_rules_title">Manage Website Rules</string>
+    <string name="website_rules_desc">Add or remove blocked and allowed websites</string>
+    <string name="website_rules_search_hint">Search websites...</string>
+    <string name="website_rules_btn_done">Done</string>
 </resources>

@@ -24,6 +24,7 @@ import com.drmohammed.antiporn.ui.accountability.AccountabilityViewModel
 import com.drmohammed.antiporn.ui.accountability.GuardianControlViewModel
 import com.drmohammed.antiporn.ui.accountability.RemoteAppManagerViewModel
 import com.drmohammed.antiporn.ui.control.SelfControlViewModel
+import com.drmohammed.antiporn.ui.control.web.WebFilterViewModel
 import com.drmohammed.antiporn.ui.home.HomeViewModel
 import com.drmohammed.antiporn.ui.main.MainViewModel
 import com.drmohammed.antiporn.ui.notification.NotificationCenterViewModel
@@ -100,6 +101,7 @@ val appModule = module {
     viewModel { MainViewModel() }
     viewModel { HomeViewModel(androidApplication(), get()) }
     viewModel { SelfControlViewModel(androidApplication(), get(), get()) }
+    viewModel { WebFilterViewModel(androidApplication(), get(), get()) }
     viewModel { AccountabilityViewModel(androidApplication(), get(), get(), get(), get()) }
     viewModel { RemoteAppManagerViewModel(androidApplication(), get(), get(), get()) }
     viewModel { GuardianControlViewModel(androidApplication(), get(), get(), get()) }

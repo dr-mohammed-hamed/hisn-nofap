@@ -286,7 +286,7 @@
     <string name="dns_vpn_notification_desc">فلترة شبكة DNS المحلية وحظر المحتوى الإباحي تعمل في الخلفية</string>
 
     <string name="curfew_vpn_session_name">عزل شبكة الحظر الليلي (حِصْن)</string>
-    <string name="curfew_vpn_dns_filter_session">فلترة حماية شبكة DNS المحلية</string>
+    <string name="curfew_vpn_dns_filter_session">حماية حصن</string>
 
     <!-- Unified Protection & Curfew Notification Strings -->
     <string name="protection_vpn_channel_name">درع الحماية وفلترة الشبكة (حِصْن)</string>
@@ -295,6 +295,8 @@
     <string name="protection_events_channel_desc">تنبيهات استجابات المشرف وانتهاء فترات الحظر</string>
     <string name="critical_alerts_channel_name">تنبيهات الأمان الحرجة</string>
     <string name="critical_alerts_channel_desc">إشعارات عاجلة لمحاولات التلاعب الأمني وتجاوز الحماية</string>
+    <string name="info_quiet_channel_name">تحديثات صامتة</string>
+    <string name="info_quiet_channel_desc">إشعارات معلوماتية صامتة بدون صوت أو اهتزاز</string>
 
     <string name="notif_guardian_lockdown_title">تم حظر الإنترنت بالكامل من المشرف</string>
     <string name="notif_guardian_lockdown_desc">قام المشرف بعزل بيانات الإنترنت عن الجهاز. المكالمات وSMS تعمل بشكل طبيعي.</string>
@@ -506,11 +508,11 @@
     <string name="dns_col_porn">إباحية</string>
     <string name="dns_col_ads">إعلانات</string>
     <string name="dns_col_youtube">يوتيوب</string>
-    <string name="dns_col_speed">السرعة بمصر</string>
+    <string name="dns_col_speed">الاستجابة</string>
     <string name="cd_dns_feature_supported">مدعوم</string>
     <string name="cd_dns_feature_not_supported">غير مدعوم</string>
     <string name="dns_speed_fast">فائق (15ms)</string>
-    <string name="dns_speed_warn">بطيء (أوروبا)</string>
+    <string name="dns_speed_warn">متوسطة (خارجي)</string>
     <string name="dns_speed_medium">متوسط</string>
     <string name="dns_preset_cloudflare_title">Cloudflare Family (افتراضي)</string>
     <string name="dns_preset_controld_title">Control D (خفيف)</string>
@@ -1642,4 +1644,56 @@
     <string name="notif_guardian_remote_teardown_completed_msg">نفّذ هاتف «%1$s» أمر إزالة صلاحية مالك الجهاز بالكامل بنجاح، وتم إنهاء الإشراف بأمان.</string>
     <string name="notif_ward_remote_teardown_completed_title">تمت إزالة صلاحية مالك الجهاز</string>
     <string name="notif_ward_remote_teardown_completed_msg">قام مشرفك بإزالة صلاحية مالك الجهاز بالكامل من هاتفك وفك كافة القيود. يمكنك حذف التطبيق الآن بأمان إن شئت.</string>
+
+    <!-- Hierarchical Clarity Web Filter & BottomSheets -->
+    <string name="web_engine_status_light_title">الوضع الخفيف (Private DNS)</string>
+    <string name="web_engine_status_light_desc">بدون استهلاك بطارية • الحماية عبر الـ DNS والمتصفحات</string>
+    <string name="web_engine_status_vpn_title">الفلترة المحلية نشطة (Local VPN)</string>
+    <string name="web_engine_status_vpn_reason_full">يغطي كامل الجهاز • مفعّل بسبب: الفلترة الشاملة</string>
+    <string name="web_engine_status_vpn_reason_ads">يغطي كامل الجهاز • مفعّل بسبب: حجب الإعلانات</string>
+    <string name="web_engine_status_vpn_reason_both">يغطي كامل الجهاز • مفعّل بسبب: الفلترة الشاملة وحجب الإعلانات</string>
+
+    <string name="web_card_network_title">أمان الشبكة والـ DNS</string>
+    <string name="web_dns_active_label">خادم التصفية المشفر</string>
+    <string name="web_dns_btn_change">تغيير</string>
+    <string name="web_dns_summary_cloudflare">Cloudflare Family • إباحية + يوتيوب</string>
+    <string name="web_dns_summary_controld">Control D • إباحية + إعلانات + يوتيوب</string>
+    <string name="web_dns_summary_adguard">AdGuard Family • إباحية + إعلانات</string>
+    <string name="web_dns_summary_custom_format">%1$s • مخصص</string>
+    <string name="switch_block_external_vpn_desc">يمنع أي تطبيق VPN آخر من تجاوز حماية حصن</string>
+
+    <string name="web_card_content_title">قواعد التصفح والمحتوى</string>
+    <string name="switch_block_incognito_desc">تعطيل التصفح الخاص في المتصفحات المدعومة</string>
+    <string name="switch_block_telegram_web_desc">منع فتح تيليجرام عبر المتصفح والروابط المباشرة</string>
+    <string name="switch_youtube_restricted_desc">تصفية المحتوى غير المناسب والتعليقات الحساسة</string>
+    <string name="web_scope_badge_browsers">المتصفحات</string>
+    <string name="web_scope_badge_all_device">كامل الجهاز</string>
+    <string name="web_sites_mode_blocklist">حظر مواقع محددة</string>
+    <string name="web_sites_mode_whitelist">وضع الدراسة: المسموحة فقط</string>
+    <string name="web_sites_summary_format">%1$d محظور • %2$d مسموح</string>
+    <string name="web_sites_btn_manage">إدارة القائمة</string>
+    <string name="web_whitelist_inline_warning">تشغيل وضع الدراسة مع فلترة كامل الجهاز قد يمنع اتصالات بعض التطبيقات. يُنصح بإيقاف فلترة كامل الجهاز.</string>
+    <string name="web_whitelist_btn_disable_full">إيقاف فلترة النظام</string>
+
+    <string name="web_card_vpn_expand_title">توسيع الحماية لخارج المتصفح</string>
+    <string name="web_badge_local_vpn">VPN محلي</string>
+    <string name="switch_full_system_filter_title">تطبيق القواعد على كامل الجهاز</string>
+    <string name="switch_full_system_filter_desc">يطبّق قائمة المواقع وتيليجرام ويب ويوتيوب داخل كل التطبيقات، وليس المتصفحات فقط</string>
+    <string name="switch_block_ads_desc">يحجب الإعلانات والمتتبعات عبر فلتر محلي داخل الجهاز</string>
+    <string name="web_ads_dns_confirmed_hint">خادم الـ DNS الحالي يحجب الإعلانات بالفعل دون الحاجة لتشغيل VPN محلي.</string>
+    <string name="web_ads_dns_custom_hint">إذا كان خادمك المخصص يحجب الإعلانات بالفعل، فلا حاجة لتشغيل VPN حجب الإعلانات.</string>
+    <string name="web_unaffiliated_inline_warning">توجد تطبيقات مزدوجة أو بروفايل ثانوي يمنع تشغيل الفلترة المحلية. الحماية الأساسية عبر الـ DNS لا تزال تعمل.</string>
+
+    <string name="web_trust_footer_text">حماية مفعّلة تلقائياً في المتصفحات المدعومة (Chrome, Brave, Edge, Samsung, Vivaldi): البحث الآمن، تصفية المواقع الضارة، منع وضع الضيف، وقفل DNS المتصفح.</string>
+
+    <string name="dns_picker_title">اختيار خادم الـ DNS المشفر</string>
+    <string name="dns_picker_desc">اختر خادم التصفية المناسب لحماية الشبكة عبر Private DNS</string>
+    <string name="dns_preset_custom_title">خادم مخصص (Custom DoT)</string>
+    <string name="dns_picker_btn_confirm">تأكيد الخادم</string>
+    <string name="dns_picker_validating">جاري التحقق من الخادم...</string>
+
+    <string name="website_rules_title">إدارة قائمة المواقع</string>
+    <string name="website_rules_desc">أضف أو احذف المواقع المحظورة والمسموحة في المتصفحات أو النظام</string>
+    <string name="website_rules_search_hint">ابحث في المواقع...</string>
+    <string name="website_rules_btn_done">تم</string>
 </resources>

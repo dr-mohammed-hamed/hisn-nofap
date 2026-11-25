@@ -34,8 +34,10 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:ellipsize="middle"
+            android:fontFamily="@font/tajawal"
             android:singleLine="true"
             android:textColor="?attr/colorOnSurface"
+            android:textDirection="ltr"
             android:textSize="14sp"
             android:textStyle="bold"
             tools:text="example.com" />

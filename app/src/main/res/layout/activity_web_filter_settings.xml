@@ -31,7 +31,64 @@
             android:paddingTop="8dp"
             android:paddingBottom="24dp">
 
-            <!-- Card 1: Encrypted DNS Host -->
+            <!-- 1. Smart Engine Status Banner -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/cardEngineStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                app:cardBackgroundColor="@color/status_green_bg"
+                app:cardCornerRadius="18dp"
+                app:cardElevation="0dp"
+                app:strokeColor="@color/status_green"
+                app:strokeWidth="1dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:padding="16dp">
+
+                    <ImageView
+                        android:id="@+id/ivEngineStatusIcon"
+                        android:layout_width="28dp"
+                        android:layout_height="28dp"
+                        android:contentDescription="@null"
+                        android:src="@drawable/ic_shield_dns"
+                        app:tint="@color/status_green" />
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="12dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:id="@+id/tvEngineStatusTitle"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:fontFamily="@font/tajawal"
+                            android:text="@string/web_engine_status_light_title"
+                            android:textColor="?attr/colorOnSurface"
+                            android:textSize="15sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvEngineStatusDesc"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:fontFamily="@font/tajawal"
+                            android:text="@string/web_engine_status_light_desc"
+                            android:textColor="?attr/colorOnSurfaceVariant"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- 2. Card 1: Network & DNS -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -49,398 +106,127 @@
                     android:padding="16dp">
 
                     <TextView
-                        android:layout_width="wrap_content"
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:fontFamily="@font/tajawal"
-                        android:text="@string/dns_host_title"
+                        android:text="@string/web_card_network_title"
                         android:textColor="?attr/colorOnSurface"
                         android:textSize="15sp"
                         android:textStyle="bold" />
 
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="4dp"
-                        android:fontFamily="@font/tajawal"
-                        android:text="@string/dns_table_title"
-                        android:textColor="?attr/colorOnSurfaceVariant"
-                        android:textSize="12sp" />
-
-                    <!-- DNS Comparison Table -->
-                    <com.google.android.material.card.MaterialCardView
+                    <!-- DNS Summary Row -->
+                    <LinearLayout
+                        android:id="@+id/layoutDnsSummaryRow"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
-                        app:cardBackgroundColor="?attr/colorSurface"
-                        app:cardCornerRadius="12dp"
-                        app:cardElevation="0dp"
-                        app:strokeColor="?attr/colorOutlineVariant"
-                        app:strokeWidth="1dp">
+                        android:layout_marginTop="12dp"
+                        android:background="?attr/selectableItemBackground"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center_vertical"
+                        android:minHeight="48dp"
+                        android:orientation="horizontal"
+                        android:paddingVertical="4dp">
 
                         <LinearLayout
-                            android:layout_width="match_parent"
+                            android:layout_width="0dp"
                             android:layout_height="wrap_content"
+                            android:layout_marginEnd="12dp"
+                            android:layout_weight="1"
                             android:orientation="vertical">
 
-                            <!-- Header Row -->
-                            <LinearLayout
+                            <TextView
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
-                                android:minHeight="32dp"
-                                android:background="?attr/colorSurfaceContainerHigh"
-                                android:gravity="center_vertical"
-                                android:orientation="horizontal"
-                                android:paddingHorizontal="6dp"
-                                android:paddingVertical="4dp">
+                                android:fontFamily="@font/tajawal"
+                                android:text="@string/web_dns_active_label"
+                                android:textColor="?attr/colorOnSurfaceVariant"
+                                android:textSize="12sp" />
 
-                                <TextView
-                                    android:layout_width="0dp"
-                                    android:layout_height="wrap_content"
-                                    android:layout_weight="3.4"
-                                    android:fontFamily="@font/tajawal"
-                                    android:text="@string/dns_col_server"
-                                    android:textColor="?attr/colorOnSurfaceVariant"
-                                    android:textSize="11sp"
-                                    android:textStyle="bold" />
-
-                                <TextView
-                                    android:layout_width="0dp"
-                                    android:layout_height="wrap_content"
-                                    android:layout_weight="1.3"
-                                    android:gravity="center"
-                                    android:fontFamily="@font/tajawal"
-                                    android:text="@string/dns_col_porn"
-                                    android:textColor="?attr/colorOnSurfaceVariant"
-                                    android:textSize="10sp"
-                                    android:textStyle="bold" />
-
-                                <TextView
-                                    android:layout_width="0dp"
-                                    android:layout_height="wrap_content"
-                                    android:layout_weight="1.3"
-                                    android:gravity="center"
-                                    android:fontFamily="@font/tajawal"
-                                    android:text="@string/dns_col_ads"
-                                    android:textColor="?attr/colorOnSurfaceVariant"
-                                    android:textSize="10sp"
-                                    android:textStyle="bold" />
-
-                                <TextView
-                                    android:layout_width="0dp"
-                                    android:layout_height="wrap_content"
-                                    android:layout_weight="1.4"
-                                    android:gravity="center"
-                                    android:fontFamily="@font/tajawal"
-                                    android:text="@string/dns_col_youtube"
-                                    android:textColor="?attr/colorOnSurfaceVariant"
-                                    android:textSize="10sp"
-                                    android:textStyle="bold" />
-
-                                <TextView
-                                    android:layout_width="0dp"
-                                    android:layout_height="wrap_content"
-                                    android:layout_weight="2.6"
-                                    android:gravity="center"
-                                    android:fontFamily="@font/tajawal"
-                                    android:text="@string/dns_col_speed"
-                                    android:textColor="?attr/colorOnSurfaceVariant"
-                                    android:textSize="10sp"
-                                    android:textStyle="bold" />
-                            </LinearLayout>
-
-                            <View
-                                android:layout_width="match_parent"
-                                android:layout_height="1dp"
-                                android:background="?attr/colorOutlineVariant" />
-
-                            <!-- Row 1: Cloudflare Family (Default) -->
-                            <LinearLayout
-                                android:id="@+id/rowDnsCloudflare"
+                            <TextView
+                                android:id="@+id/tvDnsActiveSummary"
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
-                                android:minHeight="48dp"
-                                android:background="?attr/selectableItemBackground"
-                                android:clickable="true"
-                                android:focusable="true"
-                                android:gravity="center_vertical"
-                                android:orientation="horizontal"
-                                android:paddingHorizontal="6dp">
+                                android:layout_marginTop="2dp"
+                                android:fontFamily="@font/tajawal"
+                                android:textColor="?attr/colorOnSurface"
+                                android:textSize="14sp"
+                                android:textStyle="bold"
+                                tools:text="@string/web_dns_summary_cloudflare" />
 
-                                <LinearLayout
-                                    android:layout_width="0dp"
-                                    android:layout_height="wrap_content"
-                                    android:layout_weight="3.4"
-                                    android:gravity="center_vertical"
-                                    android:orientation="horizontal">
-
-                                    <RadioButton
-                                        android:id="@+id/rbDnsCloudflare"
-                                        android:layout_width="wrap_content"
-                                        android:layout_height="wrap_content"
-                                        android:clickable="false"
-                                        android:focusable="false"
-                                        android:minWidth="0dp"
-                                        android:minHeight="0dp" />
-
-                                    <TextView
-                                        android:layout_width="wrap_content"
-                                        android:layout_height="wrap_content"
-                                        android:layout_marginStart="4dp"
-                                        android:fontFamily="@font/tajawal"
-                                        android:text="@string/dns_preset_cloudflare_title"
-                                        android:textColor="?attr/colorOnSurface"
-                                        android:textSize="11sp"
-                                        android:textStyle="bold" />
-                                </LinearLayout>
-
-                                <ImageView
-                                    android:layout_width="0dp"
-                                    android:layout_height="16dp"
-                                    android:layout_weight="1.3"
-                                    android:layout_gravity="center"
-                                    android:src="@drawable/ic_check_small"
-                                    app:tint="@color/status_green"
-                                    android:contentDescription="@string/cd_dns_feature_supported" />
-
-                                <ImageView
-                                    android:layout_width="0dp"
-                                    android:layout_height="16dp"
-                                    android:layout_weight="1.3"
-                                    android:layout_gravity="center"
-                                    android:src="@drawable/ic_close"
-                                    app:tint="?attr/colorOnSurfaceVariant"
-                                    android:contentDescription="@string/cd_dns_feature_not_supported" />
-
-                                <ImageView
-                                    android:layout_width="0dp"
-                                    android:layout_height="16dp"
-                                    android:layout_weight="1.4"
-                                    android:layout_gravity="center"
-                                    android:src="@drawable/ic_check_small"
-                                    app:tint="@color/status_green"
-                                    android:contentDescription="@string/cd_dns_feature_supported" />
-
-                                <TextView
-                                    android:layout_width="0dp"
-                                    android:layout_height="wrap_content"
-                                    android:layout_weight="2.6"
-                                    android:gravity="center"
-                                    android:fontFamily="@font/tajawal"
-                                    android:text="@string/dns_speed_fast"
-                                    android:textColor="@color/status_green"
-                                    android:textSize="10sp"
-                                    android:textStyle="bold" />
-                            </LinearLayout>
-
-                            <View
-                                android:layout_width="match_parent"
-                                android:layout_height="1dp"
-                                android:background="?attr/colorOutlineVariant" />
-
-                            <!-- Row 2: Control D (Light) -->
-                            <LinearLayout
-                                android:id="@+id/rowDnsControlD"
+                            <TextView
+                                android:id="@+id/tvDnsActiveHost"
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
-                                android:minHeight="48dp"
-                                android:background="?attr/selectableItemBackground"
-                                android:clickable="true"
-                                android:focusable="true"
-                                android:gravity="center_vertical"
-                                android:orientation="horizontal"
-                                android:paddingHorizontal="6dp">
-
-                                <LinearLayout
-                                    android:layout_width="0dp"
-                                    android:layout_height="wrap_content"
-                                    android:layout_weight="3.4"
-                                    android:gravity="center_vertical"
-                                    android:orientation="horizontal">
-
-                                    <RadioButton
-                                        android:id="@+id/rbDnsControlD"
-                                        android:layout_width="wrap_content"
-                                        android:layout_height="wrap_content"
-                                        android:clickable="false"
-                                        android:focusable="false"
-                                        android:minWidth="0dp"
-                                        android:minHeight="0dp" />
-
-                                    <TextView
-                                        android:layout_width="wrap_content"
-                                        android:layout_height="wrap_content"
-                                        android:layout_marginStart="4dp"
-                                        android:fontFamily="@font/tajawal"
-                                        android:text="@string/dns_preset_controld_title"
-                                        android:textColor="?attr/colorOnSurface"
-                                        android:textSize="11sp"
-                                        android:textStyle="bold" />
-                                </LinearLayout>
-
-                                <ImageView
-                                    android:layout_width="0dp"
-                                    android:layout_height="16dp"
-                                    android:layout_weight="1.3"
-                                    android:layout_gravity="center"
-                                    android:src="@drawable/ic_check_small"
-                                    app:tint="@color/status_green"
-                                    android:contentDescription="@string/cd_dns_feature_supported" />
-
-                                <ImageView
-                                    android:layout_width="0dp"
-                                    android:layout_height="16dp"
-                                    android:layout_weight="1.3"
-                                    android:layout_gravity="center"
-                                    android:src="@drawable/ic_check_small"
-                                    app:tint="@color/status_green"
-                                    android:contentDescription="@string/cd_dns_feature_supported" />
-
-                                <ImageView
-                                    android:layout_width="0dp"
-                                    android:layout_height="16dp"
-                                    android:layout_weight="1.4"
-                                    android:layout_gravity="center"
-                                    android:src="@drawable/ic_check_small"
-                                    app:tint="@color/status_green"
-                                    android:contentDescription="@string/cd_dns_feature_supported" />
-
-                                <TextView
-                                    android:layout_width="0dp"
-                                    android:layout_height="wrap_content"
-                                    android:layout_weight="2.6"
-                                    android:gravity="center"
-                                    android:fontFamily="@font/tajawal"
-                                    android:text="@string/dns_speed_warn"
-                                    android:textColor="@color/status_orange"
-                                    android:textSize="10sp"
-                                    android:textStyle="bold" />
-                            </LinearLayout>
-
-                            <View
-                                android:layout_width="match_parent"
-                                android:layout_height="1dp"
-                                android:background="?attr/colorOutlineVariant" />
-
-                            <!-- Row 3: AdGuard Family -->
-                            <LinearLayout
-                                android:id="@+id/rowDnsAdguard"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:minHeight="48dp"
-                                android:background="?attr/selectableItemBackground"
-                                android:clickable="true"
-                                android:focusable="true"
-                                android:gravity="center_vertical"
-                                android:orientation="horizontal"
-                                android:paddingHorizontal="6dp">
-
-                                <LinearLayout
-                                    android:layout_width="0dp"
-                                    android:layout_height="wrap_content"
-                                    android:layout_weight="3.4"
-                                    android:gravity="center_vertical"
-                                    android:orientation="horizontal">
-
-                                    <RadioButton
-                                        android:id="@+id/rbDnsAdguard"
-                                        android:layout_width="wrap_content"
-                                        android:layout_height="wrap_content"
-                                        android:clickable="false"
-                                        android:focusable="false"
-                                        android:minWidth="0dp"
-                                        android:minHeight="0dp" />
-
-                                    <TextView
-                                        android:layout_width="wrap_content"
-                                        android:layout_height="wrap_content"
-                                        android:layout_marginStart="4dp"
-                                        android:fontFamily="@font/tajawal"
-                                        android:text="@string/dns_preset_adguard_title"
-                                        android:textColor="?attr/colorOnSurface"
-                                        android:textSize="11sp"
-                                        android:textStyle="bold" />
-                                </LinearLayout>
-
-                                <ImageView
-                                    android:layout_width="0dp"
-                                    android:layout_height="16dp"
-                                    android:layout_weight="1.3"
-                                    android:layout_gravity="center"
-                                    android:src="@drawable/ic_check_small"
-                                    app:tint="@color/status_green"
-                                    android:contentDescription="@string/cd_dns_feature_supported" />
-
-                                <ImageView
-                                    android:layout_width="0dp"
-                                    android:layout_height="16dp"
-                                    android:layout_weight="1.3"
-                                    android:layout_gravity="center"
-                                    android:src="@drawable/ic_check_small"
-                                    app:tint="@color/status_green"
-                                    android:contentDescription="@string/cd_dns_feature_supported" />
-
-                                <ImageView
-                                    android:layout_width="0dp"
-                                    android:layout_height="16dp"
-                                    android:layout_weight="1.4"
-                                    android:layout_gravity="center"
-                                    android:src="@drawable/ic_close"
-                                    app:tint="?attr/colorOnSurfaceVariant"
-                                    android:contentDescription="@string/cd_dns_feature_not_supported" />
-
-                                <TextView
-                                    android:layout_width="0dp"
-                                    android:layout_height="wrap_content"
-                                    android:layout_weight="2.6"
-                                    android:gravity="center"
-                                    android:fontFamily="@font/tajawal"
-                                    android:text="@string/dns_speed_medium"
-                                    android:textColor="@color/status_orange"
-                                    android:textSize="10sp"
-                                    android:textStyle="bold" />
-                            </LinearLayout>
-
+                                android:layout_marginTop="2dp"
+                                android:fontFamily="monospace"
+                                android:textColor="?attr/colorOnSurfaceVariant"
+                                android:textDirection="ltr"
+                                android:textSize="12sp"
+                                tools:text="family.cloudflare-dns.com" />
                         </LinearLayout>
-                    </com.google.android.material.card.MaterialCardView>
 
-                    <!-- Manual Custom DNS input below table -->
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="14dp"
-                        android:fontFamily="@font/tajawal"
-                        android:text="@string/dns_manual_input_label"
-                        android:textColor="?attr/colorOnSurfaceVariant"
-                        android:textSize="12sp" />
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnChangeDns"
+                            style="@style/Widget.Material3.Button.TonalButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:fontFamily="@font/tajawal"
+                            android:minHeight="48dp"
+                            android:text="@string/web_dns_btn_change"
+                            android:textSize="13sp"
+                            app:cornerRadius="12dp" />
+                    </LinearLayout>
 
-                    <com.google.android.material.textfield.TextInputLayout
-                        android:id="@+id/tilDnsHost"
-                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginVertical="10dp"
+                        android:background="?attr/colorOutlineVariant" />
+
+                    <!-- Switch: Block External VPN -->
+                    <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
-                        app:boxCornerRadiusBottomEnd="12dp"
-                        app:boxCornerRadiusBottomStart="12dp"
-                        app:boxCornerRadiusTopEnd="12dp"
-                        app:boxCornerRadiusTopStart="12dp"
-                        app:endIconMode="clear_text">
+                        android:gravity="center_vertical"
+                        android:minHeight="48dp"
+                        android:orientation="horizontal">
 
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/etDnsHost"
-                            android:layout_width="match_parent"
+                        <LinearLayout
+                            android:layout_width="0dp"
                             android:layout_height="wrap_content"
-                            android:fontFamily="monospace"
-                            android:hint="@string/guardian_dns_hint"
-                            android:inputType="textUri"
-                            android:maxLines="1"
-                            android:singleLine="true"
-                            android:textDirection="ltr"
-                            android:textSize="12sp" />
-                    </com.google.android.material.textfield.TextInputLayout>
+                            android:layout_marginEnd="12dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:fontFamily="@font/tajawal"
+                                android:labelFor="@id/switchBlockExternalVpn"
+                                android:text="@string/switch_block_external_vpn"
+                                android:textColor="?attr/colorOnSurface"
+                                android:textSize="14sp" />
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:fontFamily="@font/tajawal"
+                                android:text="@string/switch_block_external_vpn_desc"
+                                android:textColor="?attr/colorOnSurfaceVariant"
+                                android:textSize="12sp" />
+                        </LinearLayout>
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/switchBlockExternalVpn"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
+                    </LinearLayout>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
-            <!-- Card 2: Security Switches (Incognito, VPN, Telegram Web) -->
+            <!-- 3. Card 2: Browsing & Content Rules -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -455,8 +241,17 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:paddingHorizontal="16dp"
-                    android:paddingVertical="6dp">
+                    android:padding="16dp">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="8dp"
+                        android:fontFamily="@font/tajawal"
+                        android:text="@string/web_card_content_title"
+                        android:textColor="?attr/colorOnSurface"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
 
                     <!-- Switch 1: Block Incognito -->
                     <LinearLayout
@@ -464,17 +259,63 @@
                         android:layout_height="wrap_content"
                         android:gravity="center_vertical"
                         android:minHeight="48dp"
-                        android:orientation="horizontal">
+                        android:orientation="horizontal"
+                        android:paddingVertical="6dp">
 
-                        <TextView
+                        <LinearLayout
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
+                            android:layout_marginEnd="12dp"
                             android:layout_weight="1"
-                            android:fontFamily="@font/tajawal"
-                            android:labelFor="@id/switchBlockIncognito"
-                            android:text="@string/switch_block_incognito"
-                            android:textColor="?attr/colorOnSurface"
-                            android:textSize="14sp" />
+                            android:orientation="vertical">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:gravity="center_vertical"
+                                android:orientation="horizontal">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:fontFamily="@font/tajawal"
+                                    android:labelFor="@id/switchBlockIncognito"
+                                    android:text="@string/switch_block_incognito"
+                                    android:textColor="?attr/colorOnSurface"
+                                    android:textSize="14sp" />
+
+                                <com.google.android.material.card.MaterialCardView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginStart="8dp"
+                                    app:cardBackgroundColor="?attr/colorSurfaceContainerHigh"
+                                    app:cardCornerRadius="8dp"
+                                    app:cardElevation="0dp"
+                                    app:strokeWidth="0dp">
+
+                                    <TextView
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="wrap_content"
+                                        android:fontFamily="@font/tajawal"
+                                        android:paddingHorizontal="8dp"
+                                        android:paddingVertical="2dp"
+                                        android:text="@string/web_scope_badge_browsers"
+                                        android:textColor="?attr/colorOnSurfaceVariant"
+                                        android:textSize="10sp"
+                                        android:textStyle="bold" />
+                                </com.google.android.material.card.MaterialCardView>
+                            </LinearLayout>
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:fontFamily="@font/tajawal"
+                                android:text="@string/switch_block_incognito_desc"
+                                android:textColor="?attr/colorOnSurfaceVariant"
+                                android:textSize="12sp" />
+                        </LinearLayout>
 
                         <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/switchBlockIncognito"
@@ -485,6 +326,7 @@
                     <View
                         android:layout_width="match_parent"
                         android:layout_height="1dp"
+                        android:layout_marginVertical="6dp"
                         android:background="?attr/colorOutlineVariant" />
 
                     <!-- Switch 2: Block Telegram Web -->
@@ -493,17 +335,64 @@
                         android:layout_height="wrap_content"
                         android:gravity="center_vertical"
                         android:minHeight="48dp"
-                        android:orientation="horizontal">
+                        android:orientation="horizontal"
+                        android:paddingVertical="6dp">
 
-                        <TextView
+                        <LinearLayout
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
+                            android:layout_marginEnd="12dp"
                             android:layout_weight="1"
-                            android:fontFamily="@font/tajawal"
-                            android:labelFor="@id/switchBlockTelegramWeb"
-                            android:text="@string/switch_block_telegram_web"
-                            android:textColor="?attr/colorOnSurface"
-                            android:textSize="14sp" />
+                            android:orientation="vertical">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:gravity="center_vertical"
+                                android:orientation="horizontal">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:fontFamily="@font/tajawal"
+                                    android:labelFor="@id/switchBlockTelegramWeb"
+                                    android:text="@string/switch_block_telegram_web"
+                                    android:textColor="?attr/colorOnSurface"
+                                    android:textSize="14sp" />
+
+                                <com.google.android.material.card.MaterialCardView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginStart="8dp"
+                                    app:cardBackgroundColor="?attr/colorSurfaceContainerHigh"
+                                    app:cardCornerRadius="8dp"
+                                    app:cardElevation="0dp"
+                                    app:strokeWidth="0dp">
+
+                                    <TextView
+                                        android:id="@+id/tvBadgeTelegramScope"
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="wrap_content"
+                                        android:fontFamily="@font/tajawal"
+                                        android:paddingHorizontal="8dp"
+                                        android:paddingVertical="2dp"
+                                        android:text="@string/web_scope_badge_browsers"
+                                        android:textColor="?attr/colorOnSurfaceVariant"
+                                        android:textSize="10sp"
+                                        android:textStyle="bold" />
+                                </com.google.android.material.card.MaterialCardView>
+                            </LinearLayout>
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:fontFamily="@font/tajawal"
+                                android:text="@string/switch_block_telegram_web_desc"
+                                android:textColor="?attr/colorOnSurfaceVariant"
+                                android:textSize="12sp" />
+                        </LinearLayout>
 
                         <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/switchBlockTelegramWeb"
@@ -514,6 +403,7 @@
                     <View
                         android:layout_width="match_parent"
                         android:layout_height="1dp"
+                        android:layout_marginVertical="6dp"
                         android:background="?attr/colorOutlineVariant" />
 
                     <!-- Switch 3: YouTube Restricted Mode -->
@@ -522,17 +412,64 @@
                         android:layout_height="wrap_content"
                         android:gravity="center_vertical"
                         android:minHeight="48dp"
-                        android:orientation="horizontal">
+                        android:orientation="horizontal"
+                        android:paddingVertical="6dp">
 
-                        <TextView
+                        <LinearLayout
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
+                            android:layout_marginEnd="12dp"
                             android:layout_weight="1"
-                            android:fontFamily="@font/tajawal"
-                            android:labelFor="@id/switchYouTubeRestricted"
-                            android:text="@string/switch_youtube_restricted"
-                            android:textColor="?attr/colorOnSurface"
-                            android:textSize="14sp" />
+                            android:orientation="vertical">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:gravity="center_vertical"
+                                android:orientation="horizontal">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:fontFamily="@font/tajawal"
+                                    android:labelFor="@id/switchYouTubeRestricted"
+                                    android:text="@string/switch_youtube_restricted"
+                                    android:textColor="?attr/colorOnSurface"
+                                    android:textSize="14sp" />
+
+                                <com.google.android.material.card.MaterialCardView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginStart="8dp"
+                                    app:cardBackgroundColor="?attr/colorSurfaceContainerHigh"
+                                    app:cardCornerRadius="8dp"
+                                    app:cardElevation="0dp"
+                                    app:strokeWidth="0dp">
+
+                                    <TextView
+                                        android:id="@+id/tvBadgeYouTubeScope"
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="wrap_content"
+                                        android:fontFamily="@font/tajawal"
+                                        android:paddingHorizontal="8dp"
+                                        android:paddingVertical="2dp"
+                                        android:text="@string/web_scope_badge_browsers"
+                                        android:textColor="?attr/colorOnSurfaceVariant"
+                                        android:textSize="10sp"
+                                        android:textStyle="bold" />
+                                </com.google.android.material.card.MaterialCardView>
+                            </LinearLayout>
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:fontFamily="@font/tajawal"
+                                android:text="@string/switch_youtube_restricted_desc"
+                                android:textColor="?attr/colorOnSurfaceVariant"
+                                android:textSize="12sp" />
+                        </LinearLayout>
 
                         <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/switchYouTubeRestricted"
@@ -543,93 +480,135 @@
                     <View
                         android:layout_width="match_parent"
                         android:layout_height="1dp"
+                        android:layout_marginVertical="10dp"
                         android:background="?attr/colorOutlineVariant" />
 
-                    <!-- Switch 4: Full System Filtering (VPN) -->
+                    <!-- Website Rules Gateway -->
+                    <com.google.android.material.button.MaterialButtonToggleGroup
+                        android:id="@+id/toggleGroupSiteMode"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        app:selectionRequired="true"
+                        app:singleSelection="true">
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnModeBlocklist"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:fontFamily="@font/tajawal"
+                            android:minHeight="48dp"
+                            android:paddingVertical="4dp"
+                            android:text="@string/web_sites_mode_blocklist"
+                            android:textSize="12sp" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnModeWhitelist"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:fontFamily="@font/tajawal"
+                            android:minHeight="48dp"
+                            android:paddingVertical="4dp"
+                            android:text="@string/web_sites_mode_whitelist"
+                            android:textSize="12sp" />
+                    </com.google.android.material.button.MaterialButtonToggleGroup>
+
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
                         android:gravity="center_vertical"
                         android:minHeight="48dp"
                         android:orientation="horizontal">
 
                         <TextView
+                            android:id="@+id/tvWebsitesSummary"
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
+                            android:layout_marginEnd="12dp"
                             android:layout_weight="1"
                             android:fontFamily="@font/tajawal"
-                            android:labelFor="@id/switchFullSystemFilter"
-                            android:text="@string/switch_full_system_filter"
-                            android:textColor="?attr/colorOnSurface"
-                            android:textSize="14sp" />
+                            android:textColor="?attr/colorOnSurfaceVariant"
+                            android:textSize="13sp"
+                            tools:text="0 محظور • 0 مسموح" />
 
-                        <com.google.android.material.materialswitch.MaterialSwitch
-                            android:id="@+id/switchFullSystemFilter"
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnManageWebsites"
+                            style="@style/Widget.Material3.Button.TonalButton"
                             android:layout_width="wrap_content"
-                            android:layout_height="wrap_content" />
+                            android:layout_height="wrap_content"
+                            android:fontFamily="@font/tajawal"
+                            android:minHeight="48dp"
+                            android:text="@string/web_sites_btn_manage"
+                            android:textSize="13sp"
+                            app:cornerRadius="12dp"
+                            app:icon="@drawable/ic_edit"
+                            app:iconSize="16dp" />
                     </LinearLayout>
 
-                    <View
-                        android:layout_width="match_parent"
-                        android:layout_height="1dp"
-                        android:background="?attr/colorOutlineVariant" />
-
-                    <!-- Switch 5: Block Ads & Trackers -->
-                    <LinearLayout
+                    <!-- Calm Inline Warning: Whitelist + Full System -->
+                    <com.google.android.material.card.MaterialCardView
+                        android:id="@+id/layoutWhitelistWarning"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:gravity="center_vertical"
-                        android:minHeight="48dp"
-                        android:orientation="horizontal">
+                        android:layout_marginTop="10dp"
+                        android:visibility="gone"
+                        app:cardBackgroundColor="@color/status_orange_bg"
+                        app:cardCornerRadius="12dp"
+                        app:cardElevation="0dp"
+                        app:strokeColor="@color/status_orange"
+                        app:strokeWidth="1dp">
 
-                        <TextView
-                            android:layout_width="0dp"
+                        <LinearLayout
+                            android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:fontFamily="@font/tajawal"
-                            android:labelFor="@id/switchBlockAds"
-                            android:text="@string/switch_block_ads"
-                            android:textColor="?attr/colorOnSurface"
-                            android:textSize="14sp" />
+                            android:orientation="vertical"
+                            android:padding="12dp">
 
-                        <com.google.android.material.materialswitch.MaterialSwitch
-                            android:id="@+id/switchBlockAds"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content" />
-                    </LinearLayout>
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:gravity="center_vertical"
+                                android:orientation="horizontal">
 
-                    <View
-                        android:layout_width="match_parent"
-                        android:layout_height="1dp"
-                        android:background="?attr/colorOutlineVariant" />
+                                <ImageView
+                                    android:layout_width="20dp"
+                                    android:layout_height="20dp"
+                                    android:contentDescription="@null"
+                                    android:src="@drawable/ic_warning_amber" />
 
-                    <!-- Switch 6: Block External VPN -->
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:gravity="center_vertical"
-                        android:minHeight="48dp"
-                        android:orientation="horizontal">
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginStart="8dp"
+                                    android:layout_weight="1"
+                                    android:fontFamily="@font/tajawal"
+                                    android:text="@string/web_whitelist_inline_warning"
+                                    android:textColor="?attr/colorOnSurface"
+                                    android:textSize="12sp" />
+                            </LinearLayout>
 
-                        <TextView
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:fontFamily="@font/tajawal"
-                            android:labelFor="@id/switchBlockExternalVpn"
-                            android:text="@string/switch_block_external_vpn"
-                            android:textColor="?attr/colorOnSurface"
-                            android:textSize="14sp" />
-
-                        <com.google.android.material.materialswitch.MaterialSwitch
-                            android:id="@+id/switchBlockExternalVpn"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content" />
-                    </LinearLayout>
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnDisableFullSystemFromWarning"
+                                style="@style/Widget.Material3.Button.TextButton"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_gravity="end"
+                                android:layout_marginTop="4dp"
+                                android:fontFamily="@font/tajawal"
+                                android:minHeight="48dp"
+                                android:text="@string/web_whitelist_btn_disable_full"
+                                android:textSize="12sp"
+                                android:textStyle="bold" />
+                        </LinearLayout>
+                    </com.google.android.material.card.MaterialCardView>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
-            <!-- Card 3: Custom Blocked & Allowed Websites -->
+            <!-- 4. Card 3: Extend Protection Beyond Browsers -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -646,124 +625,270 @@
                     android:orientation="vertical"
                     android:padding="16dp">
 
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="8dp"
+                        android:fontFamily="@font/tajawal"
+                        android:text="@string/web_card_vpn_expand_title"
+                        android:textColor="?attr/colorOnSurface"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
+
+                    <!-- Switch 1: Full System Filtering -->
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:gravity="center_vertical"
-                        android:orientation="horizontal">
+                        android:minHeight="48dp"
+                        android:orientation="horizontal"
+                        android:paddingVertical="6dp">
 
-                        <TextView
+                        <LinearLayout
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
+                            android:layout_marginEnd="12dp"
                             android:layout_weight="1"
-                            android:fontFamily="@font/tajawal"
-                            android:text="@string/blocked_urls_section_title"
-                            android:textColor="?attr/colorOnSurface"
-                            android:textSize="15sp"
-                            android:textStyle="bold" />
+                            android:orientation="vertical">
 
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnAddBlockedUrl"
-                            style="@style/Widget.Material3.Button.TonalButton"
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:gravity="center_vertical"
+                                android:orientation="horizontal">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:fontFamily="@font/tajawal"
+                                    android:labelFor="@id/switchFullSystemFilter"
+                                    android:text="@string/switch_full_system_filter_title"
+                                    android:textColor="?attr/colorOnSurface"
+                                    android:textSize="14sp" />
+
+                                <com.google.android.material.card.MaterialCardView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginStart="8dp"
+                                    app:cardBackgroundColor="?attr/colorSecondaryContainer"
+                                    app:cardCornerRadius="8dp"
+                                    app:cardElevation="0dp"
+                                    app:strokeWidth="0dp">
+
+                                    <TextView
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="wrap_content"
+                                        android:fontFamily="@font/tajawal"
+                                        android:paddingHorizontal="8dp"
+                                        android:paddingVertical="2dp"
+                                        android:text="@string/web_badge_local_vpn"
+                                        android:textColor="?attr/colorOnSecondaryContainer"
+                                        android:textSize="10sp"
+                                        android:textStyle="bold" />
+                                </com.google.android.material.card.MaterialCardView>
+                            </LinearLayout>
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:fontFamily="@font/tajawal"
+                                android:text="@string/switch_full_system_filter_desc"
+                                android:textColor="?attr/colorOnSurfaceVariant"
+                                android:textSize="12sp" />
+                        </LinearLayout>
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/switchFullSystemFilter"
                             android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:minHeight="48dp"
-                            android:paddingHorizontal="12dp"
-                            android:paddingVertical="0dp"
-                            android:text="@string/btn_add_blocked_url"
-                            android:textSize="12sp"
-                            app:cornerRadius="10dp"
-                            app:icon="@drawable/ic_edit"
-                            app:iconSize="14dp" />
+                            android:layout_height="wrap_content" />
                     </LinearLayout>
 
-                    <!-- Segmented Toggle Group -->
-                    <com.google.android.material.button.MaterialButtonToggleGroup
-                        android:id="@+id/toggleGroupUrlType"
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginVertical="6dp"
+                        android:background="?attr/colorOutlineVariant" />
+
+                    <!-- Switch 2: Block Ads & Trackers -->
+                    <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp"
-                        app:singleSelection="true"
-                        app:selectionRequired="true">
+                        android:gravity="center_vertical"
+                        android:minHeight="48dp"
+                        android:orientation="horizontal"
+                        android:paddingVertical="6dp">
 
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnTabBlocked"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
+                        <LinearLayout
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
-                            android:minHeight="48dp"
+                            android:layout_marginEnd="12dp"
                             android:layout_weight="1"
-                            android:fontFamily="@font/tajawal"
-                            android:paddingVertical="4dp"
-                            android:text="@string/tab_blocked_websites"
-                            android:textSize="12sp" />
+                            android:orientation="vertical">
 
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnTabAllowed"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:minHeight="48dp"
-                            android:layout_weight="1"
-                            android:fontFamily="@font/tajawal"
-                            android:paddingVertical="4dp"
-                            android:text="@string/tab_allowed_websites"
-                            android:textSize="12sp" />
-                    </com.google.android.material.button.MaterialButtonToggleGroup>
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:gravity="center_vertical"
+                                android:orientation="horizontal">
 
-                    <!-- Whitelist Only Switch (Shown when Allowed Tab is selected) -->
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:fontFamily="@font/tajawal"
+                                    android:labelFor="@id/switchBlockAds"
+                                    android:text="@string/switch_block_ads"
+                                    android:textColor="?attr/colorOnSurface"
+                                    android:textSize="14sp" />
+
+                                <com.google.android.material.card.MaterialCardView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginStart="8dp"
+                                    app:cardBackgroundColor="?attr/colorSecondaryContainer"
+                                    app:cardCornerRadius="8dp"
+                                    app:cardElevation="0dp"
+                                    app:strokeWidth="0dp">
+
+                                    <TextView
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="wrap_content"
+                                        android:fontFamily="@font/tajawal"
+                                        android:paddingHorizontal="8dp"
+                                        android:paddingVertical="2dp"
+                                        android:text="@string/web_badge_local_vpn"
+                                        android:textColor="?attr/colorOnSecondaryContainer"
+                                        android:textSize="10sp"
+                                        android:textStyle="bold" />
+                                </com.google.android.material.card.MaterialCardView>
+                            </LinearLayout>
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:fontFamily="@font/tajawal"
+                                android:text="@string/switch_block_ads_desc"
+                                android:textColor="?attr/colorOnSurfaceVariant"
+                                android:textSize="12sp" />
+                        </LinearLayout>
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/switchBlockAds"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
+                    </LinearLayout>
+
+                    <!-- Smart DNS AdBlock Hint -->
+                    <TextView
+                        android:id="@+id/tvAdsDnsHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:background="?attr/colorSurfaceContainerHigh"
+                        android:fontFamily="@font/tajawal"
+                        android:padding="10dp"
+                        android:textColor="?attr/colorOnSurfaceVariant"
+                        android:textSize="12sp"
+                        android:visibility="gone"
+                        tools:text="@string/web_ads_dns_confirmed_hint"
+                        tools:visibility="visible" />
+
+                    <!-- Inline Unaffiliated / Secondary Profile Warning -->
                     <com.google.android.material.card.MaterialCardView
-                        android:id="@+id/layoutWhitelistOnlyMaster"
+                        android:id="@+id/layoutUnaffiliatedWarning"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="10dp"
-                        app:cardBackgroundColor="?attr/colorSurfaceContainerHigh"
-                        app:cardCornerRadius="10dp"
+                        android:visibility="gone"
+                        app:cardBackgroundColor="@color/status_orange_bg"
+                        app:cardCornerRadius="12dp"
                         app:cardElevation="0dp"
-                        app:strokeWidth="0dp"
-                        android:visibility="gone">
+                        app:strokeColor="@color/status_orange"
+                        app:strokeWidth="1dp">
 
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:gravity="center_vertical"
-                            android:minHeight="48dp"
-                            android:orientation="horizontal"
-                            android:paddingHorizontal="12dp">
+                            android:orientation="vertical"
+                            android:padding="12dp">
 
-                            <TextView
-                                android:layout_width="0dp"
+                            <LinearLayout
+                                android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
-                                android:layout_weight="1"
-                                android:fontFamily="@font/tajawal"
-                                android:labelFor="@id/switchWhitelistOnly"
-                                android:text="@string/switch_whitelist_only"
-                                android:textColor="?attr/colorOnSurface"
-                                android:textSize="13sp" />
+                                android:gravity="center_vertical"
+                                android:orientation="horizontal">
 
-                            <com.google.android.material.materialswitch.MaterialSwitch
-                                android:id="@+id/switchWhitelistOnly"
+                                <ImageView
+                                    android:layout_width="20dp"
+                                    android:layout_height="20dp"
+                                    android:contentDescription="@null"
+                                    android:src="@drawable/ic_warning_amber" />
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginStart="8dp"
+                                    android:layout_weight="1"
+                                    android:fontFamily="@font/tajawal"
+                                    android:text="@string/web_unaffiliated_inline_warning"
+                                    android:textColor="?attr/colorOnSurface"
+                                    android:textSize="12sp" />
+                            </LinearLayout>
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnResolveSecondaryProfile"
+                                style="@style/Widget.Material3.Button.TextButton"
                                 android:layout_width="wrap_content"
-                                android:layout_height="wrap_content" />
+                                android:layout_height="wrap_content"
+                                android:layout_gravity="end"
+                                android:layout_marginTop="4dp"
+                                android:fontFamily="@font/tajawal"
+                                android:minHeight="48dp"
+                                android:text="@string/btn_resolve_secondary_profile_now"
+                                android:textSize="12sp"
+                                android:textStyle="bold" />
                         </LinearLayout>
                     </com.google.android.material.card.MaterialCardView>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- 5. Trust Footer -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/cardTrustFooter"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:cardBackgroundColor="?attr/colorSurfaceContainerLow"
+                app:cardCornerRadius="14dp"
+                app:cardElevation="0dp"
+                app:strokeColor="?attr/colorOutlineVariant"
+                app:strokeWidth="1dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:padding="14dp">
+
+                    <ImageView
+                        android:layout_width="20dp"
+                        android:layout_height="20dp"
+                        android:contentDescription="@null"
+                        android:src="@drawable/ic_lock"
+                        app:tint="?attr/colorOnSurfaceVariant" />
 
                     <TextView
-                        android:id="@+id/tvEmptyBlockedUrls"
-                        android:layout_width="match_parent"
+                        android:layout_width="0dp"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp"
-                        android:text="@string/empty_blocked_urls"
+                        android:layout_marginStart="10dp"
+                        android:layout_weight="1"
+                        android:fontFamily="@font/tajawal"
+                        android:text="@string/web_trust_footer_text"
                         android:textColor="?attr/colorOnSurfaceVariant"
-                        android:textSize="12sp"
-                        android:visibility="gone" />
-
-                    <LinearLayout
-                        android:id="@+id/layoutBlockedUrlsList"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
-                        android:orientation="vertical" />
+                        android:textSize="12sp" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
@@ -794,8 +919,8 @@
                 style="@style/Widget.Material3.Button"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:minHeight="52dp"
                 android:fontFamily="@font/tajawal"
+                android:minHeight="52dp"
                 android:text="@string/btn_save_changes"
                 android:textSize="15sp"
                 android:textStyle="bold"
