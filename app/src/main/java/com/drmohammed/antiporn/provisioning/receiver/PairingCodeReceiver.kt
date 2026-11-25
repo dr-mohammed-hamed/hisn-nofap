@@ -42,10 +42,14 @@ class PairingCodeReceiver : BroadcastReceiver() {
             }
             RemoteInput.addResultsToIntent(arrayOf(RemoteInput.Builder(EXTRA_PAIRING_CODE).build()), this, bundle)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(serviceIntent)
-        } else {
-            context.startService(serviceIntent)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(serviceIntent)
+            } else {
+                context.startService(serviceIntent)
+            }
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "Failed starting AdbPairingNotificationService from PairingCodeReceiver")
         }
     }
 
@@ -60,6 +64,7 @@ class PairingCodeReceiver : BroadcastReceiver() {
         const val ACTION_PROVISIONING_RESULT = "com.drmohammed.antiporn.ACTION_PROVISIONING_RESULT"
         const val EXTRA_SUCCESS = "extra_success"
         const val EXTRA_ERROR_MESSAGE = "extra_error_message"
+        const val EXTRA_BLOCKING_USERS_JSON = "extra_blocking_users_json"
 
         /**
          * Sanitizes pairing input by stripping non-digits and converting Arabic/Indic numerals to standard ASCII digits.

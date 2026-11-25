@@ -1694,4 +1694,43 @@
     <string name="website_rules_desc">أضف أو احذف المواقع المحظورة والمسموحة في المتصفحات أو النظام</string>
     <string name="website_rules_search_hint">ابحث في المواقع...</string>
     <string name="website_rules_btn_done">تم</string>
+
+    <!-- Smart ADB Secondary-User Detection & Explicit-Consent Cleanup -->
+    <string name="provisioning_blocking_dialog_title">تم إيقاف التفعيل مؤقتاً لحماية بياناتك</string>
+    <string name="provisioning_blocking_dialog_intro">رصدنا مساحات أو حسابات فرعية على جهازك تمنع نظام أندرويد من تفعيل الحماية الكاملة. راجع العناصر التالية بعناية قبل اتخاذ أي إجراء:</string>
+    <string name="provisioning_blocking_irreversible_warning">تحذير نهائي: حذف هذه المساحات سيمحو محتوياتها وبياناتها من الجهاز نهائياً ولا يمكن التراجع عنه بعد التأكيد.</string>
+    <string name="provisioning_blocking_consent_checkbox">أؤكد أنني راجعت القائمة أعلاه ونقلت أي ملفات أو محادثات مهمة أحتاجها، وأوافق على حذف هذه المساحات فقط لإتمام التفعيل.</string>
+    <string name="provisioning_blocking_btn_open_settings">فتح الإعدادات لنقل بياناتي أولاً</string>
+    <string name="provisioning_blocking_btn_confirm_countdown">انتظر %1$d ثوانٍ للتأكيد...</string>
+    <string name="provisioning_blocking_btn_confirm_ready">نعم، احذف المحدد وأكمل التفعيل</string>
+    <string name="provisioning_blocking_btn_cancel">إلغاء دون حذف أي شيء</string>
+    <string name="provisioning_blocking_apps_format">التطبيقات المتأثرة: %1$s</string>
+    <string name="provisioning_blocking_apps_more_format">%1$s وغيرها (+%2$d)</string>
+    <string name="provisioning_blocking_apps_encrypted_warning">محتوى مشفّر ومحمي من النظام — قد يحتوي على صور أو ملفات أو تطبيقات مخفية.</string>
+    <string name="provisioning_blocking_apps_none_visible">لا توجد تطبيقات خارجية ظاهرة (قد يحتوي على ملفات أو إعدادات محلية).</string>
+
+    <string name="provisioning_blocking_cat_secure_folder_title">المجلد الآمن (Secure Folder) — رقم %1$d</string>
+    <string name="provisioning_blocking_cat_secure_folder_note">حذفه يزيل المجلد الآمن ومحتوياته فقط ولا يمس ملفاتك خارج المجلد.</string>
+    <string name="provisioning_blocking_cat_dual_app_title">تطبيق مزدوج / مستنسخ — رقم %1$d</string>
+    <string name="provisioning_blocking_cat_dual_app_note">حذفه يزيل النسخة الثانية فقط ولا يمس تطبيقاتك الأساسية.</string>
+    <string name="provisioning_blocking_cat_private_space_title">المساحة الخاصة (Private Space) — رقم %1$d</string>
+    <string name="provisioning_blocking_cat_private_space_note">حذفه يزيل هذه المساحة الخاصة ومحتوياتها فقط ولا يمس حسابك الأساسي.</string>
+    <string name="provisioning_blocking_cat_work_profile_title">ملف العمل (Work Profile) — رقم %1$d</string>
+    <string name="provisioning_blocking_cat_work_profile_note">حذفه يزيل ملف العمل وتطبيقاته فقط ولا يمس تطبيقاتك الشخصية.</string>
+    <string name="provisioning_blocking_cat_guest_user_title">مستخدم ضيف (Guest) — رقم %1$d</string>
+    <string name="provisioning_blocking_cat_guest_user_note">حذفه يزيل جلسة الضيف ومحتوياتها فقط ولا يمس حسابك الأساسي.</string>
+    <string name="provisioning_blocking_cat_secondary_user_title">مستخدم ثانوي إضافي — رقم %1$d</string>
+    <string name="provisioning_blocking_cat_secondary_user_note">حذفه يزيل هذا المستخدم الثانوي ومحتوياته فقط ولا يمس حسابك الأساسي.</string>
+
+    <string name="provisioning_blocking_users_notif_title">مطلوب تأكيد لحذف مساحة فرعية وإكمال التفعيل</string>
+    <string name="provisioning_blocking_users_notif_desc">تم إيقاف التفعيل مؤقتاً لحماية بياناتك. اضغط هنا لمراجعة التطبيقات والمساحات المتأثرة قبل الحذف.</string>
+    <string name="provisioning_cleaning_and_activating">جاري التنظيف وتفعيل الحماية...</string>
+    <string name="provisioning_error_adb_not_paired">انتهت جلسة الاقتران اللاسلكي. يرجى إدخال رمز اقتران جديد من خيارات المطور.</string>
+    <string name="provisioning_error_remove_secondary_user_failed">تعذر حذف المستخدم/المساحة (%1$s) عبر التصحيح اللاسلكي. يرجى فتح الإعدادات وحذفها يدوياً ثم إعادة المحاولة.</string>
+    <string name="provisioning_error_consent_required">مطلوب موافقة صريحة من المستخدم على أرقام المساحات المحددة قبل الحذف.</string>
+    <string name="provisioning_error_already_in_progress">عملية التفعيل جارية بالفعل.</string>
+    <string name="provisioning_error_not_paired">لم يتم إقران الجهاز بعد.</string>
+    <string name="provisioning_error_timeout_seconds">انتهت مهلة التفعيل بعد %1$d ثانية.</string>
+    <string name="provisioning_error_connect_port_timeout">انتهت مهلة اكتشاف منفذ الاتصال بعد نجاح الاقتران.</string>
+    <string name="provisioning_error_unknown">خطأ غير معروف</string>
 </resources>

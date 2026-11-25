@@ -80,7 +80,6 @@ class AdbMdnsDiscovery(
                     }
                 }
             }
-            lastDiscoveredHost = null
             onPairingServiceLost()
         }
 
@@ -142,6 +141,7 @@ class AdbMdnsDiscovery(
                     }
                 }
             }
+            lastDiscoveredHost = null
         }
 
         override fun onDiscoveryStopped(serviceType: String) {
@@ -207,8 +207,10 @@ class AdbMdnsDiscovery(
             override fun onServiceLost() {
                 if (isPairing) {
                     Log.d(TAG, "mDNS Pairing service lost (API 34+ callback): ${serviceInfo.serviceName}")
-                    lastDiscoveredHost = null
                     onPairingServiceLost()
+                } else {
+                    Log.d(TAG, "mDNS Connect service lost (API 34+ callback): ${serviceInfo.serviceName}")
+                    lastDiscoveredHost = null
                 }
             }
 

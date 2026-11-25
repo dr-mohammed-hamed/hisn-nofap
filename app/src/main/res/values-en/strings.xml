@@ -1417,4 +1417,43 @@
     <string name="website_rules_desc">Add or remove blocked and allowed websites</string>
     <string name="website_rules_search_hint">Search websites...</string>
     <string name="website_rules_btn_done">Done</string>
+
+    <!-- Smart ADB Secondary-User Detection & Explicit-Consent Cleanup -->
+    <string name="provisioning_blocking_dialog_title">Activation Paused to Protect Your Data</string>
+    <string name="provisioning_blocking_dialog_intro">We detected secondary spaces or profiles on your device that block Android from activating full protection. Please review every item below before proceeding:</string>
+    <string name="provisioning_blocking_irreversible_warning">Irreversible warning: Deleting these spaces permanently erases their contents and data from the device and cannot be undone.</string>
+    <string name="provisioning_blocking_consent_checkbox">I confirm I have reviewed the list above, backed up any important files or chats, and consent to delete only these spaces to complete activation.</string>
+    <string name="provisioning_blocking_btn_open_settings">Open Settings to Back Up Data First</string>
+    <string name="provisioning_blocking_btn_confirm_countdown">Wait %1$d seconds to confirm...</string>
+    <string name="provisioning_blocking_btn_confirm_ready">Yes, Delete Listed &amp; Activate</string>
+    <string name="provisioning_blocking_btn_cancel">Cancel Without Deleting</string>
+    <string name="provisioning_blocking_apps_format">Affected apps: %1$s</string>
+    <string name="provisioning_blocking_apps_more_format">%1$s and more (+%2$d)</string>
+    <string name="provisioning_blocking_apps_encrypted_warning">Encrypted and protected by the system — may contain hidden photos, files, or apps.</string>
+    <string name="provisioning_blocking_apps_none_visible">No third-party apps visible (may still contain local files or settings).</string>
+
+    <string name="provisioning_blocking_cat_secure_folder_title">Secure Folder — ID %1$d</string>
+    <string name="provisioning_blocking_cat_secure_folder_note">Deleting it removes only Secure Folder and its contents without touching files outside it.</string>
+    <string name="provisioning_blocking_cat_dual_app_title">Dual / Cloned App — ID %1$d</string>
+    <string name="provisioning_blocking_cat_dual_app_note">Deleting it removes only the cloned copy without touching your primary apps.</string>
+    <string name="provisioning_blocking_cat_private_space_title">Private Space — ID %1$d</string>
+    <string name="provisioning_blocking_cat_private_space_note">Deleting it removes only this Private Space and its contents without touching your main account.</string>
+    <string name="provisioning_blocking_cat_work_profile_title">Work Profile — ID %1$d</string>
+    <string name="provisioning_blocking_cat_work_profile_note">Deleting it removes only the Work Profile and its apps without touching personal apps.</string>
+    <string name="provisioning_blocking_cat_guest_user_title">Guest User — ID %1$d</string>
+    <string name="provisioning_blocking_cat_guest_user_note">Deleting it removes only the Guest session and its data without touching your main account.</string>
+    <string name="provisioning_blocking_cat_secondary_user_title">Secondary User — ID %1$d</string>
+    <string name="provisioning_blocking_cat_secondary_user_note">Deleting it removes only this secondary user and its contents without touching your main account.</string>
+
+    <string name="provisioning_blocking_users_notif_title">Confirmation Needed to Remove Secondary Space</string>
+    <string name="provisioning_blocking_users_notif_desc">Activation paused to protect your data. Tap here to review affected apps and profiles before deletion.</string>
+    <string name="provisioning_cleaning_and_activating">Cleaning up and activating protection...</string>
+    <string name="provisioning_error_adb_not_paired">Wireless pairing session expired. Please enter a new pairing code from Developer Options.</string>
+    <string name="provisioning_error_remove_secondary_user_failed">Could not remove user/profile (%1$s) via Wireless ADB. Please open Settings and remove it manually, then retry.</string>
+    <string name="provisioning_error_consent_required">Explicit user consent for valid secondary user IDs is required before removal.</string>
+    <string name="provisioning_error_already_in_progress">Promotion is already in progress.</string>
+    <string name="provisioning_error_not_paired">Device has not been paired yet.</string>
+    <string name="provisioning_error_timeout_seconds">Promotion timed out after %1$d seconds.</string>
+    <string name="provisioning_error_connect_port_timeout">Connect port discovery timed out after successful pairing.</string>
+    <string name="provisioning_error_unknown">Unknown error</string>
 </resources>
