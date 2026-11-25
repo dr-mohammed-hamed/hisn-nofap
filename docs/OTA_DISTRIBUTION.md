@@ -65,3 +65,94 @@ release.keystore.password=YourSecurePassword
   ota.base.url=https://updates.yourdomain.com
   ```
 - سيربط محرك التطبيق تلقائياً بين هذا العنوان وملف `version.json`.
+
+---
+
+## 💖 4. إدارة التكوين السحابي لقنوات دعم الوقف (`waqf_config.json`)
+
+بجانب استضافة التحديثات الهوائية (`version.json` وملفات الـ APK)، يستضيف خادم Cloudflare R2 ملف **`waqf_config.json`** لإدارة قنوات الدعم والمساهمة في «سهم استدامة الوقف» ديناميكياً دون الحاجة لإصدار تحديث جديد للتطبيق. يقرأ التطبيق هذا الملف عبر مسار `${ota.base.url}/waqf_config.json` بنمط **Stale-While-Revalidate (SWR)**.
+
+### 🔒 سياسة عدم التسريب الصارمة (Zero-Leak Policy)
+* لحماية خصوصية المطور وعدم رفع أي أرقام هواتف شخصية (مثل رقم محفظة فودافون كاش) على مستودع GitHub العام:
+  - تم حظر `waqf_config.json` و `scripts/waqf_config.json` و `**/waqf_config.json` بالكامل في ملف `.gitignore`.
+  - يحتوي القالب العام [`scripts/waqf_config.example.json`](../scripts/waqf_config.example.json) فقط على القيمة الوهمية `"010XXXXXXXX"` لـ Vodafone Cash، بينما يقتصر على رابط `InstaPay` العام المنشور مسبقاً في `README.md`.
+  - يلتزم الكود المصدري للتطبيق (`WaqfRepository.coldOfflineFallbackConfig`) بعدم تضمين أي أرقام هواتف أو أكواد USSD محلياً كإجراء احتياطي.
+
+### 🚀 خطوات النشر عبر `deploy_waqf_config.ps1`
+1. انسخ ملف القالب إلى المسار المحلي المستبعد من Git:
+   ```powershell
+   Copy-Item .\scripts\waqf_config.example.json .\scripts\waqf_config.json
+   ```
+2. افتح `scripts\waqf_config.json` واستبدل القيمة `"010XXXXXXXX"` برقم محفظة **Vodafone Cash** الفعلي (في كلٍ من `displayValue` و `primaryAction.target` و `secondaryAction.target`).
+3. شغّل سكربت النشر (يقرأ `r2.bucket.name` و `ota.base.url` من `local.properties` تلقائياً):
+   ```powershell
+   .\scripts\deploy_waqf_config.ps1
+   ```
+   - يتحقق السكربت من صحة صيغة JSON (UTF-8) ومن عدم بقاء القيمة الوهمية `"010XXXXXXXX"` بالخطأ (إلا إذا مرّرت `-AllowPlaceholder` لأغراض الاختبار).
+   - يتحقق من جلسة `wrangler whoami` ويرفع الملف إلى `$BucketName/waqf_config.json` برأس `Cache-Control: public, max-age=60, must-revalidate` و `Content-Type: application/json; charset=utf-8`.
+   - يدعم السكربت معاملات اختيارية: `-BucketName` و `-ConfigFile` و `-AllowPlaceholder`.
+
+### 🧩 إضافة قنوات مستقبلية أو تعطيل قناة مؤقتاً
+يدعم نموذج `WaqfConfig.kt` إضافة أي قنوات جديدة مستقبلاً (مثل **PayPal** أو **Ko-fi** أو **حساب بنكي IBAN**) أو تعطيل أي قناة لحظياً بتغيير `"enabled": false` دون كسر الإصدارات الأقدم من التطبيق:
+
+```json
+{
+  "channels": [
+    {
+      "id": "vodafone_cash_eg",
+      "enabled": false,
+      "sortOrder": 2,
+      "type": "MOBILE_WALLET",
+      "title": "فودافون كاش (Vodafone Cash)"
+    },
+    {
+      "id": "paypal_global",
+      "enabled": true,
+      "sortOrder": 3,
+      "type": "WEB_LINK",
+      "badge": "دولي — PayPal",
+      "title": "الدعم عبر PayPal",
+      "subtitle": "مساهمة فورية بالبطاقات البنكية من خارج مصر",
+      "displayValue": "paypal.me/mh22887565",
+      "accentStyle": "BLUE",
+      "primaryAction": {
+        "label": "فتح PayPal",
+        "type": "OPEN_URL",
+        "target": "https://paypal.me/mh22887565"
+      }
+    },
+    {
+      "id": "kofi_global",
+      "enabled": true,
+      "sortOrder": 4,
+      "type": "WEB_LINK",
+      "badge": "دولي — Ko-fi",
+      "title": "الدعم عبر Ko-fi",
+      "subtitle": "مساهمة لمرة واحدة أو كفالة دورية",
+      "displayValue": "ko-fi.com/dr_mohammed_hamed",
+      "accentStyle": "AMBER",
+      "primaryAction": {
+        "label": "فتح Ko-fi",
+        "type": "OPEN_URL",
+        "target": "https://ko-fi.com/dr_mohammed_hamed"
+      }
+    },
+    {
+      "id": "bank_iban_eg",
+      "enabled": true,
+      "sortOrder": 5,
+      "type": "BANK_ACCOUNT",
+      "badge": "تحويل بنكي — IBAN",
+      "title": "الحساب البنكي للوقف",
+      "subtitle": "تحويل بنكي محلي أو دولي عبر رقم الآيبان",
+      "displayValue": "EG000000000000000000000000000",
+      "accentStyle": "TEAL",
+      "primaryAction": {
+        "label": "نسخ رقم IBAN",
+        "type": "COPY_VALUE",
+        "target": "EG000000000000000000000000000"
+      }
+    }
+  ]
+}
+```

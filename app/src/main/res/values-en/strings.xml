@@ -1482,4 +1482,29 @@
     <string name="provisioning_recovery_toast_not_paired">No active Wireless ADB pairing found. Enable Wireless Debugging or use Open App Settings.</string>
     <string name="provisioning_recovery_notif_title">Restore Temporarily Disabled Apps</string>
     <string name="provisioning_recovery_notif_desc">Tap here to restore %1$d app(s) left disabled after an interrupted setup session.</string>
+
+    <!-- Waqf Support (Sadaqah Jariyah) -->
+    <string name="waqf_settings_card_title">Waqf Sustainability Share — Support Hisn</string>
+    <string name="waqf_settings_card_subtitle">100% free, ad-free digital Waqf — contribute to sustain it as Sadaqah Jariyah</string>
+    <string name="waqf_support_title">Waqf Sustainability Share — Support Hisn</string>
+    <string name="waqf_hero_badge">100% Free Digital Waqf • Sadaqah Jariyah</string>
+    <string name="waqf_hero_hadith">The Messenger of Allah ﷺ said: “Whoever guides someone to goodness will have a reward like one who did it.”</string>
+    <string name="waqf_hero_title">Waqf Sustainability Share &amp; System Stewardship</string>
+    <string name="waqf_hero_body">Hisn was engineered over thousands of hours by an individual developer as a 100% free, ad-free digital Waqf — dedicated to preventing fitnah and safeguarding the youth, hearts, honor, and homes of Muslims.\n\nSustaining the cloud update servers and ongoing AI protection research carries continuous operational costs. Contributing is completely optional, and every single pound you give is an open door to Sadaqah Jariyah and an ongoing share in keeping this shield alive.</string>
+    <string name="waqf_offline_banner_title">Offline Mode</string>
+    <string name="waqf_offline_banner_desc">Only the primary InstaPay link is shown right now. Connect to the internet and tap Retry to load mobile wallets and additional channels.</string>
+    <string name="waqf_btn_retry">Retry</string>
+    <string name="waqf_channels_section_title">Available Support Channels</string>
+    <string name="waqf_tap_to_copy_hint">Tap to copy</string>
+    <string name="waqf_copied_toast">Copied %1$s to clipboard</string>
+    <string name="waqf_open_link_failed">Could not open link. Please copy the identifier and try manually.</string>
+    <string name="waqf_invalid_action">This action is currently unavailable or invalid.</string>
+    <string name="waqf_dial_failed">Could not open the phone dialer. You can copy the number instead.</string>
+    <string name="waqf_share_card_badge">Spread the Goodness</string>
+    <string name="waqf_share_card_title">Guiding to Good Earns the Same Reward</string>
+    <string name="waqf_share_card_body">Even if you cannot contribute financially today, sharing Hisn with someone who needs it or spreading the word may protect a heart and strengthen a home — earning you a share of the reward, God willing.</string>
+    <string name="waqf_share_btn_label">Share App &amp; Earn Reward</string>
+    <string name="waqf_share_chooser_title">Share Hisn via...</string>
+    <string name="waqf_share_message">Hisn — An open-source Android companion for digital purity, focus, and family protection.\n100% free, ad-free, and open-source.\n\nExplore &amp; download on GitHub:\nhttps://github.com/dr-mohammed-hamed/antiporn</string>
+    <string name="waqf_share_failed">Could not open share dialog</string>
 </resources>

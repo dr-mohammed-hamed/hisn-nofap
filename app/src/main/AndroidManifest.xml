@@ -293,6 +293,13 @@
             android:launchMode="singleTop"
             android:label="@string/title_notification_center" />
 
+        <!-- Waqf Support (Sadaqah Jariyah) -->
+        <activity
+            android:name=".ui.waqf.WaqfSupportActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:label="@string/waqf_support_title" />
+
         <service
             android:name=".provisioning.service.AdbPairingNotificationService"
             android:foregroundServiceType="specialUse"

@@ -29,6 +29,7 @@ import com.drmohammed.antiporn.databinding.BottomSheetDiagnosticLogsBinding
 import com.drmohammed.antiporn.databinding.FragmentSettingsBinding
 import com.drmohammed.antiporn.ota.model.OtaUpdateState
 import com.drmohammed.antiporn.ui.control.qr.QrScannerBottomSheet
+import com.drmohammed.antiporn.ui.waqf.WaqfSupportActivity
 import com.drmohammed.antiporn.provisioning.ui.ProvisioningWizardActivity
 import com.drmohammed.antiporn.telemetry.AiTelemetryReporter
 import com.google.android.material.bottomsheet.BottomSheetBehavior
@@ -71,6 +72,7 @@ class SettingsFragment : Fragment() {
     private var lastBankingClickTime = 0L
     private var lastBankingLaunchClickTime = 0L
     private var lastPinShortcutClickTime = 0L
+    private var lastWaqfClickTime = 0L
     private var bankingBottomSheet: BottomSheetDialog? = null
 
     override fun onAttach(context: Context) {
@@ -98,6 +100,7 @@ class SettingsFragment : Fragment() {
         super.onViewCreated(view, savedInstanceState)
         setupListeners()
         observeViewModel()
+        settingsViewModel.prefetchWaqfConfigIfStale()
     }
 
     override fun onResume() {
@@ -356,6 +359,17 @@ class SettingsFragment : Fragment() {
             view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
             showDiagnosticLogsBottomSheet()
             true
+        }
+
+        binding.cardWaqfSupport.setOnClickListener {
+            val currentTime = SystemClock.elapsedRealtime()
+            if (currentTime - lastWaqfClickTime < 800L) return@setOnClickListener
+            lastWaqfClickTime = currentTime
+            val ctx = context ?: return@setOnClickListener
+            val intent = Intent(ctx, WaqfSupportActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+            }
+            startActivity(intent)
         }
     }
 

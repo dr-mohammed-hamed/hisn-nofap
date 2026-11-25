@@ -1760,4 +1760,29 @@
     <string name="provisioning_recovery_toast_not_paired">لا يوجد اقتران لاسلكي نشط حالياً. فعّل التصحيح اللاسلكي أو استخدم «فتح إعدادات التطبيقات».</string>
     <string name="provisioning_recovery_notif_title">استعادة التطبيقات المعطلة مؤقتاً</string>
     <string name="provisioning_recovery_notif_desc">اضغط هنا لاستعادة %1$d تطبيق/تطبيقات بقيت معطلة بعد انقطاع جلسة التفعيل السابقة.</string>
+
+    <!-- Waqf Support (صدقة جارية ووقف رقمي) -->
+    <string name="waqf_settings_card_title">سهم استدامة الوقف ورعاية «حِصْن»</string>
+    <string name="waqf_settings_card_subtitle">وقف تقني مجاني 100% بلا إعلانات — ساهم في استدامته كصدقة جارية</string>
+    <string name="waqf_support_title">سهم استدامة الوقف — دعم «حِصْن»</string>
+    <string name="waqf_hero_badge">وقف تقني مجاني 100% • صدقة جارية</string>
+    <string name="waqf_hero_hadith">قال رسول الله ﷺ: «مَنْ دَلَّ عَلَى خَيْرٍ فَلَهُ مِثْلُ أَجْرِ فَاعِلِهِ»</string>
+    <string name="waqf_hero_title">سهم استدامة الوقف ورعاية المنظومة</string>
+    <string name="waqf_hero_body">تم تصميم وهندسة مشروع «حِصْن» عبر آلاف الساعات من العمل على يد مطور فردي ليكون وقفاً تقنياً مجانياً بنسبة 100% بلا أي إعلانات أو قيود تجارية، في سبيل منع الفتنة وحفظ أعراض وقلوب وبيوت المسلمين وشبابهم.\n\nاستدامة خوادم التحديثات السحابية وأبحاث دروع الحماية والذكاء الاصطناعي تتطلب تكاليف تشغيلية مستمرة؛ فالمساهمة اختيارية تماماً، وكل جنيه تساهم به هو باب مفتوح لصدقة جارية وسهم جارٍ في بقاء هذا الصرح ونمائه.</string>
+    <string name="waqf_offline_banner_title">وضع عدم الاتصال</string>
+    <string name="waqf_offline_banner_desc">يظهر حالياً رابط InstaPay الأساسي فقط. اتصل بالإنترنت واضغط إعادة المحاولة لتحميل المحافظ الإلكترونية وبقية قنوات الدعم.</string>
+    <string name="waqf_btn_retry">إعادة المحاولة</string>
+    <string name="waqf_channels_section_title">قنوات المساهمة المتاحة</string>
+    <string name="waqf_tap_to_copy_hint">اضغط للنسخ</string>
+    <string name="waqf_copied_toast">تم نسخ %1$s إلى الحافظة</string>
+    <string name="waqf_open_link_failed">تعذر فتح الرابط. يمكنك نسخ المعرّف واستخدامه يدوياً.</string>
+    <string name="waqf_invalid_action">هذا الإجراء غير متاح أو غير صالح حالياً.</string>
+    <string name="waqf_dial_failed">تعذر فتح تطبيق الاتصال. يمكنك نسخ الرقم بدلاً من ذلك.</string>
+    <string name="waqf_share_card_badge">الدلالة على الخير</string>
+    <string name="waqf_share_card_title">الدالّ على الخير كفاعله</string>
+    <string name="waqf_share_card_body">قد لا تتيسر المساهمة المالية الآن، لكن دلالتك على هذا التطبيق لمن يحتاجه أو نشره بين أصدقائك قد تكون سبباً في نجاة قلب وصلاح بيت، ولك مثل أجر كل من ينتفع به بإذن الله.</string>
+    <string name="waqf_share_btn_label">شارك التطبيق واكسب الأجر</string>
+    <string name="waqf_share_chooser_title">مشاركة تطبيق حِصن عبر...</string>
+    <string name="waqf_share_message">تطبيق «حِصن» — رفيق التعافي وغض البصر والحماية الأسرية على أندرويد.\nمشروع مجاني مفتوح المصدر بالكامل لوجه الله، بلا إعلانات ولا اشتراكات.\n\nتعرّف عليه وحمّله من GitHub:\nhttps://github.com/dr-mohammed-hamed/antiporn</string>
+    <string name="waqf_share_failed">تعذر فتح نافذة المشاركة</string>
 </resources>
