@@ -31,6 +31,7 @@ import com.drmohammed.antiporn.ota.model.OtaUpdateState
 import com.drmohammed.antiporn.ui.control.qr.QrScannerBottomSheet
 import com.drmohammed.antiporn.provisioning.ui.ProvisioningWizardActivity
 import com.drmohammed.antiporn.telemetry.AiTelemetryReporter
+import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.color.MaterialColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -370,6 +371,12 @@ class SettingsFragment : Fragment() {
         }
         val sheetBinding = BottomSheetBankingAppsBinding.inflate(layoutInflater)
         bottomSheetDialog.setContentView(sheetBinding.root)
+        bottomSheetDialog.setOnShowListener {
+            bottomSheetDialog.behavior.apply {
+                skipCollapsed = true
+                state = BottomSheetBehavior.STATE_EXPANDED
+            }
+        }
 
         val isA11yActiveOrEnabled = HisnAccessibilityService.instance != null ||
             AccessibilitySelfActivator.isServiceEnabledInSettings(ctx)
