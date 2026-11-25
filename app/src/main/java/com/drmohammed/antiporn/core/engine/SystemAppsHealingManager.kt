@@ -40,6 +40,7 @@ object SystemAppsHealingManager {
     private val healingScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @VisibleForTesting
     internal val isHealingRunning = AtomicBoolean(false)
+    private val healSyncLock = Any()
 
     private fun isAppAlreadyEnabled(pm: PackageManager, pkg: String): Boolean {
         return try {
@@ -113,7 +114,7 @@ object SystemAppsHealingManager {
      * 2. Direct package-based re-enablement for all known OEM stores
      * 3. Clean daytime unsuspend if not within active curfew hours
      */
-    fun healPreInstalledStoresSafely(context: Context, force: Boolean = false) {
+    fun healPreInstalledStoresSafely(context: Context, force: Boolean = false) = synchronized(healSyncLock) {
         try {
             if (!SafeDpmGateway.isDeviceOwner(context)) {
                 Timber.tag(TAG).d("Device Owner not active; skipping store self-healing.")

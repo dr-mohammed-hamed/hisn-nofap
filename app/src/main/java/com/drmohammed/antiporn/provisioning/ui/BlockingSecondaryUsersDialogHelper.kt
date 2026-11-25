@@ -207,6 +207,8 @@ class BlockingSecondaryUsersDialogHelper {
         dialog.show()
     }
 
+    fun isShowing(): Boolean = activeDialog?.isShowing == true
+
     fun dismiss() {
         countdownJob?.cancel()
         countdownJob = null

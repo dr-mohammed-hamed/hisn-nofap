@@ -130,9 +130,11 @@ class AdbMdnsDiscovery(
             executor.execute {
                 if (isStopped) return@execute
                 if (isPortActuallyListening(port)) {
-                    if (isStopped) return@execute
-                    Timber.tag(TAG).i("Captured verified active Pairing Port: $port (host=$host)")
-                    lastDiscoveredHost = host
+                    synchronized(this) {
+                        if (isStopped) return@execute
+                        Timber.tag(TAG).i("Captured verified active Pairing Port: $port (host=$host)")
+                        lastDiscoveredHost = host
+                    }
                     onPairingPortDiscovered(port)
                 } else {
                     Timber.tag(TAG).w("Discarded stale cached Pairing Port: $port (nothing listening)")

@@ -1457,5 +1457,29 @@
     <string name="provisioning_error_not_paired">Device has not been paired yet.</string>
     <string name="provisioning_error_timeout_seconds">Promotion timed out after %1$d seconds.</string>
     <string name="provisioning_error_connect_port_timeout">Connect port discovery timed out after successful pairing.</string>
+    <string name="provisioning_error_post_verify_failed">Device Owner verification failed after activation. Wireless debugging was kept open for safety; please retry.</string>
+    <string name="provisioning_error_heal_failed">Could not re-enable stranded apps via Wireless ADB. Please retry or re-enable them manually.</string>
     <string name="provisioning_error_unknown">Unknown error</string>
+
+    <!-- OEM Permission Guidance Dialog & Notification -->
+    <string name="provisioning_oem_dialog_title">Developer Permission Required to Continue</string>
+    <string name="provisioning_oem_dialog_xiaomi_desc">Good news: No apps were disabled or hidden on your device.\n\nXiaomi/Redmi/POCO blocks activation unless an extra toggle is enabled.\n\n1. Tap \"Open Developer Options\" below.\n2. Scroll down and enable \"USB debugging (Security settings)\".\n3. Accept any prompt, then press Back and tap \"Retry Now\".</string>
+    <string name="provisioning_oem_dialog_realme_desc">Good news: No apps were disabled or hidden on your device.\n\nRealme/Oppo/OnePlus blocks activation unless permission monitoring is disabled.\n\n1. Tap \"Open Developer Options\" below.\n2. Scroll to the bottom and enable \"Disable permission monitoring\".\n3. Press Back and tap \"Retry Now\".</string>
+    <string name="provisioning_oem_btn_retry_now">Retry Now</string>
+    <string name="provisioning_oem_btn_open_dev_options">Open Developer Options</string>
+    <string name="provisioning_oem_notif_title">Action Needed: Enable Developer Toggle</string>
+
+    <!-- Freeze Recovery Apology & Action Dialog -->
+    <string name="provisioning_recovery_dialog_title">Sorry: Some Apps Remained Temporarily Disabled</string>
+    <string name="provisioning_recovery_dialog_intro">We apologize for the inconvenience. The previous activation session did not finish cleanly, leaving these apps temporarily disabled or hidden:</string>
+    <string name="provisioning_recovery_dialog_outro">You can restore them immediately by tapping \"Quick Fix via ADB\" (while Wireless Debugging is on) or by enabling them manually from \"Open App Settings\".</string>
+    <string name="provisioning_recovery_package_line">• %1$s (%2$s)</string>
+    <string name="provisioning_recovery_btn_quick_adb">Quick Fix via ADB</string>
+    <string name="provisioning_recovery_btn_open_settings">Open App Settings</string>
+    <string name="provisioning_recovery_adb_unavailable_hint">Note: Quick ADB fix requires Wireless Debugging to be active and paired. You can enable Wireless Debugging first or tap \"Open App Settings\" to re-enable your apps immediately.</string>
+    <string name="provisioning_recovery_toast_healed">Restored %1$d app(s) successfully.</string>
+    <string name="provisioning_recovery_toast_already_restored">All previously paused apps are already active.</string>
+    <string name="provisioning_recovery_toast_not_paired">No active Wireless ADB pairing found. Enable Wireless Debugging or use Open App Settings.</string>
+    <string name="provisioning_recovery_notif_title">Restore Temporarily Disabled Apps</string>
+    <string name="provisioning_recovery_notif_desc">Tap here to restore %1$d app(s) left disabled after an interrupted setup session.</string>
 </resources>

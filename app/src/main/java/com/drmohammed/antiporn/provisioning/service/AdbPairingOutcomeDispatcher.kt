@@ -5,14 +5,20 @@ import android.content.Context
 import android.content.Intent
 import com.drmohammed.antiporn.MainActivity
 import com.drmohammed.antiporn.R
+import com.drmohammed.antiporn.notification.registry.NotificationRegistry
+import com.drmohammed.antiporn.provisioning.engine.AdbShellValidation
 import com.drmohammed.antiporn.provisioning.engine.BlockingSecondaryUser
 import com.drmohammed.antiporn.provisioning.engine.DeviceOwnerPromoter
+import com.drmohammed.antiporn.provisioning.engine.OemPermissionType
 import com.drmohammed.antiporn.provisioning.engine.PromotionResult
 import com.drmohammed.antiporn.provisioning.engine.ProvisioningAckStore
+import com.drmohammed.antiporn.provisioning.engine.ProvisioningFreezeRecoveryStore
 import com.drmohammed.antiporn.provisioning.receiver.PairingCodeReceiver
 import com.drmohammed.antiporn.provisioning.ui.ProvisioningWizardActivity
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import timber.log.Timber
 
 internal data class OutcomeDispatchContext(
@@ -92,10 +98,11 @@ internal object AdbPairingOutcomeDispatcher {
         notifyPairingPrompt(context, ports.first, ports.second)
     }
 
-    fun dispatchResult(dispatchCtx: OutcomeDispatchContext, result: PromotionResult) {
+    suspend fun dispatchResult(dispatchCtx: OutcomeDispatchContext, result: PromotionResult) {
         when (result) {
             is PromotionResult.Success -> dispatchSuccess(dispatchCtx)
             is PromotionResult.SecondaryUsersBlocking -> dispatchSecondaryUsersBlocking(dispatchCtx, result.users)
+            is PromotionResult.OemPermissionRequired -> dispatchOemPermissionRequired(dispatchCtx, result.oemType, result.message)
             is PromotionResult.Failure -> {
                 val alreadyInProgressMsg = dispatchCtx.context.getString(R.string.provisioning_error_already_in_progress)
                 if (DeviceOwnerPromoter.isPromotionActive && result.message == alreadyInProgressMsg) {
@@ -108,7 +115,7 @@ internal object AdbPairingOutcomeDispatcher {
         }
     }
 
-    fun dispatchUnexpectedError(dispatchCtx: OutcomeDispatchContext, error: Throwable) {
+    suspend fun dispatchUnexpectedError(dispatchCtx: OutcomeDispatchContext, error: Throwable) {
         if (error is CancellationException) throw error
         Timber.tag(TAG).e(error, "Unexpected exception during pairing code submission")
         val fallback = dispatchCtx.context.getString(R.string.provisioning_error_unknown)
@@ -120,6 +127,7 @@ internal object AdbPairingOutcomeDispatcher {
         dispatchCtx.promptState.markPromotionSuccess()
         Timber.tag(TAG).i("Promotion succeeded via service submission")
         ProvisioningAckStore.clearAck(context)
+        AdbShellValidation.cancelFreezeRecoveryNotification(context)
 
         val mainIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -173,15 +181,81 @@ internal object AdbPairingOutcomeDispatcher {
         )
     }
 
-    private fun dispatchFailure(dispatchCtx: OutcomeDispatchContext, message: String) {
+    private fun dispatchOemPermissionRequired(
+        dispatchCtx: OutcomeDispatchContext,
+        oemType: OemPermissionType,
+        message: String
+    ) {
         val context = dispatchCtx.context
         dispatchCtx.promptState.markStickyOutcome(dispatchCtx.pairingPort)
-        Timber.tag(TAG).e("Promotion failed: $message")
-        sendResultBroadcast(context, success = false, errorMessage = message)
+        val effectiveConnectPort = dispatchCtx.connectPort.takeIf { it > 0 } ?: dispatchCtx.promptState.capturedConnectPort
+        Timber.tag(TAG).w("Promotion paused: OEM permission toggle required (${oemType.name})")
+
+        context.sendBroadcast(
+            Intent(PairingCodeReceiver.ACTION_PROVISIONING_RESULT).apply {
+                setPackage(context.packageName)
+                putExtra(PairingCodeReceiver.EXTRA_SUCCESS, false)
+                putExtra(PairingCodeReceiver.EXTRA_ERROR_MESSAGE, message)
+                putExtra(PairingCodeReceiver.EXTRA_OEM_PERMISSION_TYPE, oemType.name)
+                putExtra(AdbPairingNotificationService.EXTRA_CONNECT_PORT, effectiveConnectPort)
+            }
+        )
+
+        val wizardIntent = Intent(context, ProvisioningWizardActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(ProvisioningWizardActivity.EXTRA_OEM_PERMISSION_TYPE, oemType.name)
+            putExtra(ProvisioningWizardActivity.EXTRA_CONNECT_PORT, effectiveConnectPort)
+        }
+        val optionsBundle = AdbPairingNotificationFactory.buildBalOptionsBundle()
+        try {
+            context.startActivity(wizardIntent, optionsBundle)
+        } catch (e: Exception) {
+            Timber.tag(TAG).w(e, "Direct launch of ProvisioningWizardActivity for OEM permission failed")
+        }
+
         notificationManager(context)?.notify(
             AdbPairingNotificationService.PAIRING_PROMPT_NOTIFICATION_ID,
-            AdbPairingNotificationFactory.buildFailureNotification(context, message)
+            AdbPairingNotificationFactory.buildOemPermissionNotification(context, wizardIntent, optionsBundle, message)
         )
+    }
+
+    private suspend fun dispatchFailure(dispatchCtx: OutcomeDispatchContext, message: String) {
+        val context = dispatchCtx.context
+        dispatchCtx.promptState.markStickyOutcome(dispatchCtx.pairingPort)
+        val effectiveConnectPort = dispatchCtx.connectPort.takeIf { it > 0 } ?: dispatchCtx.promptState.capturedConnectPort
+        Timber.tag(TAG).e("Promotion failed: $message")
+        sendResultBroadcast(context, success = false, errorMessage = message, connectPort = effectiveConnectPort)
+
+        val stranded = withContext(Dispatchers.IO) {
+            ProvisioningFreezeRecoveryStore.findStillDisabledTrackedPackages(context)
+        }
+        if (stranded.isNotEmpty()) {
+            val recoveryIntent = Intent(context, ProvisioningWizardActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(ProvisioningWizardActivity.EXTRA_SHOW_RECOVERY_DIALOG, true)
+                putExtra(ProvisioningWizardActivity.EXTRA_CONNECT_PORT, effectiveConnectPort)
+            }
+            val optionsBundle = AdbPairingNotificationFactory.buildBalOptionsBundle()
+            try {
+                context.startActivity(recoveryIntent, optionsBundle)
+            } catch (e: Exception) {
+                Timber.tag(TAG).w(e, "Direct launch of ProvisioningWizardActivity for freeze recovery failed")
+            }
+            val nm = notificationManager(context)
+            nm?.notify(
+                AdbPairingNotificationService.PAIRING_PROMPT_NOTIFICATION_ID,
+                AdbPairingNotificationFactory.buildFailureNotification(context, message, recoveryIntent, optionsBundle)
+            )
+            nm?.notify(
+                NotificationRegistry.EVENT_FREEZE_RECOVERY_ID,
+                AdbPairingNotificationFactory.buildFreezeRecoveryNotification(context, stranded.size, recoveryIntent, optionsBundle)
+            )
+        } else {
+            notificationManager(context)?.notify(
+                AdbPairingNotificationService.PAIRING_PROMPT_NOTIFICATION_ID,
+                AdbPairingNotificationFactory.buildFailureNotification(context, message)
+            )
+        }
     }
 
     private fun broadcastPorts(context: Context, pairingPort: Int, connectPort: Int) {
@@ -192,11 +266,12 @@ internal object AdbPairingOutcomeDispatcher {
         })
     }
 
-    private fun sendResultBroadcast(context: Context, success: Boolean, errorMessage: String? = null) {
+    private fun sendResultBroadcast(context: Context, success: Boolean, errorMessage: String? = null, connectPort: Int = 0) {
         context.sendBroadcast(Intent(PairingCodeReceiver.ACTION_PROVISIONING_RESULT).apply {
             setPackage(context.packageName)
             putExtra(PairingCodeReceiver.EXTRA_SUCCESS, success)
             if (errorMessage != null) putExtra(PairingCodeReceiver.EXTRA_ERROR_MESSAGE, errorMessage)
+            if (connectPort > 0) putExtra(AdbPairingNotificationService.EXTRA_CONNECT_PORT, connectPort)
         })
     }
 

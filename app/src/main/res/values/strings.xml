@@ -1735,5 +1735,29 @@
     <string name="provisioning_error_not_paired">لم يتم إقران الجهاز بعد.</string>
     <string name="provisioning_error_timeout_seconds">انتهت مهلة التفعيل بعد %1$d ثانية.</string>
     <string name="provisioning_error_connect_port_timeout">انتهت مهلة اكتشاف منفذ الاتصال بعد نجاح الاقتران.</string>
+    <string name="provisioning_error_post_verify_failed">تعذر التحقق من تفعيل صلاحية مالك الجهاز بعد الانتهاء. تم الإبقاء على التصحيح اللاسلكي مفتوحاً للأمان، يرجى إعادة المحاولة.</string>
+    <string name="provisioning_error_heal_failed">تعذر إعادة تفعيل التطبيقات المجمّدة عبر التصحيح اللاسلكي. يرجى إعادة المحاولة أو تفعيلها يدوياً.</string>
     <string name="provisioning_error_unknown">خطأ غير معروف</string>
+
+    <!-- OEM Permission Guidance Dialog & Notification -->
+    <string name="provisioning_oem_dialog_title">مطلوب تفعيل إذن من خيارات المطور للمتابعة</string>
+    <string name="provisioning_oem_dialog_xiaomi_desc">اطمئن: لم يتم تعطيل أو إخفاء أي تطبيقات على جهازك.\n\nتمنع أجهزة شاومي / ريدمي / بوكو إتمام التفعيل قبل تفعيل خيار أمان إضافي:\n\n١. اضغط «فتح خيارات المطور» بالأسفل.\n٢. مرّر للأسفل وفعّل خيار «تصحيح أخطاء USB (إعدادات الأمان)».\n٣. وافق على رسالة التنبيه، ثم اضغط رجوع واختر «إعادة المحاولة الآن».</string>
+    <string name="provisioning_oem_dialog_realme_desc">اطمئن: لم يتم تعطيل أو إخفاء أي تطبيقات على جهازك.\n\nتمنع أجهزة ريلمي / أوبو / ون بلس إتمام التفعيل قبل تعطيل مراقبة الأذونات:\n\n١. اضغط «فتح خيارات المطور» بالأسفل.\n٢. مرّر لأسفل القائمة وفعّل خيار «تعطيل مراقبة الأذونات» (Disable permission monitoring).\n٣. اضغط رجوع واختر «إعادة المحاولة الآن».</string>
+    <string name="provisioning_oem_btn_retry_now">إعادة المحاولة الآن</string>
+    <string name="provisioning_oem_btn_open_dev_options">فتح خيارات المطور</string>
+    <string name="provisioning_oem_notif_title">إجراء مطلوب: فعّل خيار المطور للمتابعة</string>
+
+    <!-- Freeze Recovery Apology & Action Dialog -->
+    <string name="provisioning_recovery_dialog_title">نعتذر: بقيت بعض التطبيقات معطلة مؤقتاً</string>
+    <string name="provisioning_recovery_dialog_intro">نعتذر عن هذا الإزعاج. لم تكتمل جلسة التفعيل السابقة بشكل سليم، مما أدى إلى بقاء التطبيقات التالية معطلة أو مخفية مؤقتاً:</string>
+    <string name="provisioning_recovery_dialog_outro">يمكنك استعادتها فوراً بالضغط على «إصلاح سريع عبر ADB» (مع تشغيل التصحيح اللاسلكي) أو تفعيلها يدوياً من «فتح إعدادات التطبيقات».</string>
+    <string name="provisioning_recovery_package_line">• %1$s (%2$s)</string>
+    <string name="provisioning_recovery_btn_quick_adb">إصلاح سريع عبر ADB</string>
+    <string name="provisioning_recovery_btn_open_settings">فتح إعدادات التطبيقات</string>
+    <string name="provisioning_recovery_adb_unavailable_hint">ملاحظة: يتطلب الإصلاح السريع أن يكون «التصحيح اللاسلكي» مفعّلاً ومقترناً. يمكنك تشغيله أولاً أو الضغط على «فتح إعدادات التطبيقات» لتفعيل تطبيقاتك فوراً.</string>
+    <string name="provisioning_recovery_toast_healed">تمت استعادة %1$d تطبيق/تطبيقات بنجاح.</string>
+    <string name="provisioning_recovery_toast_already_restored">جميع التطبيقات المعلّقة نشطة ومفعّلة بالفعل.</string>
+    <string name="provisioning_recovery_toast_not_paired">لا يوجد اقتران لاسلكي نشط حالياً. فعّل التصحيح اللاسلكي أو استخدم «فتح إعدادات التطبيقات».</string>
+    <string name="provisioning_recovery_notif_title">استعادة التطبيقات المعطلة مؤقتاً</string>
+    <string name="provisioning_recovery_notif_desc">اضغط هنا لاستعادة %1$d تطبيق/تطبيقات بقيت معطلة بعد انقطاع جلسة التفعيل السابقة.</string>
 </resources>

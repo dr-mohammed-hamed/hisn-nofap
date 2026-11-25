@@ -153,7 +153,10 @@ internal class AdbPairingPromptState {
         isPromoting = false
     }
 
-    fun clearStickyOutcome(isExternalPromotionActive: Boolean = false): ClearStickySnapshot = synchronized(lock) {
+    fun clearStickyOutcome(
+        isExternalPromotionActive: Boolean = false,
+        refreshPrompt: Boolean = true
+    ): ClearStickySnapshot = synchronized(lock) {
         if (isPromoting || isExternalPromotionActive) {
             return@synchronized ClearStickySnapshot(
                 cleared = false,
@@ -164,7 +167,7 @@ internal class AdbPairingPromptState {
         }
         isShowingStickyOutcome = false
         stickyOutcomePairingPort = null
-        val shouldRefresh = capturedPairingPort > 0
+        val shouldRefresh = refreshPrompt && capturedPairingPort > 0
         lastPromptedPairingPort = if (shouldRefresh) capturedPairingPort else 0
         ClearStickySnapshot(
             cleared = true,

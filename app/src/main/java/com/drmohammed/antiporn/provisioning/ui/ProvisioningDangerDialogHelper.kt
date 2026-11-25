@@ -239,6 +239,8 @@ internal class ProvisioningDangerDialogHelper(
         }
     }
 
+    fun isAnyDialogShowing(): Boolean = dangerDialog?.isShowing == true || enableDevDialog?.isShowing == true
+
     fun dismiss() {
         dismissDangerDialogOnly()
         enableDevDialog?.let { existing ->
@@ -260,18 +262,22 @@ internal class ProvisioningDangerDialogHelper(
     }
 
     private fun startSettingsWithFallback(context: Context, candidates: List<Intent>) {
-        for (intent in candidates) {
-            try {
-                context.startActivity(intent)
-                return
-            } catch (e: Exception) {
-                Timber.tag(TAG).w(e, "Settings launch attempt failed for ${intent.action}")
-            }
-        }
-        Toast.makeText(context, R.string.toast_open_settings_failed, Toast.LENGTH_SHORT).show()
+        Companion.startSettingsWithFallback(context, candidates)
     }
 
     companion object {
         private const val TAG = "AntiPorn_DangerDlg"
+
+        internal fun startSettingsWithFallback(context: Context, candidates: List<Intent>) {
+            for (intent in candidates) {
+                try {
+                    context.startActivity(intent)
+                    return
+                } catch (e: Exception) {
+                    Timber.tag(TAG).w(e, "Settings launch attempt failed for ${intent.action}")
+                }
+            }
+            Toast.makeText(context, R.string.toast_open_settings_failed, Toast.LENGTH_SHORT).show()
+        }
     }
 }

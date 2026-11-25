@@ -283,7 +283,7 @@
             android:exported="false"
             android:launchMode="singleTop"
             android:resizeableActivity="true"
-            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode|density|fontScale|locale|layoutDirection"
             android:label="@string/provisioning_wizard_title" />
 
         <!-- In-App Notification Center -->

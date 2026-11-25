@@ -4,6 +4,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.database.ContentObserver
 import android.os.Build
@@ -12,12 +13,15 @@ import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
 import androidx.core.app.RemoteInput
+import androidx.core.content.ContextCompat
 import com.drmohammed.antiporn.notification.registry.NotificationRegistry
 import com.drmohammed.antiporn.provisioning.engine.AdbMdnsDiscovery
 import com.drmohammed.antiporn.provisioning.engine.DeviceOwnerPromoter
 import com.drmohammed.antiporn.provisioning.engine.OemProvisioningHelper
 import com.drmohammed.antiporn.provisioning.engine.ProvisioningAckStore
+import com.drmohammed.antiporn.provisioning.engine.ProvisioningFreezeRecoveryStore
 import com.drmohammed.antiporn.provisioning.receiver.PairingCodeReceiver
+import com.drmohammed.antiporn.provisioning.ui.ProvisioningWizardActivity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,14 +38,18 @@ class AdbPairingNotificationService : Service() {
 
     private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(Dispatchers.Main + serviceJob)
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val companionSyncLock = Any()
     private val promptState = AdbPairingPromptState()
 
+    @Volatile
+    private var isServiceDestroyed = false
     private var mdnsDiscovery: AdbMdnsDiscovery? = null
     private var adbWifiObserver: ContentObserver? = null
 
     override fun onCreate() {
         super.onCreate()
+        isServiceDestroyed = false
         activeInstance = WeakReference(this)
         AdbPairingNotificationFactory.createNotificationChannels(this)
         registerAdbWifiObserver()
@@ -70,7 +78,7 @@ class AdbPairingNotificationService : Service() {
                 return START_STICKY
             }
             ACTION_CLEAR_STICKY_OUTCOME -> {
-                handleClearStickyOutcome()
+                handleClearStickyOutcome(refreshPrompt = !intent.getBooleanExtra(EXTRA_SUPPRESS_REPROMPT, false))
                 return START_STICKY
             }
             ACTION_SUBMIT_PAIRING_CODE -> {
@@ -118,6 +126,7 @@ class AdbPairingNotificationService : Service() {
             } catch (t: Throwable) {
                 if (t is CancellationException) {
                     promptState.cancelPromotionWithoutStickyOutcome()
+                    notifyRecoveryOnCancellationIfNeeded()
                     throw t
                 }
                 AdbPairingOutcomeDispatcher.dispatchUnexpectedError(dispatchCtx, t)
@@ -125,8 +134,38 @@ class AdbPairingNotificationService : Service() {
         }
     }
 
-    private fun handleClearStickyOutcome() {
-        val snapshot = promptState.clearStickyOutcome(DeviceOwnerPromoter.isPromotionActive)
+    private fun notifyRecoveryOnCancellationIfNeeded() {
+        try {
+            val stranded = ProvisioningFreezeRecoveryStore.findStillDisabledTrackedPackages(this)
+            if (stranded.isEmpty()) return
+            val canNotify = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                ContextCompat.checkSelfPermission(
+                    this,
+                    android.Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED
+            if (!canNotify) return
+
+            val recoveryIntent = Intent(this, ProvisioningWizardActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(ProvisioningWizardActivity.EXTRA_SHOW_RECOVERY_DIALOG, true)
+                if (capturedConnectPort > 0) putExtra(ProvisioningWizardActivity.EXTRA_CONNECT_PORT, capturedConnectPort)
+            }
+            val optionsBundle = AdbPairingNotificationFactory.buildBalOptionsBundle()
+            val notif = AdbPairingNotificationFactory.buildFreezeRecoveryNotification(
+                context = this,
+                affectedCount = stranded.size,
+                wizardIntent = recoveryIntent,
+                optionsBundle = optionsBundle
+            )
+            (getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager)
+                ?.notify(NotificationRegistry.EVENT_FREEZE_RECOVERY_ID, notif)
+        } catch (e: Exception) {
+            Timber.tag(TAG).w(e, "Failed posting freeze recovery notification on cancellation")
+        }
+    }
+
+    private fun handleClearStickyOutcome(refreshPrompt: Boolean = true) {
+        val snapshot = promptState.clearStickyOutcome(DeviceOwnerPromoter.isPromotionActive, refreshPrompt)
         AdbPairingOutcomeDispatcher.dispatchClearSticky(this, snapshot)
     }
 
@@ -162,24 +201,40 @@ class AdbPairingNotificationService : Service() {
         mdnsDiscovery = AdbMdnsDiscovery(
             context = this,
             onPairingPortDiscovered = { port ->
-                val snapshot = promptState.onPairingPortDiscovered(port)
-                AdbPairingOutcomeDispatcher.dispatchPortSnapshot(this, snapshot, syncCompanionPortsFromState())
+                postMdnsEventOnMain {
+                    val snapshot = promptState.onPairingPortDiscovered(port)
+                    AdbPairingOutcomeDispatcher.dispatchPortSnapshot(this, snapshot, syncCompanionPortsFromState())
+                }
             },
             onConnectPortDiscovered = { port ->
-                val snapshot = promptState.onConnectPortDiscovered(port)
-                AdbPairingOutcomeDispatcher.dispatchPortSnapshot(this, snapshot, syncCompanionPortsFromState())
+                postMdnsEventOnMain {
+                    val snapshot = promptState.onConnectPortDiscovered(port)
+                    AdbPairingOutcomeDispatcher.dispatchPortSnapshot(this, snapshot, syncCompanionPortsFromState())
+                }
             },
             onPairingServiceLost = {
                 Timber.tag(TAG).i("Pairing service lost via mDNS. Resetting pairing port.")
-                val snapshot = promptState.onPairingServiceLost()
-                AdbPairingOutcomeDispatcher.dispatchServiceLost(this, snapshot, syncCompanionPortsFromState())
+                postMdnsEventOnMain {
+                    val snapshot = promptState.onPairingServiceLost()
+                    AdbPairingOutcomeDispatcher.dispatchServiceLost(this, snapshot, syncCompanionPortsFromState())
+                }
             },
             onConnectServiceLost = {
                 Timber.tag(TAG).i("Connect service lost via mDNS. Resetting connect port.")
-                val snapshot = promptState.onConnectServiceLost()
-                AdbPairingOutcomeDispatcher.dispatchServiceLost(this, snapshot, syncCompanionPortsFromState())
+                postMdnsEventOnMain {
+                    val snapshot = promptState.onConnectServiceLost()
+                    AdbPairingOutcomeDispatcher.dispatchServiceLost(this, snapshot, syncCompanionPortsFromState())
+                }
             }
         ).also { it.startDiscovery() }
+    }
+
+    private inline fun postMdnsEventOnMain(crossinline block: () -> Unit) {
+        if (isServiceDestroyed) return
+        mainHandler.post {
+            if (isServiceDestroyed || activeInstance?.get() !== this) return@post
+            block()
+        }
     }
 
     private fun syncCompanionPortsFromState(): Pair<Int, Int> = synchronized(companionSyncLock) {
@@ -202,6 +257,8 @@ class AdbPairingNotificationService : Service() {
     }
 
     override fun onDestroy() {
+        isServiceDestroyed = true
+        mainHandler.removeCallbacksAndMessages(null)
         if (activeInstance?.get() === this) activeInstance = null
         serviceJob.cancel()
         adbWifiObserver?.let {
@@ -240,6 +297,7 @@ class AdbPairingNotificationService : Service() {
         const val ACTION_PORTS_DISCOVERED = "com.drmohammed.antiporn.PORTS_DISCOVERED"
         const val EXTRA_PAIRING_PORT = "extra_pairing_port"
         const val EXTRA_CONNECT_PORT = "extra_connect_port"
+        const val EXTRA_SUPPRESS_REPROMPT = "extra_suppress_reprompt"
 
         fun refreshNotificationState(context: Context) {
             if (capturedPairingPort <= 0) return
@@ -250,14 +308,17 @@ class AdbPairingNotificationService : Service() {
             }
         }
 
-        fun clearStickyOutcome(context: Context) {
-            activeInstance?.get()?.let { it.handleClearStickyOutcome(); return }
+        fun clearStickyOutcome(context: Context, suppressReprompt: Boolean = false) {
+            activeInstance?.get()?.let { it.handleClearStickyOutcome(refreshPrompt = !suppressReprompt); return }
             if (!DeviceOwnerPromoter.isPromotionActive) {
                 AdbPairingOutcomeDispatcher.cancelPairingPromptNotification(context)
             }
             if (capturedPairingPort > 0) {
                 try {
-                    context.startService(Intent(context, AdbPairingNotificationService::class.java).apply { action = ACTION_CLEAR_STICKY_OUTCOME })
+                    context.startService(Intent(context, AdbPairingNotificationService::class.java).apply {
+                        action = ACTION_CLEAR_STICKY_OUTCOME
+                        putExtra(EXTRA_SUPPRESS_REPROMPT, suppressReprompt)
+                    })
                 } catch (e: Exception) {
                     Timber.tag(TAG).w(e, "Failed starting service for ACTION_CLEAR_STICKY_OUTCOME")
                 }

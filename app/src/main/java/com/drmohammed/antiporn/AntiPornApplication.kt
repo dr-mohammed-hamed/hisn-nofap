@@ -1,13 +1,23 @@
 package com.drmohammed.antiporn
 
 import android.app.Application
+import android.app.NotificationManager
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import androidx.work.Configuration
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
 import com.drmohammed.antiporn.curfew.ZeroTrustForegroundWatcher
 import com.drmohammed.antiporn.data.local.db.HisnRoomDatabase
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.di.appModule
+import com.drmohammed.antiporn.notification.registry.NotificationRegistry
 import com.drmohammed.antiporn.ota.repository.OtaRepository
+import com.drmohammed.antiporn.provisioning.engine.ProvisioningFreezeRecoveryStore
+import com.drmohammed.antiporn.provisioning.service.AdbPairingNotificationFactory
+import com.drmohammed.antiporn.provisioning.ui.ProvisioningWizardActivity
 import com.drmohammed.antiporn.telemetry.GlobalCrashHandler
 import com.drmohammed.antiporn.work.CloudSyncWorker
 import com.drmohammed.antiporn.work.OtaUpdateWorker
@@ -152,6 +162,7 @@ class AntiPornApplication : Application(), Configuration.Provider {
                         Timber.i("Cleaned up $purgedCount obsolete OTA package(s) on application launch")
                     }
                 } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     Timber.w(e, "Failed to purge OTA cache on application launch")
                 }
 
@@ -162,6 +173,7 @@ class AntiPornApplication : Application(), Configuration.Provider {
                 val prunedNotifs = try {
                     db.inAppNotificationDao().pruneOldNotifications(maxKeep = 200, olderThanMs = cutoff)
                 } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     Timber.w(e, "Failed to prune old in-app notifications")
                     0
                 }
@@ -169,8 +181,43 @@ class AntiPornApplication : Application(), Configuration.Provider {
                     Timber.i("Cleaned up database: diagPruned=$pruned, diagCapped=$capped, notifsPruned=$prunedNotifs")
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Timber.w(e, "Failed to prune diagnostic events / notifications")
             }
+
+            checkPendingFreezeRecovery()
+        }
+    }
+
+    private fun checkPendingFreezeRecovery() {
+        try {
+            if (com.drmohammed.antiporn.provisioning.engine.DeviceOwnerPromoter.isPromotionActive) return
+            val stranded = ProvisioningFreezeRecoveryStore.findStillDisabledTrackedPackages(this)
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            if (stranded.isEmpty()) {
+                nm?.cancel(NotificationRegistry.EVENT_FREEZE_RECOVERY_ID)
+                return
+            }
+            val canNotify = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                ContextCompat.checkSelfPermission(
+                    this,
+                    android.Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED
+            if (!canNotify) return
+
+            val wizardIntent = Intent(this, ProvisioningWizardActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(ProvisioningWizardActivity.EXTRA_SHOW_RECOVERY_DIALOG, true)
+            }
+            val notification = AdbPairingNotificationFactory.buildFreezeRecoveryNotification(
+                context = this,
+                affectedCount = stranded.size,
+                wizardIntent = wizardIntent,
+                optionsBundle = null
+            )
+            nm?.notify(NotificationRegistry.EVENT_FREEZE_RECOVERY_ID, notification)
+        } catch (e: Exception) {
+            Timber.w(e, "Failed checking freeze recovery state on application launch")
         }
     }
 }

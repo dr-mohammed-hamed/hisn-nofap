@@ -101,6 +101,10 @@ class AdminReceiver : DeviceAdminReceiver() {
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                if (com.drmohammed.antiporn.provisioning.engine.DeviceOwnerPromoter.isPromotionActive) {
+                    Log.i(TAG, "Promotion active; deferring AdminReceiver enforcement to AdbPostPromotionVerifier.")
+                    return@launch
+                }
                 try {
                     com.drmohammed.antiporn.core.engine.SystemAppsHealingManager.healPreInstalledStoresSafely(appContext)
                 } catch (e: Exception) {
