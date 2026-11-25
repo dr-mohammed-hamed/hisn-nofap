@@ -18,11 +18,13 @@ class ProvisioningAckStoreTest {
     fun setUp() {
         context = FakeContext()
         ProvisioningAckStore.nowMsProvider = null
+        ProvisioningAckStore.bootCountProvider = null
     }
 
     @After
     fun tearDown() {
         ProvisioningAckStore.nowMsProvider = null
+        ProvisioningAckStore.bootCountProvider = null
     }
 
     @Test
@@ -116,6 +118,20 @@ class ProvisioningAckStoreTest {
         // Advance beyond TTL
         currentTime += ProvisioningAckStore.ACK_TTL_MS + 10L
         assertFalse("Ack should be expired after advancing time via provider", ProvisioningAckStore.hasValidAck(context))
+    }
+
+    @Test
+    fun testRebootInvalidatesAckEvenWhenElapsedRealtimeMatches() {
+        var bootCount = 12
+        ProvisioningAckStore.bootCountProvider = { bootCount }
+        ProvisioningAckStore.recordAck(context, nowMs = 30_000L)
+        assertTrue(ProvisioningAckStore.hasValidAck(context, nowMs = 40_000L))
+
+        bootCount = 13
+        assertFalse(
+            "Ack from previous boot must be invalidated when boot count increments",
+            ProvisioningAckStore.hasValidAck(context, nowMs = 60_000L)
+        )
     }
 
     private class FakeContext : ContextWrapper(null) {

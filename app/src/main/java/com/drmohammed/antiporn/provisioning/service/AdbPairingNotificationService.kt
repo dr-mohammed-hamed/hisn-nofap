@@ -1,9 +1,6 @@
 package com.drmohammed.antiporn.provisioning.service
 
-import android.app.ActivityOptions
-import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -15,12 +12,12 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
-import androidx.core.app.NotificationCompat
 import androidx.core.app.RemoteInput
 import com.drmohammed.antiporn.MainActivity
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.notification.registry.NotificationRegistry
 import com.drmohammed.antiporn.provisioning.engine.AdbMdnsDiscovery
+import com.drmohammed.antiporn.provisioning.engine.BlockingSecondaryUser
 import com.drmohammed.antiporn.provisioning.engine.DeviceOwnerPromoter
 import com.drmohammed.antiporn.provisioning.engine.OemProvisioningHelper
 import com.drmohammed.antiporn.provisioning.engine.PromotionResult
@@ -37,28 +34,29 @@ import timber.log.Timber
 
 /**
  * Foreground Service that manages mDNS auto-discovery, live settings step-by-step
- * guidance via ContentObserver, and surfaces the high-priority Heads-Up pairing prompt
- * and non-focus-stealing floating keypad overlay.
+ * guidance via ContentObserver, and surfaces the high-priority Heads-Up pairing prompt.
  */
 class AdbPairingNotificationService : Service() {
 
     private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(Dispatchers.Main + serviceJob)
+    private val stateLock = Any()
 
     private var mdnsDiscovery: AdbMdnsDiscovery? = null
     @Volatile private var capturedPairingPort = 0
     @Volatile private var capturedConnectPort = 0
     private var adbWifiObserver: ContentObserver? = null
-    private var lastPromptedPairingPort = 0
-    private var isPromoting = false
+    @Volatile private var lastPromptedPairingPort = 0
+    @Volatile private var isPromoting = false
+    @Volatile private var isShowingStickyOutcome = false
 
     override fun onCreate() {
         super.onCreate()
-        createNotificationChannels()
+        AdbPairingNotificationFactory.createNotificationChannels(this)
         registerAdbWifiObserver()
 
         try {
-            val initialNotification = buildGuideNotification(isWirelessAdbEnabled())
+            val initialNotification = AdbPairingNotificationFactory.buildGuideNotification(this, isWirelessAdbEnabled())
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 startForeground(
                     NOTIFICATION_ID,
@@ -81,8 +79,11 @@ class AdbPairingNotificationService : Service() {
             }
             ACTION_REFRESH_ACK_STATE -> {
                 val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-                if (capturedPairingPort > 0) {
-                    nm?.notify(PAIRING_PROMPT_NOTIFICATION_ID, buildPairingPromptNotification())
+                if (capturedPairingPort > 0 && !isPromoting && !isShowingStickyOutcome && !DeviceOwnerPromoter.isPromotionActive) {
+                    nm?.notify(
+                        PAIRING_PROMPT_NOTIFICATION_ID,
+                        AdbPairingNotificationFactory.buildPairingPromptNotification(this, capturedPairingPort, capturedConnectPort)
+                    )
                 }
                 return START_STICKY
             }
@@ -91,9 +92,10 @@ class AdbPairingNotificationService : Service() {
                 val rawCode = remoteInput?.getCharSequence(PairingCodeReceiver.EXTRA_PAIRING_CODE)?.toString()
                 val code = PairingCodeReceiver.sanitizePairingCode(rawCode)
                 val port = intent.getIntExtra(EXTRA_PAIRING_PORT, 0).takeIf { it > 0 } ?: capturedPairingPort
+                val connectPort = capturedConnectPort.takeIf { it > 0 } ?: intent.getIntExtra(EXTRA_CONNECT_PORT, 0)
 
                 if (code.length == 6 && port > 0) {
-                    handlePairingCodeSubmission(code, port)
+                    handlePairingCodeSubmission(code, port, connectPort)
                 } else {
                     Timber.tag(TAG).w("ACTION_SUBMIT_PAIRING_CODE received with empty/invalid code. len=${code.length}, port=$port")
                     BlackBoxRecorder.recordPairing(
@@ -102,9 +104,11 @@ class AdbPairingNotificationService : Service() {
                         isSuccess = false,
                         details = "rawCodeNull=${rawCode == null}, port=$port"
                     )
-                    // CRITICAL: Do NOT cancel notification 9902!
                     val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-                    notificationManager?.notify(PAIRING_PROMPT_NOTIFICATION_ID, buildPairingPromptNotification())
+                    notificationManager?.notify(
+                        PAIRING_PROMPT_NOTIFICATION_ID,
+                        AdbPairingNotificationFactory.buildPairingPromptNotification(this, capturedPairingPort, capturedConnectPort)
+                    )
                 }
                 return START_STICKY
             }
@@ -114,15 +118,10 @@ class AdbPairingNotificationService : Service() {
         return START_STICKY
     }
 
-    private fun handlePairingCodeSubmission(code: String, port: Int) {
+    private fun handlePairingCodeSubmission(code: String, port: Int, connectPort: Int) {
         if (OemProvisioningHelper.requiresPreActivationDangerAck(this) && !ProvisioningAckStore.hasValidAck(this)) {
             Timber.tag(TAG).w("Submission blocked: Danger acknowledgment required but missing or expired")
-            BlackBoxRecorder.recordPairing(
-                this,
-                "SUBMISSION_BLOCKED_NO_ACK",
-                isSuccess = false,
-                details = "port=$port"
-            )
+            BlackBoxRecorder.recordPairing(this, "SUBMISSION_BLOCKED_NO_ACK", isSuccess = false, details = "port=$port")
             val failIntent = Intent(PairingCodeReceiver.ACTION_PROVISIONING_RESULT).apply {
                 setPackage(packageName)
                 putExtra(PairingCodeReceiver.EXTRA_SUCCESS, false)
@@ -130,52 +129,45 @@ class AdbPairingNotificationService : Service() {
             }
             sendBroadcast(failIntent)
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-            nm?.notify(PAIRING_PROMPT_NOTIFICATION_ID, buildPairingPromptNotification())
+            nm?.notify(
+                PAIRING_PROMPT_NOTIFICATION_ID,
+                AdbPairingNotificationFactory.buildPairingPromptNotification(this, capturedPairingPort, capturedConnectPort)
+            )
             return
         }
 
-        if (isPromoting) {
-            Timber.tag(TAG).w("Promotion already in progress, ignoring duplicate submit")
-            return
+        synchronized(stateLock) {
+            if (isPromoting || DeviceOwnerPromoter.isPromotionActive) {
+                Timber.tag(TAG).w("Promotion already in progress, ignoring duplicate submit")
+                return
+            }
+            isPromoting = true
+            isShowingStickyOutcome = false
         }
-        isPromoting = true
 
-        val inProgressNotification = NotificationCompat.Builder(this, CHANNEL_ID_HEADS_UP)
-            .setSmallIcon(R.drawable.ic_shield_device_owner)
-            .setContentTitle(getString(R.string.provisioning_in_progress_title))
-            .setContentText(getString(R.string.provisioning_in_progress_desc))
-            .setOngoing(true)
-            .build()
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-        nm?.notify(PAIRING_PROMPT_NOTIFICATION_ID, inProgressNotification)
+        nm?.notify(PAIRING_PROMPT_NOTIFICATION_ID, AdbPairingNotificationFactory.buildInProgressNotification(this))
 
         serviceScope.launch {
             try {
                 val result = DeviceOwnerPromoter.pairAndPromote(
                     context = this@AdbPairingNotificationService,
                     pairingPort = port,
-                    connectPort = capturedConnectPort,
+                    connectPort = connectPort,
                     pairingCode = code
                 )
 
                 when (result) {
                     is PromotionResult.Success -> {
+                        isPromoting = false
+                        isShowingStickyOutcome = false
                         Timber.tag(TAG).i("Promotion succeeded via service submission")
                         ProvisioningAckStore.clearAck(this@AdbPairingNotificationService)
 
                         val mainIntent = Intent(this@AdbPairingNotificationService, MainActivity::class.java).apply {
                             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
                         }
-
-                        val optionsBundle = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                            ActivityOptions.makeBasic().apply {
-                                @Suppress("DEPRECATION")
-                                setPendingIntentBackgroundActivityStartMode(
-                                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
-                                )
-                            }.toBundle()
-                        } else null
-
+                        val optionsBundle = AdbPairingNotificationFactory.buildBalOptionsBundle()
                         try {
                             startActivity(mainIntent, optionsBundle)
                         } catch (e: Exception) {
@@ -188,26 +180,59 @@ class AdbPairingNotificationService : Service() {
                         }
                         sendBroadcast(successIntent)
 
-                        val successPending = PendingIntent.getActivity(
-                            this@AdbPairingNotificationService,
-                            1002,
-                            mainIntent,
-                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-                            optionsBundle
+                        nm?.notify(
+                            SUCCESS_NOTIFICATION_ID,
+                            AdbPairingNotificationFactory.buildSuccessNotification(
+                                this@AdbPairingNotificationService,
+                                mainIntent,
+                                optionsBundle
+                            )
                         )
-                        val successNotification = NotificationCompat.Builder(this@AdbPairingNotificationService, CHANNEL_ID_HEADS_UP)
-                            .setSmallIcon(R.drawable.ic_shield_device_owner)
-                            .setContentTitle(getString(R.string.provisioning_success_title))
-                            .setContentText(getString(R.string.provisioning_success_desc))
-                            .setContentIntent(successPending)
-                            .setAutoCancel(true)
-                            .build()
-                        nm?.notify(PAIRING_PROMPT_NOTIFICATION_ID, successNotification)
-
                         stopForegroundAndSelf()
+                    }
+                    is PromotionResult.SecondaryUsersBlocking -> {
+                        isShowingStickyOutcome = true
+                        isPromoting = false
+                        val usersJson = BlockingSecondaryUser.listToJson(result.users)
+                        Timber.tag(TAG).w("Promotion paused: ${result.users.size} blocking secondary user(s) detected")
+
+                        val pausedBroadcast = Intent(PairingCodeReceiver.ACTION_PROVISIONING_RESULT).apply {
+                            setPackage(packageName)
+                            putExtra(PairingCodeReceiver.EXTRA_SUCCESS, false)
+                            putExtra(PairingCodeReceiver.EXTRA_BLOCKING_USERS_JSON, usersJson)
+                            putExtra(EXTRA_CONNECT_PORT, connectPort.takeIf { it > 0 } ?: capturedConnectPort)
+                        }
+                        sendBroadcast(pausedBroadcast)
+
+                        val wizardIntent = Intent(this@AdbPairingNotificationService, ProvisioningWizardActivity::class.java).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            putExtra(ProvisioningWizardActivity.EXTRA_BLOCKING_USERS_JSON, usersJson)
+                            putExtra(ProvisioningWizardActivity.EXTRA_CONNECT_PORT, connectPort.takeIf { it > 0 } ?: capturedConnectPort)
+                        }
+                        val optionsBundle = AdbPairingNotificationFactory.buildBalOptionsBundle()
+                        try {
+                            startActivity(wizardIntent, optionsBundle)
+                        } catch (e: Exception) {
+                            Timber.tag(TAG).w(e, "Direct launch of ProvisioningWizardActivity for blocking users failed")
+                        }
+
+                        nm?.notify(
+                            PAIRING_PROMPT_NOTIFICATION_ID,
+                            AdbPairingNotificationFactory.buildBlockingUsersNotification(
+                                this@AdbPairingNotificationService,
+                                wizardIntent,
+                                optionsBundle
+                            )
+                        )
                     }
                     is PromotionResult.Failure -> {
                         isPromoting = false
+                        val alreadyInProgressMsg = getString(R.string.provisioning_error_already_in_progress)
+                        if (DeviceOwnerPromoter.isPromotionActive && result.message == alreadyInProgressMsg) {
+                            Timber.tag(TAG).i("Ignoring concurrent lock rejection because another promotion is active")
+                            return@launch
+                        }
+                        isShowingStickyOutcome = true
                         Timber.tag(TAG).e("Promotion failed: ${result.message}")
 
                         val failIntent = Intent(PairingCodeReceiver.ACTION_PROVISIONING_RESULT).apply {
@@ -217,15 +242,13 @@ class AdbPairingNotificationService : Service() {
                         }
                         sendBroadcast(failIntent)
 
-                        val failureNotification = NotificationCompat.Builder(this@AdbPairingNotificationService, CHANNEL_ID_HEADS_UP)
-                            .setSmallIcon(R.drawable.ic_shield_device_owner)
-                            .setContentTitle(getString(R.string.provisioning_failed_title))
-                            .setContentText(result.message)
-                            .setStyle(NotificationCompat.BigTextStyle().bigText(result.message))
-                            .setAutoCancel(false)
-                            .setOngoing(true)
-                            .build()
-                        nm?.notify(PAIRING_PROMPT_NOTIFICATION_ID, failureNotification)
+                        nm?.notify(
+                            PAIRING_PROMPT_NOTIFICATION_ID,
+                            AdbPairingNotificationFactory.buildFailureNotification(
+                                this@AdbPairingNotificationService,
+                                result.message
+                            )
+                        )
                     }
                 }
             } catch (t: Throwable) {
@@ -244,7 +267,10 @@ class AdbPairingNotificationService : Service() {
                     val isEnabled = isWirelessAdbEnabled()
                     Timber.tag(TAG).i("Observed adb_wifi_enabled change: $isEnabled")
                     val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-                    notificationManager?.notify(NOTIFICATION_ID, buildGuideNotification(isEnabled))
+                    notificationManager?.notify(
+                        NOTIFICATION_ID,
+                        AdbPairingNotificationFactory.buildGuideNotification(this@AdbPairingNotificationService, isEnabled)
+                    )
                 }
             }
             adbWifiObserver = observer
@@ -270,19 +296,36 @@ class AdbPairingNotificationService : Service() {
         mdnsDiscovery = AdbMdnsDiscovery(
             context = this,
             onPairingPortDiscovered = { port ->
-                capturedPairingPort = port
+                synchronized(stateLock) {
+                    capturedPairingPort = port
+                }
                 notifyPortState()
             },
             onConnectPortDiscovered = { port ->
-                capturedConnectPort = port
+                synchronized(stateLock) {
+                    capturedConnectPort = port
+                }
                 notifyPortState()
             },
             onPairingServiceLost = {
                 Timber.tag(TAG).i("Pairing service lost via mDNS. Resetting pairing port.")
-                if (!isPromoting) {
-                    capturedPairingPort = 0
-                    Companion.capturedPairingPort = 0
-                    lastPromptedPairingPort = 0
+                val shouldCancelPrompt = synchronized(stateLock) {
+                    if (!isPromoting) {
+                        capturedPairingPort = 0
+                        Companion.capturedPairingPort = 0
+                        lastPromptedPairingPort = 0
+                        !isShowingStickyOutcome
+                    } else {
+                        false
+                    }
+                }
+                val broadcastIntent = Intent(ACTION_PORTS_DISCOVERED).apply {
+                    setPackage(packageName)
+                    putExtra(EXTRA_PAIRING_PORT, capturedPairingPort)
+                    putExtra(EXTRA_CONNECT_PORT, capturedConnectPort)
+                }
+                sendBroadcast(broadcastIntent)
+                if (shouldCancelPrompt) {
                     val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
                     notificationManager?.cancel(PAIRING_PROMPT_NOTIFICATION_ID)
                 }
@@ -290,163 +333,35 @@ class AdbPairingNotificationService : Service() {
         ).also { it.startDiscovery() }
     }
 
-    @Synchronized
     private fun notifyPortState() {
-        Companion.capturedPairingPort = capturedPairingPort
-        Companion.capturedConnectPort = capturedConnectPort
-        Timber.tag(TAG).i("Port state updated: pairing=$capturedPairingPort, connect=$capturedConnectPort")
+        val (pairPort, connPort, shouldPrompt) = synchronized(stateLock) {
+            Companion.capturedPairingPort = capturedPairingPort
+            Companion.capturedConnectPort = capturedConnectPort
+            val prompt = capturedPairingPort > 0 &&
+                capturedPairingPort != lastPromptedPairingPort &&
+                !isPromoting &&
+                !isShowingStickyOutcome
+            if (prompt) {
+                lastPromptedPairingPort = capturedPairingPort
+            }
+            Triple(capturedPairingPort, capturedConnectPort, prompt)
+        }
+        Timber.tag(TAG).i("Port state updated: pairing=$pairPort, connect=$connPort")
 
-        // Broadcast to Activity if open
         val broadcastIntent = Intent(ACTION_PORTS_DISCOVERED).apply {
             setPackage(packageName)
-            putExtra(EXTRA_PAIRING_PORT, capturedPairingPort)
-            putExtra(EXTRA_CONNECT_PORT, capturedConnectPort)
+            putExtra(EXTRA_PAIRING_PORT, pairPort)
+            putExtra(EXTRA_CONNECT_PORT, connPort)
         }
         sendBroadcast(broadcastIntent)
 
-        // Surface Heads-Up Prompt when a new active pairingPort is captured
-        if (capturedPairingPort > 0 && capturedPairingPort != lastPromptedPairingPort) {
-            lastPromptedPairingPort = capturedPairingPort
-
-            BlackBoxRecorder.recordPairing(
-                this,
-                "PAIRING_PORT_CAPTURED",
-                isSuccess = true,
-                details = "port=$capturedPairingPort"
-            )
-
+        if (shouldPrompt) {
+            BlackBoxRecorder.recordPairing(this, "PAIRING_PORT_CAPTURED", isSuccess = true, details = "port=$pairPort")
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-            notificationManager?.notify(PAIRING_PROMPT_NOTIFICATION_ID, buildPairingPromptNotification())
-        }
-    }
-
-    private fun buildGuideNotification(isWirelessAdbOn: Boolean): android.app.Notification {
-        val message = if (isWirelessAdbOn) {
-            getString(R.string.provisioning_guide_notif_toggle_done)
-        } else {
-            getString(R.string.provisioning_guide_notif_waiting_toggle)
-        }
-
-        return NotificationCompat.Builder(this, CHANNEL_ID_GUIDE)
-            .setSmallIcon(R.drawable.ic_shield_device_owner)
-            .setContentTitle(getString(R.string.provisioning_guide_notif_title))
-            .setContentText(message)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setOngoing(true)
-            .build()
-    }
-
-    private fun buildPairingPromptNotification(): android.app.Notification {
-        val canSubmitFromNotif = !OemProvisioningHelper.requiresPreActivationDangerAck(this) || ProvisioningAckStore.hasValidAck(this)
-
-        if (!canSubmitFromNotif) {
-            val ackWizardIntent = Intent(this, ProvisioningWizardActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                putExtra(ProvisioningWizardActivity.EXTRA_REQUIRE_DANGER_ACK, true)
-            }
-            val ackPendingIntent = PendingIntent.getActivity(
-                this,
-                103,
-                ackWizardIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            notificationManager?.notify(
+                PAIRING_PROMPT_NOTIFICATION_ID,
+                AdbPairingNotificationFactory.buildPairingPromptNotification(this, pairPort, connPort)
             )
-            val promptDesc = getString(R.string.provisioning_prompt_ack_required_desc)
-
-            return NotificationCompat.Builder(this, CHANNEL_ID_HEADS_UP)
-                .setSmallIcon(R.drawable.ic_shield_device_owner)
-                .setContentTitle(getString(R.string.provisioning_prompt_ack_required_title))
-                .setContentText(promptDesc)
-                .setStyle(NotificationCompat.BigTextStyle().bigText(promptDesc))
-                .setPriority(NotificationCompat.PRIORITY_MAX)
-                .setCategory(NotificationCompat.CATEGORY_REMINDER)
-                .setVibrate(VIBRATION_PATTERN)
-                .setContentIntent(ackPendingIntent)
-                .setOngoing(true)
-                .setAutoCancel(false)
-                .build()
-        }
-
-        val remoteInput = RemoteInput.Builder(PairingCodeReceiver.EXTRA_PAIRING_CODE)
-            .setLabel(getString(R.string.provisioning_input_label))
-            .setAllowFreeFormInput(true)
-            .build()
-
-        val replyIntent = Intent(this, AdbPairingNotificationService::class.java).apply {
-            action = ACTION_SUBMIT_PAIRING_CODE
-            putExtra(EXTRA_PAIRING_PORT, capturedPairingPort)
-            putExtra(EXTRA_CONNECT_PORT, capturedConnectPort)
-        }
-
-        val replyPendingIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            PendingIntent.getForegroundService(
-                this,
-                101,
-                replyIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
-            )
-        } else {
-            PendingIntent.getService(
-                this,
-                101,
-                replyIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
-            )
-        }
-
-        val submitAction = NotificationCompat.Action.Builder(
-            R.drawable.ic_shield_device_owner,
-            getString(R.string.provisioning_action_submit),
-            replyPendingIntent
-        )
-            .addRemoteInput(remoteInput)
-            .setShowsUserInterface(false)
-            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY)
-            .setAllowGeneratedReplies(false)
-            .build()
-
-        val promptDesc = getString(R.string.provisioning_prompt_desc, capturedPairingPort)
-
-        return NotificationCompat.Builder(this, CHANNEL_ID_HEADS_UP)
-            .setSmallIcon(R.drawable.ic_shield_device_owner)
-            .setContentTitle(getString(R.string.provisioning_prompt_title))
-            .setContentText(promptDesc)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(promptDesc))
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setCategory(NotificationCompat.CATEGORY_REMINDER)
-            .setVibrate(VIBRATION_PATTERN)
-            .addAction(submitAction)
-            .setOngoing(true)
-            .setAutoCancel(false)
-            .build()
-    }
-
-    private fun createNotificationChannels() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val manager = getSystemService(NotificationManager::class.java) ?: return
-
-            // 1. Ongoing Guide Channel (Low Priority, Quiet)
-            val guideChannel = NotificationChannel(
-                CHANNEL_ID_GUIDE,
-                getString(R.string.provisioning_channel_name),
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = getString(R.string.provisioning_channel_desc)
-            }
-
-            // 2. Heads-Up Prompt Channel (High Priority with Vibration)
-            val headsUpChannel = NotificationChannel(
-                CHANNEL_ID_HEADS_UP,
-                getString(R.string.provisioning_prompt_title),
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = getString(R.string.provisioning_channel_desc)
-                enableVibration(true)
-                vibrationPattern = VIBRATION_PATTERN
-            }
-
-            manager.createNotificationChannel(guideChannel)
-            manager.createNotificationChannel(headsUpChannel)
         }
     }
 
@@ -480,11 +395,15 @@ class AdbPairingNotificationService : Service() {
         }
         mdnsDiscovery?.stopDiscovery()
         mdnsDiscovery = null
-        capturedPairingPort = 0
-        capturedConnectPort = 0
-        Companion.capturedPairingPort = 0
-        Companion.capturedConnectPort = 0
-        lastPromptedPairingPort = 0
+        synchronized(stateLock) {
+            capturedPairingPort = 0
+            capturedConnectPort = 0
+            Companion.capturedPairingPort = 0
+            Companion.capturedConnectPort = 0
+            lastPromptedPairingPort = 0
+            isShowingStickyOutcome = false
+            isPromoting = false
+        }
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
         notificationManager?.cancel(PAIRING_PROMPT_NOTIFICATION_ID)
         super.onDestroy()
@@ -499,7 +418,7 @@ class AdbPairingNotificationService : Service() {
 
         const val NOTIFICATION_ID = NotificationRegistry.ADB_PAIRING_ID
         const val PAIRING_PROMPT_NOTIFICATION_ID = 9902
-        private val VIBRATION_PATTERN = longArrayOf(0, 250, 100, 250)
+        const val SUCCESS_NOTIFICATION_ID = 9903
 
         @Volatile var capturedPairingPort: Int = 0
         @Volatile var capturedConnectPort: Int = 0
@@ -529,18 +448,23 @@ class AdbPairingNotificationService : Service() {
             val intent = Intent(context, AdbPairingNotificationService::class.java).apply {
                 action = ACTION_START_SERVICE
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                Timber.tag(TAG).w(e, "Failed starting AdbPairingNotificationService")
             }
         }
 
         fun stop(context: Context) {
-            val intent = Intent(context, AdbPairingNotificationService::class.java).apply {
-                action = ACTION_STOP_SERVICE
+            try {
+                context.stopService(Intent(context, AdbPairingNotificationService::class.java))
+            } catch (e: Exception) {
+                Timber.tag(TAG).w(e, "Failed stopping AdbPairingNotificationService")
             }
-            context.startService(intent)
         }
     }
 }
