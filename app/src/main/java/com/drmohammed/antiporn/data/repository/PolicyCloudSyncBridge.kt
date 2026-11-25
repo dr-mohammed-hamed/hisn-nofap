@@ -324,17 +324,40 @@ internal class PolicyCloudSyncBridge(
         )
     }
 
+    private fun safeLog(priority: Int, message: String, throwable: Throwable? = null) {
+        try {
+            when (priority) {
+                Log.DEBUG -> Log.d(TAG, message, throwable)
+                Log.INFO -> Log.i(TAG, message, throwable)
+                Log.WARN -> Log.w(TAG, message, throwable)
+                else -> Log.e(TAG, message, throwable)
+            }
+        } catch (_: Throwable) {
+            // JVM unit test fallback when android.util.Log is not mocked
+        }
+    }
+
     private fun saveDetectedGuardianPartner(adoptedPolicy: DevicePolicyBundle, maskedGuardianUid: String) {
         val guardianUid = adoptedPolicy.guardianUid ?: return
-        Log.i(TAG, "Guardian detected from cloud snapshot: ${AiTelemetryReporter.maskIdentifier(adoptedPolicy.guardianName)} ($maskedGuardianUid)")
+        safeLog(
+            Log.INFO,
+            "Guardian detected from cloud snapshot: ${AiTelemetryReporter.maskIdentifier(adoptedPolicy.guardianName)} ($maskedGuardianUid)"
+        )
+        partnerDao.getPartnersByRoleBlocking(PartnerEntity.ROLE_GUARDIAN)
+            .filter { it.id != guardianUid }
+            .forEach { partnerDao.deletePartnerByIdAndRoleBlocking(it.id, PartnerEntity.ROLE_GUARDIAN) }
+        val existingGuardian = partnerDao.getPartnerByIdAndRoleBlocking(guardianUid, PartnerEntity.ROLE_GUARDIAN)
         val now = TrustedTimeProvider.currentTimeMillis(appContext)
+        val displayName = existingGuardian?.displayName?.takeIf { it.isNotBlank() }
+            ?: adoptedPolicy.guardianName?.takeIf { it.isNotBlank() }
+            ?: runCatching { appContext.getString(R.string.guardian_default_name) }.getOrDefault("Guardian")
         val partner = PartnerEntity(
             id = guardianUid,
             pairingCode = AccountabilityRepository.CODE_LOCKED,
-            displayName = adoptedPolicy.guardianName ?: appContext.getString(R.string.guardian_default_name),
+            displayName = displayName,
             role = PartnerEntity.ROLE_GUARDIAN,
             status = PartnerEntity.STATUS_ACTIVE,
-            createdAt = now,
+            createdAt = existingGuardian?.createdAt ?: now,
             lastSyncAt = now
         )
         partnerDao.savePartnerBlocking(partner)
@@ -356,7 +379,7 @@ internal class PolicyCloudSyncBridge(
                         "lastAcknowledgedAt" to TrustedTimeProvider.currentTimeMillis(appContext)
                     )
                 ).await()
-                Log.i(TAG, "[SelfControlDiag] Acknowledged policy v${cloudPolicy.version} back to Firestore /policies/$maskedUid")
+                safeLog(Log.INFO, "[SelfControlDiag] Acknowledged policy v${cloudPolicy.version} back to Firestore /policies/$maskedUid")
                 BlackBoxRecorder.recordCloudSync(
                     appContext,
                     "POLICY_ACKNOWLEDGED",
@@ -365,7 +388,7 @@ internal class PolicyCloudSyncBridge(
                 )
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                Log.w(TAG, "Failed writing policy acknowledgment: ${e.message}")
+                safeLog(Log.WARN, "Failed writing policy acknowledgment: ${e.message}")
             }
             if (isTransitionToSupervised && wasReconciled) {
                 try {

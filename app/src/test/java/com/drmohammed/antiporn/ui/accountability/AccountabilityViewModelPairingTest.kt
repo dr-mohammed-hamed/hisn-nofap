@@ -10,7 +10,10 @@ import com.drmohammed.antiporn.data.local.db.dao.DevicePolicyDao
 import com.drmohammed.antiporn.data.local.db.dao.PartnerDao
 import com.drmohammed.antiporn.data.local.db.entity.PartnerEntity
 import com.drmohammed.antiporn.data.repository.AccountabilityRepository
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.runBlocking
@@ -68,7 +71,11 @@ class AccountabilityViewModelPairingTest {
             }
         )
 
-        val vm = createViewModel(repo = repo)
+        var syncStartCount = 0
+        val vm = createViewModel(
+            repo = repo,
+            startFirestoreSyncAction = { syncStartCount++ }
+        )
 
         CloudSyncManager.setCloudSyncEnabled(fakeApp, true)
         vm.loadPairingCode()
@@ -78,6 +85,8 @@ class AccountabilityViewModelPairingTest {
         var callbackResult: Result<String>? = null
         vm.startTemporaryPairingSession { callbackResult = it }
 
+        assertEquals(0, syncStartCount)
+        assertFalse(vm.uiState.value.isGeneratingPairingCode)
         assertEquals(Result.success("ABC123"), callbackResult)
         assertTrue(vm.uiState.value.isCloudSyncEnabled)
         assertTrue(vm.uiState.value.isTemporaryPairingActive)
@@ -133,8 +142,10 @@ class AccountabilityViewModelPairingTest {
             }
         )
 
+        var syncStartCount = 0
         val vm = createViewModel(
             repo = repo,
+            startFirestoreSyncAction = { syncStartCount++ },
             rollbackCloudSyncAction = { app ->
                 rollbackInvoked = true
                 CloudSyncManager.setCloudSyncEnabled(app, false)
@@ -144,6 +155,8 @@ class AccountabilityViewModelPairingTest {
         var callbackResult: Result<String>? = null
         vm.startTemporaryPairingSession { callbackResult = it }
 
+        assertEquals(1, syncStartCount)
+        assertFalse(vm.uiState.value.isGeneratingPairingCode)
         assertTrue(callbackResult?.isFailure == true)
         assertTrue(rollbackInvoked)
         assertFalse(vm.uiState.value.isTemporaryPairingActive)
@@ -152,6 +165,37 @@ class AccountabilityViewModelPairingTest {
         assertEquals(0L, vm.uiState.value.pairingRemainingMs)
         assertFalse(vm.uiState.value.isCloudSyncEnabled)
         assertFalse(CloudSyncManager.isCloudSyncEnabled(fakeApp))
+    }
+
+    @Test
+    fun startTemporaryPairingSession_setsIsGeneratingImmediately_andRestoresFalseOnCancellation() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<String>()
+        val repo = FakeAccountabilityRepository(
+            context = fakeApp,
+            onGetOrCreateCode = {
+                started.complete(Unit)
+                gate.await()
+            }
+        )
+        val vm = createViewModel(repo = repo).apply {
+            ioDispatcher = Dispatchers.Default
+            mainDispatcher = Dispatchers.Unconfined
+        }
+
+        vm.startTemporaryPairingSession {}
+        assertTrue(vm.uiState.value.isGeneratingPairingCode)
+
+        started.await()
+        assertTrue(vm.uiState.value.isGeneratingPairingCode)
+
+        gate.completeExceptionally(CancellationException("Simulated cancellation"))
+        var attempts = 0
+        while (vm.uiState.value.isGeneratingPairingCode && attempts < 50) {
+            delay(10L)
+            attempts++
+        }
+        assertFalse(vm.uiState.value.isGeneratingPairingCode)
     }
 
     private fun createViewModel(
@@ -281,6 +325,7 @@ class AccountabilityViewModelPairingTest {
             ) { _, method, _ ->
                 if (Flow::class.java.isAssignableFrom(method.returnType)) emptyFlow<Any>()
                 else if (List::class.java.isAssignableFrom(method.returnType)) emptyList<Any>()
+                else if (method.returnType == Int::class.javaPrimitiveType || method.returnType == java.lang.Integer::class.java) 0
                 else null
             } as PartnerDao
         }

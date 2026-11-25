@@ -23,6 +23,7 @@ data class AccountabilityUiState(
     val isTemporaryPairingActive: Boolean = false,
     val pairingExpiresAt: Long = 0L,
     val pairingRemainingMs: Long = 0L,
+    val isGeneratingPairingCode: Boolean = false,
     val isLoading: Boolean = false,
     val errorMessage: String? = null
 )

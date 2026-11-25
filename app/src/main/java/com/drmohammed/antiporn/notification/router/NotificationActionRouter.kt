@@ -85,7 +85,10 @@ object NotificationActionRouter {
                         putExtra(GuardianControlActivity.EXTRA_WARD_ID, payload)
                         try {
                             val partner = com.drmohammed.antiporn.data.local.db.HisnRoomDatabase
-                                .getInstance(context).partnerDao().getPartnerByIdBlocking(payload)
+                                .getInstance(context).partnerDao().getPartnerByIdAndRoleBlocking(
+                                    payload,
+                                    com.drmohammed.antiporn.data.local.db.entity.PartnerEntity.ROLE_WARD
+                                )
                             if (partner != null && partner.displayName.isNotBlank()) {
                                 putExtra(GuardianControlActivity.EXTRA_WARD_NAME, partner.displayName)
                             }

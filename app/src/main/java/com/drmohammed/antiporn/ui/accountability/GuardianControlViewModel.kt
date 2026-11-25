@@ -11,6 +11,7 @@ import com.drmohammed.antiporn.telemetry.AiTelemetryReporter
 import com.drmohammed.antiporn.curfew.CurfewConfig
 import com.drmohammed.antiporn.data.local.db.HisnRoomDatabase
 import com.drmohammed.antiporn.data.local.db.dao.PartnerDao
+import com.drmohammed.antiporn.data.local.db.entity.PartnerEntity
 import com.drmohammed.antiporn.data.repository.AccountabilityRepository
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.data.repository.completeGuardianSideTeardownCleanup
@@ -82,11 +83,11 @@ class GuardianControlViewModel(
 
         loadWardJob = viewModelScope.launch(Dispatchers.IO) {
             try {
-                val partner = partnerDao.getPartnerById(state.wardId)
+                val partner = partnerDao.getPartnerByIdAndRole(state.wardId, PartnerEntity.ROLE_WARD)
                 val resolvedWardId = accountabilityRepository.resolveActivePartnerUid(state.wardId, partner?.pairingCode)
                 val activeWardId = if (resolvedWardId.isNotBlank()) resolvedWardId else state.wardId
                 val activePartner = if (activeWardId != state.wardId) {
-                    partnerDao.getPartnerById(activeWardId) ?: partner
+                    partnerDao.getPartnerByIdAndRole(activeWardId, PartnerEntity.ROLE_WARD) ?: partner
                 } else {
                     partner
                 }
@@ -120,7 +121,7 @@ class GuardianControlViewModel(
                         netEx.code == FirebaseFirestoreException.Code.PERMISSION_DENIED &&
                         FirebaseAuth.getInstance().currentUser != null &&
                         (accountabilityRepository.isPendingGuardianTeardown(activeWardId) ||
-                            partnerDao.getPartnerById(activeWardId) == null)
+                            partnerDao.getPartnerByIdAndRole(activeWardId, PartnerEntity.ROLE_WARD) == null)
                     ) {
                         val cleaned = accountabilityRepository.completeGuardianSideTeardownCleanup(activeWardId, resolvedWardName)
                         _uiState.update { it.copy(isLoading = false) }
@@ -471,7 +472,7 @@ class GuardianControlViewModel(
         if (newName.isBlank() || newName == state.wardName) return
 
         viewModelScope.launch(Dispatchers.IO) {
-            val result = accountabilityRepository.renamePartner(state.wardId, newName)
+            val result = accountabilityRepository.renamePartner(state.wardId, newName, PartnerEntity.ROLE_WARD)
             result.onSuccess {
                 _uiState.update { it.copy(wardName = newName) }
                 _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_name_saved))
@@ -513,7 +514,7 @@ class GuardianControlViewModel(
                             ) {
                                 viewModelScope.launch(Dispatchers.IO) {
                                     val isPendingOrRemoved = accountabilityRepository.isPendingGuardianTeardown(targetWardId) ||
-                                        partnerDao.getPartnerById(targetWardId) == null
+                                        partnerDao.getPartnerByIdAndRole(targetWardId, PartnerEntity.ROLE_WARD) == null
                                     if (isPendingOrRemoved) {
                                         stopPolicyListener()
                                         val cleaned = accountabilityRepository.completeGuardianSideTeardownCleanup(

@@ -14,6 +14,7 @@ import androidx.lifecycle.lifecycleScope
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.data.local.db.HisnRoomDatabase
+import com.drmohammed.antiporn.data.local.db.entity.PartnerEntity
 import com.drmohammed.antiporn.data.repository.AccountabilityRepository
 import com.drmohammed.antiporn.data.repository.GuardianTeardownAlreadyCompletedException
 import com.drmohammed.antiporn.data.repository.cancelGuardianImmediateTeardown
@@ -412,7 +413,7 @@ class GuardianRemoteTeardownUiHelper {
             var completed = false
             try {
                 val partnerDao = HisnRoomDatabase.getInstance(appContext).partnerDao()
-                val partner = partnerDao.getPartnerById(wardId)
+                val partner = partnerDao.getPartnerByIdAndRole(wardId, PartnerEntity.ROLE_WARD)
                 if (partner == null && !accountRepo.isPendingGuardianTeardown(wardId)) {
                     completed = true
                 } else {

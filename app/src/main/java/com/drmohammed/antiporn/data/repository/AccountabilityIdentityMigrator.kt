@@ -21,11 +21,37 @@ import kotlinx.coroutines.withContext
  */
 class AccountabilityIdentityMigrator(
     private val appContext: Context,
-    private val firestore: FirebaseFirestore = FirebaseFirestore.getInstance(),
+    private val firestoreProvider: () -> FirebaseFirestore = { FirebaseFirestore.getInstance() },
     private val partnerDao: PartnerDao = HisnRoomDatabase.getInstance(appContext).partnerDao(),
     private val policyDao: DevicePolicyDao = HisnRoomDatabase.getInstance(appContext).devicePolicyDao(),
-    private val database: HisnRoomDatabase = HisnRoomDatabase.getInstance(appContext)
+    private val databaseProvider: () -> HisnRoomDatabase = { HisnRoomDatabase.getInstance(appContext) }
 ) {
+    constructor(
+        appContext: Context,
+        firestore: FirebaseFirestore,
+        partnerDao: PartnerDao = HisnRoomDatabase.getInstance(appContext).partnerDao(),
+        policyDao: DevicePolicyDao = HisnRoomDatabase.getInstance(appContext).devicePolicyDao(),
+        database: HisnRoomDatabase = HisnRoomDatabase.getInstance(appContext)
+    ) : this(
+        appContext = appContext,
+        firestoreProvider = { firestore },
+        partnerDao = partnerDao,
+        policyDao = policyDao,
+        databaseProvider = { database }
+    )
+
+    private fun safeLog(priority: Int, message: String, throwable: Throwable? = null) {
+        try {
+            when (priority) {
+                Log.DEBUG -> Log.d(TAG, message, throwable)
+                Log.INFO -> Log.i(TAG, message, throwable)
+                Log.WARN -> Log.w(TAG, message, throwable)
+                else -> Log.e(TAG, message, throwable)
+            }
+        } catch (_: Throwable) {
+            // JVM unit test fallback when android.util.Log is not mocked
+        }
+    }
 
     /**
      * Migrates user identity in Firestore from [oldUid] (e.g. anonymous or device fallback)
@@ -40,7 +66,8 @@ class AccountabilityIdentityMigrator(
         val maskedOldUid = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(oldUid)
         val maskedNewUid = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(newUid)
         try {
-            Log.i(TAG, "[UidMigration] Starting identity migration from $maskedOldUid to $maskedNewUid")
+            val firestore = firestoreProvider()
+            safeLog(Log.INFO, "[UidMigration] Starting identity migration from $maskedOldUid to $maskedNewUid")
             com.drmohammed.antiporn.telemetry.BlackBoxRecorder.recordIdentity(
                 appContext,
                 "IDENTITY_MIGRATION_STARTED",
@@ -51,10 +78,10 @@ class AccountabilityIdentityMigrator(
             // 0. Preemptively delete any existing mapping on newUid to ensure no reverse cycle can exist
             try {
                 firestore.collection("uid_mappings").document(newUid).delete().await()
-                Log.i(TAG, "[UidMigration] Cleared any potential reverse mapping for target newUid: $maskedNewUid")
+                safeLog(Log.INFO, "[UidMigration] Cleared any potential reverse mapping for target newUid: $maskedNewUid")
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.w(TAG, "[UidMigration] Non-fatal error clearing /uid_mappings/$maskedNewUid: ${e.message}")
+                safeLog(Log.WARN, "[UidMigration] Non-fatal error clearing /uid_mappings/$maskedNewUid: ${e.message}")
             }
 
             // 1. Write forwarding record to /uid_mappings/$oldUid when authorized (self or token-backed)
@@ -67,16 +94,16 @@ class AccountabilityIdentityMigrator(
                 try {
                     firestore.collection("uid_mappings").document(oldUid)
                         .set(forwardingRecord, SetOptions.merge()).await()
-                    Log.i(TAG, "[UidMigration] Forwarding mapping created: $maskedOldUid -> $maskedNewUid")
+                    safeLog(Log.INFO, "[UidMigration] Forwarding mapping created: $maskedOldUid -> $maskedNewUid")
                     try {
                         firestore.collection("uid_migration_tokens").document(oldUid).delete().await()
                     } catch (cleanupEx: Exception) {
                         if (cleanupEx is kotlinx.coroutines.CancellationException) throw cleanupEx
-                        Log.w(TAG, "[UidMigration] Non-fatal cleanup error for migration token: ${cleanupEx.message}")
+                        safeLog(Log.WARN, "[UidMigration] Non-fatal cleanup error for migration token: ${cleanupEx.message}")
                     }
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
-                    Log.w(TAG, "[UidMigration] Failed writing /uid_mappings/$maskedOldUid: ${e.message}")
+                    safeLog(Log.WARN, "[UidMigration] Failed writing /uid_mappings/$maskedOldUid: ${e.message}")
                 }
             }
 
@@ -93,16 +120,17 @@ class AccountabilityIdentityMigrator(
                         if (shouldCopy) {
                             firestore.collection("policies").document(newUid)
                                 .set(oldPolicyData, SetOptions.merge()).await()
-                            Log.i(TAG, "[UidMigration] Policy migrated successfully from $maskedOldUid to $maskedNewUid")
+                            safeLog(Log.INFO, "[UidMigration] Policy migrated successfully from $maskedOldUid to $maskedNewUid")
                         }
                     }
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.w(TAG, "[UidMigration] Policy copy error: ${e.message}")
+                safeLog(Log.WARN, "[UidMigration] Policy copy error: ${e.message}")
             }
 
             // 3. Migrate partners subcollection
+            val candidateWardUids = linkedSetOf<String>()
             try {
                 val partnersSnapshot = firestore.collection("users").document(oldUid)
                     .collection("partners").get().await()
@@ -112,31 +140,37 @@ class AccountabilityIdentityMigrator(
                     firestore.collection("users").document(newUid)
                         .collection("partners").document(doc.id)
                         .set(data, SetOptions.merge()).await()
+                    val role = doc.getString("role")
+                    val partnerUid = doc.getString("partnerUid")?.takeIf { it.isNotBlank() } ?: doc.id
+                    if (role != PartnerEntity.ROLE_GUARDIAN && !doc.id.endsWith("_GUARDIAN")) {
+                        candidateWardUids.add(partnerUid)
+                    }
                 }
-                Log.i(TAG, "[UidMigration] Migrated ${partnersSnapshot.size()} partner documents to $maskedNewUid")
+                safeLog(Log.INFO, "[UidMigration] Migrated ${partnersSnapshot.size()} partner documents to $maskedNewUid")
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.w(TAG, "[UidMigration] Partners copy error: ${e.message}")
+                safeLog(Log.WARN, "[UidMigration] Partners copy error: ${e.message}")
             }
 
             // 4. Update foreign partner references where oldUid was a guardian or ward
             try {
-                // If oldUid was protecting someone, update the ward's /policies doc
-                val wardsSnapshot = firestore.collection("policies")
-                    .whereEqualTo("guardianUid", oldUid).get().await()
-                for (doc in wardsSnapshot.documents) {
-                    doc.reference.update(
+                partnerDao.getPartnersByRoleBlocking(PartnerEntity.ROLE_WARD).forEach { candidateWardUids.add(it.id) }
+                for (wardUid in candidateWardUids) {
+                    val policyRef = firestore.collection("policies").document(wardUid)
+                    val doc = policyRef.get().await()
+                    if (!doc.exists() || doc.getString("guardianUid") != oldUid) continue
+                    policyRef.update(
                         mapOf(
                             "guardianUid" to newUid,
                             "updatedAt" to TrustedTimeProvider.currentTimeMillis(appContext)
                         )
                     ).await()
-                    val maskedWardDoc = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(doc.id)
-                    Log.i(TAG, "[UidMigration] Updated ward $maskedWardDoc guardianUid from $maskedOldUid to $maskedNewUid")
+                    val maskedWardDoc = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(wardUid)
+                    safeLog(Log.INFO, "[UidMigration] Updated ward $maskedWardDoc guardianUid from $maskedOldUid to $maskedNewUid")
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.w(TAG, "[UidMigration] Foreign reference update error: ${e.message}")
+                safeLog(Log.WARN, "[UidMigration] Foreign reference update error: ${e.message}")
             }
 
             com.drmohammed.antiporn.telemetry.BlackBoxRecorder.recordIdentity(
@@ -147,7 +181,7 @@ class AccountabilityIdentityMigrator(
             )
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            Log.e(TAG, "[UidMigration] Error executing user identity migration", e)
+            safeLog(Log.ERROR, "[UidMigration] Error executing user identity migration", e)
             com.drmohammed.antiporn.telemetry.BlackBoxRecorder.recordIdentity(
                 appContext,
                 "IDENTITY_MIGRATION_FAILED",
@@ -165,6 +199,7 @@ class AccountabilityIdentityMigrator(
     suspend fun resolveActivePartnerUid(partnerUid: String, pairingCode: String? = null): String = withContext(Dispatchers.IO) {
         if (partnerUid.isBlank()) return@withContext partnerUid
         try {
+            val firestore = firestoreProvider()
             var currentCandidate = partnerUid
             val visited = mutableSetOf(partnerUid)
             var hops = 0
@@ -177,7 +212,7 @@ class AccountabilityIdentityMigrator(
                             if (visited.contains(activeUid)) {
                                 val maskedCurrent = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(currentCandidate)
                                 val maskedActive = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(activeUid)
-                                Log.w(TAG, "[UidMigration] Circular mapping cycle detected between $maskedCurrent and $maskedActive! Breaking cycle safely.")
+                                safeLog(Log.WARN, "[UidMigration] Circular mapping cycle detected between $maskedCurrent and $maskedActive! Breaking cycle safely.")
                                 com.drmohammed.antiporn.telemetry.BlackBoxRecorder.recordCloudSync(
                                     appContext,
                                     "UID_MAPPING_CYCLE_DETECTED",
@@ -197,7 +232,7 @@ class AccountabilityIdentityMigrator(
                     }
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
-                    Log.w(TAG, "[UidMigration] Failed checking /uid_mappings/${com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(currentCandidate)}: ${e.message}")
+                    safeLog(Log.WARN, "[UidMigration] Failed checking /uid_mappings/${com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(currentCandidate)}: ${e.message}")
                 }
                 break
             }
@@ -209,10 +244,10 @@ class AccountabilityIdentityMigrator(
                 val maskedPartner = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(partnerUid)
                 val maskedResolved = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(resolvedUid)
                 if (resolvedUid.startsWith("dev_") && !partnerUid.startsWith("dev_")) {
-                    Log.w(TAG, "[UidMigration] Refusing to downgrade authenticated UID $maskedPartner to legacy $maskedResolved")
+                    safeLog(Log.WARN, "[UidMigration] Refusing to downgrade authenticated UID $maskedPartner to legacy $maskedResolved")
                     return@withContext partnerUid
                 }
-                Log.i(TAG, "[UidMigration] Partner UID resolved from $maskedPartner to $maskedResolved (hops: $hops)")
+                safeLog(Log.INFO, "[UidMigration] Partner UID resolved from $maskedPartner to $maskedResolved (hops: $hops)")
                 com.drmohammed.antiporn.telemetry.BlackBoxRecorder.recordCloudSync(
                     appContext,
                     "PARTNER_UID_RESOLVED",
@@ -225,12 +260,12 @@ class AccountabilityIdentityMigrator(
                     isSuccess = true,
                     details = "from=$maskedPartner, to=$maskedResolved"
                 )
-                database.withTransaction {
-                    val localPartner = partnerDao.getPartnerById(partnerUid)
-                    if (localPartner != null) {
+                databaseProvider().withTransaction {
+                    val localPartners = partnerDao.getPartnersById(partnerUid)
+                    for (localPartner in localPartners) {
                         val updatedPartner = localPartner.copy(id = resolvedUid)
                         partnerDao.savePartner(updatedPartner)
-                        partnerDao.deletePartner(partnerUid)
+                        partnerDao.deletePartnerByIdAndRole(partnerUid, localPartner.role)
 
                         // If this partner is the active guardian, keep local device policy in sync
                         if (localPartner.role == PartnerEntity.ROLE_GUARDIAN) {
@@ -246,7 +281,7 @@ class AccountabilityIdentityMigrator(
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            Log.w(TAG, "[UidMigration] Error resolving active partner UID for ${com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(partnerUid)}: ${e.message}")
+            safeLog(Log.WARN, "[UidMigration] Error resolving active partner UID for ${com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(partnerUid)}: ${e.message}")
         }
         partnerUid
     }

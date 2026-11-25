@@ -135,7 +135,7 @@ class GuardianApprovalsHubActivity : AppCompatActivity() {
             // If a specific targetWardId was passed from a notification, ensure it is included
             targetWardId?.let { twId ->
                 if (twId.isNotBlank() && localWards.none { it.id == twId }) {
-                    val specificPartner = partnerDao.getPartnerById(twId)
+                    val specificPartner = partnerDao.getPartnerByIdAndRole(twId, PartnerEntity.ROLE_WARD)
                     if (specificPartner != null) {
                         localWards.add(specificPartner)
                     } else {

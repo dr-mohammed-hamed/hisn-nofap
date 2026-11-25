@@ -12,6 +12,7 @@ import com.drmohammed.antiporn.data.local.db.dao.PartnerDao
 import com.drmohammed.antiporn.data.repository.PolicyCloudSyncBridge
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.data.repository.RemoteTeardownHandler
+import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -33,6 +34,7 @@ class DeviceOwnerTeardownHardeningTest {
 
     @After
     fun tearDown() {
+        BlackBoxRecorder.awaitPendingWritesBlocking()
         ProtectionTransitionGuard.isTeardownInProgress = false
     }
 

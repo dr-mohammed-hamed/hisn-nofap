@@ -195,14 +195,16 @@ class WebFilterViewModelTest {
         override fun getPartnersByRoleFlow(role: String): Flow<List<PartnerEntity>> = MutableStateFlow(emptyList())
         override suspend fun getPartnersByRole(role: String): List<PartnerEntity> = emptyList()
         override fun getPartnersByRoleBlocking(role: String): List<PartnerEntity> = emptyList()
-        override suspend fun getPartnerById(id: String): PartnerEntity? = null
-        override fun getPartnerByIdBlocking(id: String): PartnerEntity? = null
+        override suspend fun getPartnersById(id: String): List<PartnerEntity> = emptyList()
+        override fun getPartnersByIdBlocking(id: String): List<PartnerEntity> = emptyList()
+        override suspend fun getPartnerByIdAndRole(id: String, role: String): PartnerEntity? = null
+        override fun getPartnerByIdAndRoleBlocking(id: String, role: String): PartnerEntity? = null
         override suspend fun savePartner(partner: PartnerEntity) {}
         override fun savePartnerBlocking(partner: PartnerEntity) {}
-        override suspend fun deletePartner(id: String): Int = 0
-        override fun deletePartnerBlocking(id: String): Int = 0
-        override suspend fun updatePartnerDisplayName(id: String, newName: String, syncTimestamp: Long): Int = 0
-        override fun updatePartnerDisplayNameBlocking(id: String, newName: String, syncTimestamp: Long): Int = 0
+        override suspend fun deletePartnerByIdAndRole(id: String, role: String): Int = 0
+        override fun deletePartnerByIdAndRoleBlocking(id: String, role: String): Int = 0
+        override suspend fun updatePartnerDisplayNameByRole(id: String, role: String, newName: String, syncTimestamp: Long): Int = 0
+        override fun updatePartnerDisplayNameByRoleBlocking(id: String, role: String, newName: String, syncTimestamp: Long): Int = 0
     }
 
     private class FakeApplication : Application() {

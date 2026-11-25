@@ -98,7 +98,8 @@ service cloud.firestore {
 
     // 2. Policies: Unified protection policies with strict single-guardian lock, heartbeat & 24h emergency breakout
     match /policies/{wardUid} {
-      allow read: if isOwner(wardUid) || isGuardianOf(wardUid);
+      allow get: if isOwner(wardUid) || isGuardianOf(wardUid);
+      allow list: if request.auth != null && resource.data.guardianUid == request.auth.uid;
       allow create: if isOwner(wardUid);
       allow update: if request.auth != null && (
         // Case 1: Guardian updates or revokes
