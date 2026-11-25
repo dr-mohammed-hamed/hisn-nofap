@@ -3,7 +3,6 @@ package com.drmohammed.antiporn.provisioning.engine
 import android.content.ComponentName
 import android.content.Context
 import android.os.SystemClock
-import androidx.annotation.VisibleForTesting
 import com.drmohammed.antiporn.AdminReceiver
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
@@ -45,7 +44,6 @@ object DeviceOwnerPromoter {
     val isPromotionActive: Boolean
         get() = promotionMutex.isLocked
 
-    @VisibleForTesting
     internal fun sanitizeDnsHostForAdb(rawHost: String?): String {
         val candidate = rawHost?.trim().orEmpty()
         if (candidate.isBlank() ||
@@ -75,57 +73,32 @@ object DeviceOwnerPromoter {
         pairingCode: String
     ): PromotionResult = withContext(Dispatchers.IO) {
         val appContext = context.applicationContext ?: context
-        if (!promotionMutex.tryLock()) {
-            return@withContext PromotionResult.Failure(
-                localizedString(appContext, R.string.provisioning_error_already_in_progress)
-                    ?: "Promotion already in progress."
-            )
-        }
-        val startTime = SystemClock.elapsedRealtime()
-        try {
-            if (OemProvisioningHelper.requiresPreActivationDangerAck(appContext) && !ProvisioningAckStore.hasValidAck(appContext)) {
-                val err = appContext.getString(R.string.provisioning_error_ack_required)
-                Timber.tag(TAG).e("Promotion blocked by defense-in-depth: Danger acknowledgment required but missing or expired")
-                BlackBoxRecorder.recordPairing(appContext, "PROMOTION_BLOCKED_NO_ACK", isSuccess = false, error = err)
-                return@withContext PromotionResult.Failure(err)
+        runWithPromotionLockAndTimeout(
+            appContext = appContext,
+            timeoutMs = 30_000L,
+            checkDangerAck = true,
+            operationName = "pairAndPromote",
+            exceptionEventName = "PAIR_AND_PROMOTE_EXCEPTION"
+        ) { startTime ->
+            val keyFile = File(appContext.filesDir, "antiporn_adb.key")
+            val keyProvider = FileKeyProvider(keyFile)
+
+            BlackBoxRecorder.recordPairing(appContext, "PAIR_TLS_START", isSuccess = true, details = "pairingPort=$pairingPort")
+            Timber.tag(TAG).i("Pairing via SPAKE2 TLS to $LOCALHOST:$pairingPort with code length ${pairingCode.length}...")
+            AdbClient.pairTls(LOCALHOST, pairingPort, pairingCode.trim(), keyProvider)
+
+            val pairDuration = SystemClock.elapsedRealtime() - startTime
+            Timber.tag(TAG).i("Pairing handshake successful in ${pairDuration}ms! Waiting 500ms for adbd key persistence...")
+            BlackBoxRecorder.recordPairing(appContext, "PAIR_TLS_SUCCESS", isSuccess = true, executionTimeMs = pairDuration)
+            delay(500)
+
+            val adminComponent = ComponentName(appContext, AdminReceiver::class.java).flattenToShortString()
+            val finalResult = connectWithRetry(appContext, connectPort, keyProvider) { client ->
+                AdbPromotionExecutor.executeZeroAccountPromotion(appContext, client, adminComponent, 0)
             }
-            withTimeout(30_000L) {
-                val keyFile = File(appContext.filesDir, "antiporn_adb.key")
-                val keyProvider = FileKeyProvider(keyFile)
 
-                BlackBoxRecorder.recordPairing(appContext, "PAIR_TLS_START", isSuccess = true, details = "pairingPort=$pairingPort")
-                Timber.tag(TAG).i("Pairing via SPAKE2 TLS to $LOCALHOST:$pairingPort with code length ${pairingCode.length}...")
-                AdbClient.pairTls(LOCALHOST, pairingPort, pairingCode.trim(), keyProvider)
-
-                val pairDuration = SystemClock.elapsedRealtime() - startTime
-                Timber.tag(TAG).i("Pairing handshake successful in ${pairDuration}ms! Waiting 500ms for adbd key persistence...")
-                BlackBoxRecorder.recordPairing(appContext, "PAIR_TLS_SUCCESS", isSuccess = true, executionTimeMs = pairDuration)
-                delay(500)
-
-                val adminComponent = ComponentName(appContext, AdminReceiver::class.java).flattenToShortString()
-                val finalResult = connectWithRetry(appContext, connectPort, keyProvider) { client ->
-                    AdbPromotionExecutor.executeZeroAccountPromotion(appContext, client, adminComponent, 0)
-                }
-
-                recordPromotionOutcome(appContext, finalResult, SystemClock.elapsedRealtime() - startTime, afterCleanup = false)
-                finalResult
-            }
-        } catch (te: TimeoutCancellationException) {
-            val totalDuration = SystemClock.elapsedRealtime() - startTime
-            val errorMsg = localizedString(appContext, R.string.provisioning_error_timeout_seconds, 30)
-                ?: "Promotion timed out after 30 seconds"
-            Timber.tag(TAG).e(te, errorMsg)
-            BlackBoxRecorder.recordPairing(appContext, "PROMOTION_TIMEOUT", isSuccess = false, executionTimeMs = totalDuration, error = errorMsg)
-            PromotionResult.Failure(errorMsg, te)
-        } catch (t: Throwable) {
-            if (t is CancellationException) throw t
-            Timber.tag(TAG).e(t, "Failed during pairAndPromote")
-            val fallback = localizedString(appContext, R.string.provisioning_error_unknown) ?: "Unknown error"
-            val errorMsg = "${t.javaClass.simpleName}: ${t.message ?: fallback}"
-            BlackBoxRecorder.recordPairing(appContext, "PAIR_AND_PROMOTE_EXCEPTION", isSuccess = false, error = errorMsg)
-            PromotionResult.Failure(errorMsg, t)
-        } finally {
-            promotionMutex.unlock()
+            recordPromotionOutcome(appContext, finalResult, SystemClock.elapsedRealtime() - startTime, afterCleanup = false)
+            finalResult
         }
     }
 
@@ -134,53 +107,28 @@ object DeviceOwnerPromoter {
         connectPort: Int
     ): PromotionResult = withContext(Dispatchers.IO) {
         val appContext = context.applicationContext ?: context
-        if (!promotionMutex.tryLock()) {
-            return@withContext PromotionResult.Failure(
-                localizedString(appContext, R.string.provisioning_error_already_in_progress)
-                    ?: "Promotion already in progress."
-            )
-        }
-        val startTime = SystemClock.elapsedRealtime()
-        try {
-            if (OemProvisioningHelper.requiresPreActivationDangerAck(appContext) && !ProvisioningAckStore.hasValidAck(appContext)) {
-                val err = appContext.getString(R.string.provisioning_error_ack_required)
-                Timber.tag(TAG).e("Promotion blocked by defense-in-depth: Danger acknowledgment required but missing or expired")
-                BlackBoxRecorder.recordPairing(appContext, "PROMOTION_BLOCKED_NO_ACK", isSuccess = false, error = err)
-                return@withContext PromotionResult.Failure(err)
+        runWithPromotionLockAndTimeout(
+            appContext = appContext,
+            timeoutMs = 30_000L,
+            checkDangerAck = true,
+            operationName = "promoteIfAlreadyPaired",
+            exceptionEventName = "PAIR_AND_PROMOTE_EXCEPTION"
+        ) { startTime ->
+            val keyFile = File(appContext.filesDir, "antiporn_adb.key")
+            if (!keyFile.exists()) {
+                return@runWithPromotionLockAndTimeout PromotionResult.Failure(
+                    localizedString(appContext, R.string.provisioning_error_not_paired)
+                        ?: "Device has not been paired yet."
+                )
             }
-            withTimeout(30_000L) {
-                val keyFile = File(appContext.filesDir, "antiporn_adb.key")
-                if (!keyFile.exists()) {
-                    return@withTimeout PromotionResult.Failure(
-                        localizedString(appContext, R.string.provisioning_error_not_paired)
-                            ?: "Device has not been paired yet."
-                    )
-                }
-                val keyProvider = FileKeyProvider(keyFile)
-                val adminComponent = ComponentName(appContext, AdminReceiver::class.java).flattenToShortString()
+            val keyProvider = FileKeyProvider(keyFile)
+            val adminComponent = ComponentName(appContext, AdminReceiver::class.java).flattenToShortString()
 
-                val finalResult = connectWithRetry(appContext, connectPort, keyProvider) { client ->
-                    AdbPromotionExecutor.executeZeroAccountPromotion(appContext, client, adminComponent, 0)
-                }
-                recordPromotionOutcome(appContext, finalResult, SystemClock.elapsedRealtime() - startTime, afterCleanup = false)
-                finalResult
+            val finalResult = connectWithRetry(appContext, connectPort, keyProvider) { client ->
+                AdbPromotionExecutor.executeZeroAccountPromotion(appContext, client, adminComponent, 0)
             }
-        } catch (te: TimeoutCancellationException) {
-            val totalDuration = SystemClock.elapsedRealtime() - startTime
-            val errorMsg = localizedString(appContext, R.string.provisioning_error_timeout_seconds, 30)
-                ?: "Promotion timed out after 30 seconds"
-            Timber.tag(TAG).e(te, errorMsg)
-            BlackBoxRecorder.recordPairing(appContext, "PROMOTION_TIMEOUT", isSuccess = false, executionTimeMs = totalDuration, error = errorMsg)
-            PromotionResult.Failure(errorMsg, te)
-        } catch (t: Throwable) {
-            if (t is CancellationException) throw t
-            Timber.tag(TAG).e(t, "Failed during promoteIfAlreadyPaired")
-            val fallback = localizedString(appContext, R.string.provisioning_error_unknown) ?: "Unknown error"
-            val errorMsg = "${t.javaClass.simpleName}: ${t.message ?: fallback}"
-            BlackBoxRecorder.recordPairing(appContext, "PAIR_AND_PROMOTE_EXCEPTION", isSuccess = false, error = errorMsg)
-            PromotionResult.Failure(errorMsg, t)
-        } finally {
-            promotionMutex.unlock()
+            recordPromotionOutcome(appContext, finalResult, SystemClock.elapsedRealtime() - startTime, afterCleanup = false)
+            finalResult
         }
     }
 
@@ -201,59 +149,88 @@ object DeviceOwnerPromoter {
                 ?: "Explicit user consent for valid secondary user IDs is required."
             return@withContext PromotionResult.Failure(err)
         }
+        runWithPromotionLockAndTimeout(
+            appContext = appContext,
+            timeoutMs = 45_000L,
+            checkDangerAck = false,
+            operationName = "removeSecondaryUsersAndPromote",
+            exceptionEventName = "REMOVE_USERS_AND_PROMOTE_EXCEPTION"
+        ) { startTime ->
+            val keyFile = File(appContext.filesDir, "antiporn_adb.key")
+            if (!keyFile.exists()) {
+                return@runWithPromotionLockAndTimeout PromotionResult.Failure(
+                    localizedString(appContext, R.string.provisioning_error_adb_not_paired)
+                        ?: "Wireless pairing session expired."
+                )
+            }
+            val keyProvider = FileKeyProvider(keyFile)
+            val adminComponent = ComponentName(appContext, AdminReceiver::class.java).flattenToShortString()
+
+            val finalResult = connectWithRetry(appContext, connectPort, keyProvider) { client ->
+                val outcome = AdbSecondaryUserInspector.removeApprovedUsers(appContext, client, approvedUserIds)
+                if (outcome.failedIds.isNotEmpty()) {
+                    return@connectWithRetry PromotionResult.Failure(
+                        localizedString(
+                            appContext,
+                            R.string.provisioning_error_remove_secondary_user_failed,
+                            outcome.failedIds.joinToString(", ")
+                        ) ?: "Could not remove user/profile (${outcome.failedIds.joinToString(", ")})"
+                    )
+                }
+                if (outcome.remainingUsers.isNotEmpty()) {
+                    return@connectWithRetry PromotionResult.SecondaryUsersBlocking(outcome.remainingUsers)
+                }
+                delay(400L)
+                AdbPromotionExecutor.executeZeroAccountPromotion(appContext, client, adminComponent, 0)
+            }
+
+            recordPromotionOutcome(appContext, finalResult, SystemClock.elapsedRealtime() - startTime, afterCleanup = true)
+            finalResult
+        }
+    }
+
+    private suspend fun runWithPromotionLockAndTimeout(
+        appContext: Context,
+        timeoutMs: Long,
+        checkDangerAck: Boolean,
+        operationName: String,
+        exceptionEventName: String,
+        block: suspend (startTime: Long) -> PromotionResult
+    ): PromotionResult {
         if (!promotionMutex.tryLock()) {
-            return@withContext PromotionResult.Failure(
+            return PromotionResult.Failure(
                 localizedString(appContext, R.string.provisioning_error_already_in_progress)
                     ?: "Promotion already in progress."
             )
         }
         val startTime = SystemClock.elapsedRealtime()
-        try {
-            withTimeout(45_000L) {
-                val keyFile = File(appContext.filesDir, "antiporn_adb.key")
-                if (!keyFile.exists()) {
-                    return@withTimeout PromotionResult.Failure(
-                        localizedString(appContext, R.string.provisioning_error_adb_not_paired)
-                            ?: "Wireless pairing session expired."
-                    )
-                }
-                val keyProvider = FileKeyProvider(keyFile)
-                val adminComponent = ComponentName(appContext, AdminReceiver::class.java).flattenToShortString()
-
-                val finalResult = connectWithRetry(appContext, connectPort, keyProvider) { client ->
-                    val outcome = AdbSecondaryUserInspector.removeApprovedUsers(appContext, client, approvedUserIds)
-                    if (outcome.failedIds.isNotEmpty()) {
-                        return@connectWithRetry PromotionResult.Failure(
-                            localizedString(
-                                appContext,
-                                R.string.provisioning_error_remove_secondary_user_failed,
-                                outcome.failedIds.joinToString(", ")
-                            ) ?: "Could not remove user/profile (${outcome.failedIds.joinToString(", ")})"
-                        )
-                    }
-                    if (outcome.remainingUsers.isNotEmpty()) {
-                        return@connectWithRetry PromotionResult.SecondaryUsersBlocking(outcome.remainingUsers)
-                    }
-                    delay(400L)
-                    AdbPromotionExecutor.executeZeroAccountPromotion(appContext, client, adminComponent, 0)
-                }
-
-                recordPromotionOutcome(appContext, finalResult, SystemClock.elapsedRealtime() - startTime, afterCleanup = true)
-                finalResult
+        return try {
+            if (checkDangerAck &&
+                OemProvisioningHelper.requiresPreActivationDangerAck(appContext) &&
+                !ProvisioningAckStore.hasValidAck(appContext)
+            ) {
+                val err = appContext.getString(R.string.provisioning_error_ack_required)
+                Timber.tag(TAG).e("Promotion blocked by defense-in-depth: Danger acknowledgment required but missing or expired")
+                BlackBoxRecorder.recordPairing(appContext, "PROMOTION_BLOCKED_NO_ACK", isSuccess = false, error = err)
+                return PromotionResult.Failure(err)
+            }
+            withTimeout(timeoutMs) {
+                block(startTime)
             }
         } catch (te: TimeoutCancellationException) {
             val totalDuration = SystemClock.elapsedRealtime() - startTime
-            val errorMsg = localizedString(appContext, R.string.provisioning_error_timeout_seconds, 45)
-                ?: "Promotion timed out after 45 seconds"
-            Timber.tag(TAG).e(te, errorMsg)
+            val timeoutSeconds = (timeoutMs / 1000L).toInt()
+            val errorMsg = localizedString(appContext, R.string.provisioning_error_timeout_seconds, timeoutSeconds)
+                ?: "Promotion timed out after $timeoutSeconds seconds"
+            Timber.tag(TAG).e(te, "%s", errorMsg)
             BlackBoxRecorder.recordPairing(appContext, "PROMOTION_TIMEOUT", isSuccess = false, executionTimeMs = totalDuration, error = errorMsg)
             PromotionResult.Failure(errorMsg, te)
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
-            Timber.tag(TAG).e(t, "Failed during removeSecondaryUsersAndPromote")
+            Timber.tag(TAG).e(t, "Failed during $operationName")
             val fallback = localizedString(appContext, R.string.provisioning_error_unknown) ?: "Unknown error"
             val errorMsg = "${t.javaClass.simpleName}: ${t.message ?: fallback}"
-            BlackBoxRecorder.recordPairing(appContext, "REMOVE_USERS_AND_PROMOTE_EXCEPTION", isSuccess = false, error = errorMsg)
+            BlackBoxRecorder.recordPairing(appContext, exceptionEventName, isSuccess = false, error = errorMsg)
             PromotionResult.Failure(errorMsg, t)
         } finally {
             promotionMutex.unlock()
@@ -266,10 +243,8 @@ object DeviceOwnerPromoter {
         keyProvider: FileKeyProvider,
         block: suspend (AdbClient) -> PromotionResult
     ): PromotionResult {
-        var effectiveConnectPort = connectPort
-        if (effectiveConnectPort <= 0) {
-            effectiveConnectPort = AdbPairingNotificationService.capturedConnectPort
-        }
+        var effectiveConnectPort = connectPort.takeIf { it > 0 }
+            ?: AdbPairingNotificationService.capturedConnectPort
         if (effectiveConnectPort <= 0) {
             Timber.tag(TAG).i("Connect port is 0, polling up to 8s for mDNS resolution...")
             val pollStart = SystemClock.elapsedRealtime()
@@ -295,25 +270,30 @@ object DeviceOwnerPromoter {
 
         var lastException: Throwable? = null
         var result: PromotionResult? = null
+        var isRetry = false
 
         hostLoop@ for (host in targetHosts) {
             for (attempt in 1..2) {
+                if (isRetry) {
+                    effectiveConnectPort = AdbPairingNotificationService.capturedConnectPort
+                        .takeIf { it > 0 } ?: effectiveConnectPort
+                }
                 try {
                     Timber.tag(TAG).i("Connecting to $host:$effectiveConnectPort (attempt $attempt)...")
                     AdbClient.connectTls(host, effectiveConnectPort, keyProvider).use { client ->
                         result = block(client)
                     }
-                    // Break immediately once block(client) returns any deterministic PromotionResult
-                    if (result != null) {
-                        break@hostLoop
-                    }
+                    if (result != null) break@hostLoop
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (ise: IllegalStateException) {
+                    Timber.tag(TAG).e(ise, "Deterministic pre-flight error on $host:$effectiveConnectPort; aborting retries")
+                    throw ise
                 } catch (t: Throwable) {
-                    if (t is CancellationException) throw t
                     lastException = t
-                    Timber.tag(TAG).w("Connect attempt $attempt to $host failed: ${t.message}")
-                    if (attempt < 2) {
-                        delay(500)
-                    }
+                    isRetry = true
+                    Timber.tag(TAG).w("Connect attempt $attempt to $host:$effectiveConnectPort failed: ${t.message}")
+                    if (attempt < 2) delay(500)
                 }
             }
         }

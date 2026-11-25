@@ -3,12 +3,15 @@ package com.drmohammed.antiporn.provisioning.engine
 import android.accounts.AccountManager
 import android.content.Context
 import android.os.Build
+import android.provider.Settings
+import androidx.annotation.VisibleForTesting
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.shields.DnsShield
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import io.github.rhythmcache.adb.AdbClient
+import io.github.rhythmcache.adb.ShellResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -22,6 +25,24 @@ import timber.log.Timber
 internal object AdbPromotionExecutor {
 
     private const val TAG = "AntiPorn_PromoterExec"
+    private val PACKAGE_NAME_REGEX = Regex("^[a-zA-Z0-9_]+(\\.[a-zA-Z0-9_]+)+$")
+
+    private fun ShellResult.combinedOutput(): String = (stdoutText + "\n" + stderrText).trim()
+
+    @VisibleForTesting
+    internal fun filterSafePackagesForFreeze(packages: Collection<String>): List<String> {
+        val distinct = packages.distinct()
+        val valid = distinct.filter { PACKAGE_NAME_REGEX.matches(it) }
+        if (valid.size < distinct.size) {
+            Timber.tag(TAG).w("Filtered invalid package name(s) before shell interpolation: ${distinct - valid.toSet()}")
+        }
+        return valid
+    }
+
+    private fun isDpmOwnerSetSuccess(output: String): Boolean =
+        (output.contains("Success", ignoreCase = true) || output.contains("device owner set", ignoreCase = true)) &&
+            !output.contains("error", ignoreCase = true) &&
+            !output.contains("exception", ignoreCase = true)
 
     suspend fun executeZeroAccountPromotion(
         context: Context,
@@ -39,41 +60,30 @@ internal object AdbPromotionExecutor {
         grantPrivilegedAppOpsAndPermissions(appContext, client)
         provisionPrivateDnsViaAdb(appContext, client)
 
-        val sdkVerStr = client.shell("getprop ro.build.version.sdk").stdoutText.trim()
-        val sdkVersion = sdkVerStr.toIntOrNull() ?: Build.VERSION.SDK_INT
+        val sdkVersion = client.shell("getprop ro.build.version.sdk").stdoutText.trim().toIntOrNull() ?: Build.VERSION.SDK_INT
         Timber.tag(TAG).i("Executing zero-account promotion on Android SDK $sdkVersion for user $userId")
 
         val result = if (sdkVersion >= 31) {
-            when (val primaryResult = executeSetupBypassPromotion(appContext, client, adminComponent, userId)) {
-                is PromotionResult.Success -> {
-                    disableWirelessAdbSilently(client)
-                    primaryResult
-                }
-                is PromotionResult.SecondaryUsersBlocking -> primaryResult
+            when (val primary = executeSetupBypassPromotion(appContext, client, adminComponent, userId)) {
                 is PromotionResult.Failure -> {
-                    Timber.tag(TAG).w("Setup bypass failed: ${primaryResult.message}. Attempting fallback to package freeze...")
-                    val fallbackResult = executePackageFreezePromotion(appContext, client, adminComponent, userId)
-                    if (fallbackResult is PromotionResult.Success) {
-                        disableWirelessAdbSilently(client)
-                    }
-                    fallbackResult
+                    Timber.tag(TAG).w("Setup bypass failed: ${primary.message}. Attempting fallback to package freeze...")
+                    executePackageFreezePromotion(appContext, client, adminComponent, userId)
                 }
+                else -> primary
             }
         } else {
-            val legacyResult = executePackageFreezePromotion(appContext, client, adminComponent, userId)
-            if (legacyResult is PromotionResult.Success) {
-                disableWirelessAdbSilently(client)
-            }
-            legacyResult
+            executePackageFreezePromotion(appContext, client, adminComponent, userId)
         }
 
+        if (result is PromotionResult.Success) {
+            disableWirelessAdbSilently(client)
+            return result
+        }
         if (result is PromotionResult.Failure) {
             val lowerMsg = result.message.lowercase()
             val secFolderLocalized = appContext.getString(R.string.provisioning_error_samsung_secure_folder)
             if (result.message == secFolderLocalized ||
-                lowerMsg.contains("already several users") ||
-                lowerMsg.contains("user 150") ||
-                lowerMsg.contains("user 95")
+                lowerMsg.contains("already several users") || lowerMsg.contains("user 150") || lowerMsg.contains("user 95")
             ) {
                 val rechecked = AdbSecondaryUserInspector.inspectBlockingUsers(appContext, client)
                 if (rechecked.isNotEmpty()) {
@@ -82,85 +92,63 @@ internal object AdbPromotionExecutor {
                 }
             }
         }
-
         return result
+    }
+
+    private fun recordSecureSettingsGrantFailure(appContext: Context, rawDetail: String, cause: Throwable? = null) {
+        val oemHint = if (OemProvisioningHelper.isRealmeOrOppo()) "Disable permission monitoring required on OPPO/Realme" else null
+        val details = listOfNotNull(oemHint, rawDetail.takeIf { it.isNotBlank() }).joinToString(" | ")
+        if (cause != null) {
+            Timber.tag(TAG).w(cause, "Failed granting WRITE_SECURE_SETTINGS permission via ADB: $details")
+        } else {
+            Timber.tag(TAG).w("WRITE_SECURE_SETTINGS grant via ADB did not take effect: $details")
+        }
+        BlackBoxRecorder.recordPairing(appContext, "ADB_WRITE_SECURE_SETTINGS_GRANT", isSuccess = false, error = details)
     }
 
     private suspend fun grantPrivilegedAppOpsAndPermissions(appContext: Context, client: AdbClient) {
         try {
             val grantRes = client.shell("pm grant ${appContext.packageName} android.permission.WRITE_SECURE_SETTINGS")
-            val rawGrantOutput = (grantRes.stdoutText + "\n" + grantRes.stderrText).trim()
-            val sanitizedGrantOutput = sanitizeShellOutput(rawGrantOutput)
-            val granted = AccessibilitySelfActivator.canWriteSecureSettings(appContext)
-            if (granted) {
+            val sanitizedOutput = sanitizeShellOutput(grantRes.combinedOutput())
+            if (AccessibilitySelfActivator.canWriteSecureSettings(appContext)) {
                 Timber.tag(TAG).i("Verified WRITE_SECURE_SETTINGS granted via ADB")
-                BlackBoxRecorder.recordPairing(
-                    appContext,
-                    "ADB_WRITE_SECURE_SETTINGS_GRANT",
-                    isSuccess = true,
-                    details = sanitizedGrantOutput.ifBlank { "granted=true" }
-                )
+                BlackBoxRecorder.recordPairing(appContext, "ADB_WRITE_SECURE_SETTINGS_GRANT", isSuccess = true, details = sanitizedOutput.ifBlank { "granted=true" })
             } else {
-                val oemHint = if (OemProvisioningHelper.isRealmeOrOppo()) {
-                    "Disable permission monitoring required on OPPO/Realme"
-                } else {
-                    null
-                }
-                val details = listOfNotNull(
-                    oemHint,
-                    sanitizedGrantOutput.takeIf { it.isNotBlank() } ?: "canWriteSecureSettings=false"
-                ).joinToString(" | ")
-                Timber.tag(TAG).w("WRITE_SECURE_SETTINGS grant via ADB did not take effect: $details")
-                BlackBoxRecorder.recordPairing(
-                    appContext,
-                    "ADB_WRITE_SECURE_SETTINGS_GRANT",
-                    isSuccess = false,
-                    error = details
-                )
+                recordSecureSettingsGrantFailure(appContext, sanitizedOutput.ifBlank { "canWriteSecureSettings=false" })
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            val oemHint = if (OemProvisioningHelper.isRealmeOrOppo()) {
-                "Disable permission monitoring required on OPPO/Realme"
-            } else {
-                null
-            }
-            val details = listOfNotNull(
-                oemHint,
-                sanitizeShellOutput("${e.javaClass.simpleName}: ${e.message ?: "Unknown error"}")
-            ).joinToString(" | ")
-            Timber.tag(TAG).w(e, "Failed granting WRITE_SECURE_SETTINGS permission via ADB")
-            BlackBoxRecorder.recordPairing(
-                appContext,
-                "ADB_WRITE_SECURE_SETTINGS_GRANT",
-                isSuccess = false,
-                error = details
-            )
+            recordSecureSettingsGrantFailure(appContext, sanitizeShellOutput("${e.javaClass.simpleName}: ${e.message ?: "Unknown error"}"), e)
         }
-        try {
+        runShellStep("Grant ACCESS_RESTRICTED_SETTINGS") {
             client.shell("appops set ${appContext.packageName} ACCESS_RESTRICTED_SETTINGS allow")
             Timber.tag(TAG).i("Granted ACCESS_RESTRICTED_SETTINGS allow via ADB")
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            Timber.tag(TAG).w(e, "Failed setting ACCESS_RESTRICTED_SETTINGS via ADB")
         }
-        try {
+        runShellStep("Whitelist package in deviceidle") {
             client.shell("dumpsys deviceidle whitelist +${appContext.packageName}")
             Timber.tag(TAG).i("Whitelisted package in deviceidle via ADB")
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            Timber.tag(TAG).w(e, "Failed adding to deviceidle whitelist via ADB")
         }
     }
 
     private suspend fun disableWirelessAdbSilently(client: AdbClient) {
-        try {
+        runShellStep("Disable adb_wifi_enabled after promotion") {
             Timber.tag(TAG).i("Disabling adb_wifi_enabled for security cleanup (leaving adb_enabled intact)...")
             client.shell("settings put global adb_wifi_enabled 0")
+        }
+    }
+
+    private suspend inline fun runShellStep(label: String, action: () -> Unit) {
+        try {
+            action()
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            Timber.tag(TAG).w(e, "Failed disabling adb_wifi_enabled after promotion")
+            Timber.tag(TAG).w(e, "Failed step: $label")
         }
+    }
+
+    private fun recordDnsProvisionError(appContext: Context, host: String, stepLabel: String, err: String) {
+        Timber.tag(TAG).w("ADB Private DNS provisioning $stepLabel ($host): $err")
+        BlackBoxRecorder.recordPairing(appContext, "ADB_PRIVATE_DNS_PROVISION", isSuccess = false, details = "host=$host", error = err)
     }
 
     private suspend fun provisionPrivateDnsViaAdb(appContext: Context, client: AdbClient) {
@@ -178,29 +166,21 @@ internal object AdbPromotionExecutor {
             val safeHost = DeviceOwnerPromoter.sanitizeDnsHostForAdb(rawHost)
             targetHost = safeHost
 
-            val specRes = client.shell("settings put global private_dns_specifier $safeHost")
-            val specOutput = (specRes.stdoutText + "\n" + specRes.stderrText).trim()
+            val specOutput = client.shell("settings put global private_dns_specifier $safeHost").combinedOutput()
             if (hasShellError(specOutput)) {
-                val err = "specifier write failed: ${sanitizeShellOutput(specOutput)}"
-                Timber.tag(TAG).w("ADB Private DNS provisioning aborted at Step 1 ($safeHost): $err")
-                BlackBoxRecorder.recordPairing(appContext, "ADB_PRIVATE_DNS_PROVISION", isSuccess = false, details = "host=$safeHost", error = err)
+                recordDnsProvisionError(appContext, safeHost, "aborted at Step 1", "specifier write failed: ${sanitizeShellOutput(specOutput)}")
                 return
             }
 
             val verifySpec = client.shell("settings get global private_dns_specifier").stdoutText.trim()
             if (!verifySpec.equals(safeHost, ignoreCase = true)) {
-                val err = "specifier read-back mismatch: expected=$safeHost, actual=${sanitizeShellOutput(verifySpec)}"
-                Timber.tag(TAG).w("ADB Private DNS provisioning aborted at Step 2: $err")
-                BlackBoxRecorder.recordPairing(appContext, "ADB_PRIVATE_DNS_PROVISION", isSuccess = false, details = "host=$safeHost", error = err)
+                recordDnsProvisionError(appContext, safeHost, "aborted at Step 2", "specifier read-back mismatch: expected=$safeHost, actual=${sanitizeShellOutput(verifySpec)}")
                 return
             }
 
-            val modeRes = client.shell("settings put global private_dns_mode hostname")
-            val modeOutput = (modeRes.stdoutText + "\n" + modeRes.stderrText).trim()
+            val modeOutput = client.shell("settings put global private_dns_mode hostname").combinedOutput()
             if (hasShellError(modeOutput)) {
-                val err = "mode write failed: ${sanitizeShellOutput(modeOutput)}"
-                Timber.tag(TAG).w("ADB Private DNS provisioning failed at Step 3 ($safeHost): $err")
-                BlackBoxRecorder.recordPairing(appContext, "ADB_PRIVATE_DNS_PROVISION", isSuccess = false, details = "host=$safeHost", error = err)
+                recordDnsProvisionError(appContext, safeHost, "failed at Step 3", "mode write failed: ${sanitizeShellOutput(modeOutput)}")
                 return
             }
 
@@ -209,9 +189,7 @@ internal object AdbPromotionExecutor {
                 Timber.tag(TAG).i("Successfully provisioned Private DNS via ADB (mode=hostname, specifier=$safeHost)")
                 BlackBoxRecorder.recordPairing(appContext, "ADB_PRIVATE_DNS_PROVISION", isSuccess = true, details = "host=$safeHost, mode=hostname")
             } else {
-                val err = "mode read-back mismatch: expected=hostname, actual=${sanitizeShellOutput(verifyMode)}"
-                Timber.tag(TAG).w("ADB Private DNS mode verification failed ($safeHost): $err")
-                BlackBoxRecorder.recordPairing(appContext, "ADB_PRIVATE_DNS_PROVISION", isSuccess = false, details = "host=$safeHost", error = err)
+                recordDnsProvisionError(appContext, safeHost, "mode verification failed", "mode read-back mismatch: expected=hostname, actual=${sanitizeShellOutput(verifyMode)}")
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -221,14 +199,26 @@ internal object AdbPromotionExecutor {
         }
     }
 
-    private fun hasShellError(output: String): Boolean {
-        return output.contains("Exception", ignoreCase = true) ||
+    private fun hasShellError(output: String): Boolean =
+        output.contains("Exception", ignoreCase = true) ||
             output.contains("Error", ignoreCase = true) ||
             output.contains("Permission Denial", ignoreCase = true)
-    }
 
-    private fun sanitizeShellOutput(raw: String): String {
-        return raw.replace(Regex("\\s+"), " ").trim().take(300)
+    private fun sanitizeShellOutput(raw: String): String = raw.replace(Regex("\\s+"), " ").trim().take(300)
+
+    private suspend inline fun runDpmWithUserFallback(
+        client: AdbClient,
+        userId: Int,
+        adminComponent: String,
+        commandBuilder: (dpmArgs: String) -> String
+    ): String {
+        var output = client.shell(commandBuilder("--user $userId $adminComponent")).combinedOutput()
+        if (output.contains("unknown option: --user", ignoreCase = true) ||
+            output.contains("illegal option", ignoreCase = true)
+        ) {
+            output = client.shell(commandBuilder(adminComponent)).combinedOutput()
+        }
+        return output
     }
 
     private suspend fun executeSetupBypassPromotion(
@@ -258,50 +248,27 @@ internal object AdbPromotionExecutor {
             }
 
             client.shell("CLASSPATH=$dexPath app_process /system/bin SetupStateHelper $userId")
-
-            var doResult = client.shell("dpm set-device-owner --user $userId $adminComponent")
-            var output = (doResult.stdoutText + "\n" + doResult.stderrText).trim()
-
-            if (output.contains("unknown option: --user", ignoreCase = true) ||
-                output.contains("illegal option", ignoreCase = true)
-            ) {
-                doResult = client.shell("dpm set-device-owner $adminComponent")
-                output = (doResult.stdoutText + "\n" + doResult.stderrText).trim()
-            }
-
+            val output = runDpmWithUserFallback(client, userId, adminComponent) { "dpm set-device-owner $it" }
             Timber.tag(TAG).i("DPM bypass execution output: $output")
-            val isSuccess = (output.contains("Success", ignoreCase = true) || output.contains("device owner set", ignoreCase = true)) &&
-                !output.contains("error", ignoreCase = true) && !output.contains("exception", ignoreCase = true)
-
-            return if (isSuccess) PromotionResult.Success else PromotionResult.Failure(formatFriendlyError(context, output))
+            return if (isDpmOwnerSetSuccess(output)) PromotionResult.Success else PromotionResult.Failure(formatFriendlyError(context, output))
         } finally {
             withContext(NonCancellable) {
                 withTimeoutOrNull(5_000L) {
                     if (isBypassed) {
-                        try {
+                        runShellStep("Restore user_setup_complete via ADB") {
                             client.shell("settings --user $userId put secure user_setup_complete 1")
-                        } catch (e: Exception) {
-                            Timber.tag(TAG).e(e, "Failed to restore user_setup_complete in finally via ADB")
                         }
-                        try {
+                        runShellStep("Local ContentResolver fallback for user_setup_complete") {
                             context?.let { ctx ->
-                                android.provider.Settings.Secure.putInt((ctx.applicationContext ?: ctx).contentResolver, "user_setup_complete", 1)
+                                Settings.Secure.putInt((ctx.applicationContext ?: ctx).contentResolver, "user_setup_complete", 1)
                                 Timber.tag(TAG).i("Local ContentResolver fallback restored user_setup_complete=1 successfully")
                             }
-                        } catch (e: Exception) {
-                            Timber.tag(TAG).w(e, "Local ContentResolver fallback for user_setup_complete failed")
                         }
-                        try {
+                        runShellStep("Refresh SetupStateHelper in finally") {
                             client.shell("CLASSPATH=$dexPath app_process /system/bin SetupStateHelper $userId")
-                        } catch (e: Exception) {
-                            Timber.tag(TAG).e(e, "Failed to refresh SetupStateHelper in finally")
                         }
                     }
-                    try {
-                        client.shell("rm -f $dexPath")
-                    } catch (e: Exception) {
-                        Timber.tag(TAG).w(e, "Failed to remove helper dex in finally")
-                    }
+                    runShellStep("Remove helper dex in finally") { client.shell("rm -f $dexPath") }
                 }
             }
         }
@@ -315,73 +282,44 @@ internal object AdbPromotionExecutor {
     ): PromotionResult {
         val dumpsys = client.shell("dumpsys account").stdoutText
         val regex = "Account \\{name=.*?, type=(.*?)\\}".toRegex()
-        val accountTypes = mutableSetOf<String>()
-        dumpsys.lines().forEach { line ->
-            regex.find(line)?.let { accountTypes.add(it.groupValues[1]) }
-        }
+        val accountTypes = dumpsys.lines().mapNotNull { regex.find(it)?.groupValues?.get(1) }.toSet()
 
         val authenticatorMap = context?.let { ctx ->
             try {
-                AccountManager.get(ctx.applicationContext ?: ctx).authenticatorTypes
-                    .associate { it.type to it.packageName }
+                AccountManager.get(ctx.applicationContext ?: ctx).authenticatorTypes.associate { it.type to it.packageName }
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
                 Timber.tag(TAG).w(e, "Failed to retrieve authenticatorTypes from AccountManager")
                 emptyMap()
             }
         } ?: emptyMap()
 
-        val packagesToDisable = mutableSetOf<String>()
+        val packagesToDisable = mutableSetOf("com.google.android.gms")
         accountTypes.forEach { type ->
             val mappedPkg = authenticatorMap[type]
-            if (mappedPkg != null) {
-                packagesToDisable.add(mappedPkg)
-            } else {
-                when {
-                    type.contains("google", ignoreCase = true) -> packagesToDisable.add("com.google.android.gms")
-                    type.contains("whatsapp", ignoreCase = true) -> packagesToDisable.add("com.whatsapp")
-                    type.contains("telegram", ignoreCase = true) -> packagesToDisable.add("org.telegram.messenger")
-                    type.contains("samsung", ignoreCase = true) -> packagesToDisable.add("com.osp.app.signin")
-                    type.contains("xiaomi", ignoreCase = true) -> packagesToDisable.add("com.xiaomi.account")
-                }
+            if (mappedPkg != null) packagesToDisable.add(mappedPkg) else when {
+                type.contains("google", ignoreCase = true) -> packagesToDisable.add("com.google.android.gms")
+                type.contains("whatsapp", ignoreCase = true) -> packagesToDisable.add("com.whatsapp")
+                type.contains("telegram", ignoreCase = true) -> packagesToDisable.add("org.telegram.messenger")
+                type.contains("samsung", ignoreCase = true) -> packagesToDisable.add("com.osp.app.signin")
+                type.contains("xiaomi", ignoreCase = true) -> packagesToDisable.add("com.xiaomi.account")
             }
         }
-        packagesToDisable.add("com.google.android.gms")
+        val safePackages = filterSafePackagesForFreeze(packagesToDisable)
 
         try {
-            val trapScript = packagesToDisable.joinToString("; ") { "pm enable --user $userId $it" }
-            val disableScript = packagesToDisable.joinToString("; ") { "pm disable-user --user $userId $it" }
-
-            val atomicCmd = "sh -c 'trap \"$trapScript\" EXIT; $disableScript; sleep 1; dpm set-device-owner --user $userId $adminComponent'"
-            var doResult = client.shell(atomicCmd)
-            var output = (doResult.stdoutText + "\n" + doResult.stderrText).trim()
-
-            if (output.contains("unknown option: --user", ignoreCase = true) ||
-                output.contains("illegal option", ignoreCase = true)
-            ) {
-                val legacyAtomicCmd = "sh -c 'trap \"$trapScript\" EXIT; $disableScript; sleep 1; dpm set-device-owner $adminComponent'"
-                doResult = client.shell(legacyAtomicCmd)
-                output = (doResult.stdoutText + "\n" + doResult.stderrText).trim()
+            val trapScript = safePackages.joinToString("; ") { "pm enable --user $userId $it" }
+            val disableScript = safePackages.joinToString("; ") { "pm disable-user --user $userId $it" }
+            val output = runDpmWithUserFallback(client, userId, adminComponent) { dpmArgs ->
+                "sh -c 'trap \"$trapScript\" EXIT; $disableScript; sleep 1; dpm set-device-owner $dpmArgs'"
             }
-
             Timber.tag(TAG).i("DPM legacy execution output: $output")
-            val isSuccess = (output.contains("Success", ignoreCase = true) || output.contains("device owner set", ignoreCase = true)) &&
-                !output.contains("error", ignoreCase = true) && !output.contains("exception", ignoreCase = true)
-
-            return if (isSuccess) PromotionResult.Success else PromotionResult.Failure(formatFriendlyError(context, output))
+            return if (isDpmOwnerSetSuccess(output)) PromotionResult.Success else PromotionResult.Failure(formatFriendlyError(context, output))
         } finally {
             withContext(NonCancellable) {
                 withTimeoutOrNull(5_000L) {
-                    for (pkg in packagesToDisable) {
-                        try {
-                            client.shell("pm enable --user $userId $pkg")
-                        } catch (e: Exception) {
-                            Timber.tag(TAG).e(e, "Failed to re-enable package $pkg in finally")
-                        }
-                    }
-                    try {
-                        client.shell("pm enable --user $userId com.google.android.gms")
-                    } catch (e: Exception) {
-                        Timber.tag(TAG).e(e, "Failed to re-enable com.google.android.gms in finally")
+                    for (pkg in safePackages) {
+                        runShellStep("Re-enable package $pkg in finally") { client.shell("pm enable --user $userId $pkg") }
                     }
                 }
             }

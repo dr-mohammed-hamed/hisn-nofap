@@ -390,7 +390,7 @@ object SecondaryProfileDetector {
 
         for (candidate in candidates) {
             candidate.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            if (candidate.resolveActivity(pm) != null) {
+            if (candidate.resolveActivityInfo(pm, 0)?.exported == true) {
                 return candidate
             }
         }

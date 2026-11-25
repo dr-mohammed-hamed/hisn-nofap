@@ -8,6 +8,7 @@ import androidx.annotation.StringRes
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.ColorUtils
 import androidx.lifecycle.lifecycleScope
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.provisioning.engine.BlockingSecondaryUser
@@ -19,6 +20,8 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.Collections
+import java.util.WeakHashMap
 
 /**
  * Presents a transparent, explicit-consent confirmation dialog listing every OS-level
@@ -30,7 +33,7 @@ class BlockingSecondaryUsersDialogHelper {
     private var activeDialog: AlertDialog? = null
     private var countdownJob: Job? = null
     private var activeUserIds: Set<Int> = emptySet()
-    private var isProgrammaticDismiss = false
+    private val suppressedDialogs = Collections.newSetFromMap(WeakHashMap<AlertDialog, Boolean>())
 
     fun show(
         activity: AppCompatActivity,
@@ -123,13 +126,15 @@ class BlockingSecondaryUsersDialogHelper {
         var remainingSeconds = SAFETY_COUNTDOWN_SECONDS
         var actionTaken = false
 
+        val disabledBg = ColorUtils.setAlphaComponent(colorOnSurface, 31)
+        val disabledText = ColorUtils.setAlphaComponent(colorOnSurface, 97)
         val confirmBgList = ColorStateList(
             arrayOf(intArrayOf(android.R.attr.state_enabled), intArrayOf()),
-            intArrayOf(colorRed, MaterialColors.layer(colorOnSurface, colorOnSurfaceVariant, 0.12f))
+            intArrayOf(colorRed, disabledBg)
         )
         val confirmTextList = ColorStateList(
             arrayOf(intArrayOf(android.R.attr.state_enabled), intArrayOf()),
-            intArrayOf(colorWhite, colorOnSurfaceVariant)
+            intArrayOf(colorWhite, disabledText)
         )
         btnConfirm.backgroundTintList = confirmBgList
         btnConfirm.setTextColor(confirmTextList)
@@ -143,9 +148,7 @@ class BlockingSecondaryUsersDialogHelper {
             } else {
                 btnConfirm.setText(R.string.provisioning_blocking_btn_confirm_ready)
             }
-            val ready = (remainingSeconds <= 0 && chkConsent.isChecked)
-            btnConfirm.isEnabled = ready
-            btnConfirm.alpha = if (ready) 1f else 0.7f
+            btnConfirm.isEnabled = (remainingSeconds <= 0 && chkConsent.isChecked)
         }
 
         updateConfirmButtonState()
@@ -175,7 +178,7 @@ class BlockingSecondaryUsersDialogHelper {
             countdownJob?.cancel()
             countdownJob = null
             if (!activity.isFinishing && !activity.isDestroyed) {
-                isProgrammaticDismiss = true
+                suppressedDialogs.add(dialog)
                 dialog.dismiss()
             }
             val approvedIds = users.map { it.userId }.filter { it > 0 }.toSet()
@@ -195,8 +198,7 @@ class BlockingSecondaryUsersDialogHelper {
                 activeDialog = null
                 activeUserIds = emptySet()
             }
-            val suppressCancel = isProgrammaticDismiss
-            isProgrammaticDismiss = false
+            val suppressCancel = suppressedDialogs.remove(dialog)
             if (!actionTaken && !suppressCancel) {
                 onCancel()
             }
@@ -210,7 +212,7 @@ class BlockingSecondaryUsersDialogHelper {
         countdownJob = null
         activeDialog?.let { dialog ->
             if (dialog.isShowing) {
-                isProgrammaticDismiss = true
+                suppressedDialogs.add(dialog)
                 runCatching { dialog.dismiss() }
             }
         }
