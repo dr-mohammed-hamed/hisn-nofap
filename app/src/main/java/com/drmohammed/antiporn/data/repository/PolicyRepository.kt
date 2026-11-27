@@ -93,12 +93,15 @@ class PolicyRepository(
             val (reconciled, needsSave) = loadAndReconcilePolicy(initialPolicy)
             val adopted = synchronized(policyStateLock) {
                 val current = _currentPolicyFlow.value
-                val shouldAdoptInitialRoomLoad = !hasCachedPolicy && current == initialPolicy
+                val noConcurrentUpdate = current == initialPolicy
+                val shouldAdoptInitialRoomLoad = !hasCachedPolicy && noConcurrentUpdate
                 val isNewerOrEqualReconciled = reconciled != current &&
                     (shouldAdoptInitialRoomLoad ||
                         reconciled.version > current.version ||
-                        (reconciled.version == current.version && reconciled.updatedAt >= current.updatedAt))
-                if (isNewerOrEqualReconciled) {
+                        (reconciled.version == current.version &&
+                            (reconciled.updatedAt > current.updatedAt ||
+                                (noConcurrentUpdate && reconciled.updatedAt >= current.updatedAt))))
+                val didAdopt = if (isNewerOrEqualReconciled) {
                     _currentPolicyFlow.value = reconciled
                     PageShieldAccessibilityHook.getInstance().updateConfig(reconciled.pageShieldConfig)
                     SelfControlAccessGateRegistry.isSelfControlAllowedWhenSupervised = reconciled.isSelfControlAllowed
@@ -111,7 +114,9 @@ class PolicyRepository(
                     true
                 } else {
                     false
-                }.also { isInitialPolicyLoaded = true }
+                }
+                isInitialPolicyLoaded = true
+                didAdopt
             }
             val effectivePolicy = _currentPolicyFlow.value
             if (adopted || effectivePolicy != initialPolicy) {
@@ -235,6 +240,14 @@ class PolicyRepository(
             var needsSave = false
             if (!hasGuardians && workingPolicy.version == 1L && workingPolicy.isVpnBlackholeEnabled != CurfewConfig.DEFAULT_VPN_BLACKHOLE_ENABLED) {
                 workingPolicy = workingPolicy.copy(isVpnBlackholeEnabled = CurfewConfig.DEFAULT_VPN_BLACKHOLE_ENABLED)
+                needsSave = true
+            }
+            if (!hasGuardians &&
+                !workingPolicy.isSupervised &&
+                workingPolicy.guardianUid.isNullOrBlank() &&
+                !workingPolicy.hasAllSelfControlPermissionsEnabled()
+            ) {
+                workingPolicy = workingPolicy.withAllSelfControlPermissionsEnabled()
                 needsSave = true
             }
             if (needsSave) {
@@ -433,6 +446,7 @@ class PolicyRepository(
                         selfControlNewAppsAllowed = current.selfControlNewAppsAllowed,
                         selfControlFortressesAllowed = current.selfControlFortressesAllowed,
                         selfControlFortressUnlockAllowed = current.selfControlFortressUnlockAllowed,
+                        selfControlOtherSettingsAllowed = current.selfControlOtherSettingsAllowed,
                         remoteModeUnlockTarget = current.remoteModeUnlockTarget,
                         remoteModeUnlockRequestedAt = current.remoteModeUnlockRequestedAt
                     )
@@ -494,9 +508,6 @@ class PolicyRepository(
         current: DevicePolicyBundle
     ): DevicePolicyBundle {
         var sanitized = bundle.copy(
-            isDateTimeLocked = current.isDateTimeLocked,
-            isClearAppDataAllowed = current.isClearAppDataAllowed,
-            timeZoneId = current.timeZoneId,
             screenAiSchemaVersion = maxOf(
                 current.screenAiSchemaVersion,
                 DevicePolicyBundle.CURRENT_SCREEN_AI_SCHEMA_VERSION
@@ -513,6 +524,14 @@ class PolicyRepository(
             remoteModeUnlockTarget = current.remoteModeUnlockTarget,
             remoteModeUnlockRequestedAt = current.remoteModeUnlockRequestedAt
         )
+        if (!current.selfControlOtherSettingsAllowed) {
+            sanitized = sanitized.copy(
+                isDateTimeLocked = current.isDateTimeLocked,
+                isClearAppDataAllowed = current.isClearAppDataAllowed,
+                timeZoneId = current.timeZoneId,
+                isInstantInternetKillEnabled = current.isInstantInternetKillEnabled
+            )
+        }
         if (!current.selfControlCurfewAllowed) {
             sanitized = sanitized.copy(
                 curfewStartHour = current.curfewStartHour,

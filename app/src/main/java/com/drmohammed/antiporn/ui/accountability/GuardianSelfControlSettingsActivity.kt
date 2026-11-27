@@ -112,6 +112,7 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
         binding.switchPermNewApps.isChecked = policy.selfControlNewAppsAllowed
         binding.switchPermFortresses.isChecked = policy.selfControlFortressesAllowed
         binding.switchPermFortressUnlock.isChecked = policy.selfControlFortressUnlockAllowed
+        binding.switchPermOtherSettings.isChecked = policy.selfControlOtherSettingsAllowed
 
         updateGranularContainerState(policy.isSelfControlAllowed)
         isBinding = false
@@ -127,6 +128,7 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
         binding.switchPermNewApps.isEnabled = isMasterAllowed
         binding.switchPermFortresses.isEnabled = isMasterAllowed
         binding.switchPermFortressUnlock.isEnabled = isMasterAllowed
+        binding.switchPermOtherSettings.isEnabled = isMasterAllowed
 
         binding.cardPermCurfew.isEnabled = isMasterAllowed
         binding.cardPermWeb.isEnabled = isMasterAllowed
@@ -136,6 +138,7 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
         binding.cardPermNewApps.isEnabled = isMasterAllowed
         binding.cardPermFortresses.isEnabled = isMasterAllowed
         binding.cardPermFortressUnlock.isEnabled = isMasterAllowed
+        binding.cardPermOtherSettings.isEnabled = isMasterAllowed
     }
 
     private fun setControlsEnabled(enabled: Boolean) {
@@ -152,6 +155,7 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
             binding.switchPermNewApps.isEnabled = false
             binding.switchPermFortresses.isEnabled = false
             binding.switchPermFortressUnlock.isEnabled = false
+            binding.switchPermOtherSettings.isEnabled = false
 
             binding.cardPermCurfew.isEnabled = false
             binding.cardPermWeb.isEnabled = false
@@ -161,6 +165,7 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
             binding.cardPermNewApps.isEnabled = false
             binding.cardPermFortresses.isEnabled = false
             binding.cardPermFortressUnlock.isEnabled = false
+            binding.cardPermOtherSettings.isEnabled = false
         }
         binding.btnResetWardQrLock.isEnabled = enabled
     }
@@ -200,6 +205,10 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
 
         binding.cardPermFortressUnlock.setOnClickListener {
             if (!isPushing && binding.switchPermFortressUnlock.isEnabled) binding.switchPermFortressUnlock.performClick()
+        }
+
+        binding.cardPermOtherSettings.setOnClickListener {
+            if (!isPushing && binding.switchPermOtherSettings.isEnabled) binding.switchPermOtherSettings.performClick()
         }
 
         binding.switchMasterSelfControl.setOnCheckedChangeListener { _, isChecked ->
@@ -246,6 +255,11 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
         binding.switchPermFortressUnlock.setOnCheckedChangeListener { _, isChecked ->
             if (isBinding) return@setOnCheckedChangeListener
             pushUpdatedPolicy { it.copy(selfControlFortressUnlockAllowed = isChecked) }
+        }
+
+        binding.switchPermOtherSettings.setOnCheckedChangeListener { _, isChecked ->
+            if (isBinding) return@setOnCheckedChangeListener
+            pushUpdatedPolicy { it.copy(selfControlOtherSettingsAllowed = isChecked) }
         }
 
         binding.btnResetWardQrLock.setOnClickListener {

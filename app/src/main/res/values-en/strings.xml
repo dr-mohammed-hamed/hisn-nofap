@@ -1639,4 +1639,6 @@
     <string name="self_control_perm_fortresses_desc">Allow ward to add and edit custom fortresses and emergency fortress settings</string>
     <string name="self_control_perm_fortress_unlock">Allow Fortress &amp; Curfew Unlock</string>
     <string name="self_control_perm_fortress_unlock_desc">Allow ward to unlock custom fortresses or current curfew window from Self-Control</string>
+    <string name="self_control_perm_other_settings">Additional Settings</string>
+    <string name="self_control_perm_other_settings_desc">Allow ward to modify date &amp; time lock, time zone, app data clearing, and internet cutoff</string>
 </resources>

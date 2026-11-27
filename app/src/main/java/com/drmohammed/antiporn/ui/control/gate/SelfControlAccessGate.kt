@@ -19,7 +19,8 @@ enum class SelfControlSection {
     PAGE_SHIELD,
     NEW_APPS,
     FORTRESSES,
-    FORTRESS_UNLOCK
+    FORTRESS_UNLOCK,
+    OTHER_SETTINGS
 }
 
 /**
@@ -143,6 +144,7 @@ object SelfControlAccessGateRegistry {
             SelfControlSection.NEW_APPS -> policy.selfControlNewAppsAllowed
             SelfControlSection.FORTRESSES -> policy.selfControlFortressesAllowed
             SelfControlSection.FORTRESS_UNLOCK -> policy.selfControlFortressUnlockAllowed
+            SelfControlSection.OTHER_SETTINGS -> policy.selfControlOtherSettingsAllowed
         }
     }
 

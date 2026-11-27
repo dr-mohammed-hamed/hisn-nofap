@@ -1917,5 +1917,7 @@
     <string name="self_control_perm_fortresses_desc">السماح للمكفول بإضافة وتعديل الحصون وإعدادات حصن الطوارئ</string>
     <string name="self_control_perm_fortress_unlock">السماح بفك الحصون</string>
     <string name="self_control_perm_fortress_unlock_desc">السماح للمكفول بفك الحصون المخصصة أو الحظر الليلي من شاشة التحكم الذاتي</string>
+    <string name="self_control_perm_other_settings">إعدادات إضافية</string>
+    <string name="self_control_perm_other_settings_desc">السماح للمكفول بتعديل قفل التاريخ والوقت، المنطقة الزمنية، مسح البيانات، وقطع الإنترنت</string>
     <string name="fortress_meta_separator" translatable="false">•</string>
 </resources>

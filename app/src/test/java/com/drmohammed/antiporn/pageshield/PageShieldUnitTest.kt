@@ -99,7 +99,11 @@ class PageShieldUnitTest {
         assertNotNull(parsed)
         assertFalse(parsed.pageShieldConfig.isEnabled)
         assertTrue(parsed.pageShieldConfig.appPolicies.isEmpty())
-        assertFalse(parsed.selfControlPageShieldAllowed)
+        assertTrue(parsed.selfControlPageShieldAllowed)
+
+        // Explicit false in JSON must still be honored
+        val explicitFalseParsed = DevicePolicyBundle.fromJson("""{"selfControlPageShieldAllowed": false}""")
+        assertFalse(explicitFalseParsed.selfControlPageShieldAllowed)
 
         // Bundle roundtrip with active PageShieldConfig
         val activePolicy = AppPageShieldPolicy(

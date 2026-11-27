@@ -141,6 +141,7 @@ class SelfControlFragment : Fragment() {
         binding.tileAppManager.alpha = if (isSupervised && !policy.selfControlAppsAllowed) 0.45f else 1.0f
         binding.tileWaqfa.alpha = if (isSupervised && !policy.selfControlWaqfaAllowed) 0.45f else 1.0f
         binding.tilePageShield.alpha = if (isSupervised && !policy.selfControlPageShieldAllowed) 0.45f else 1.0f
+        binding.tileOtherSettings.alpha = if (isSupervised && !policy.selfControlOtherSettingsAllowed) 0.45f else 1.0f
 
         val ctx = context?.applicationContext ?: return
         val isQrEnabled = SelfControlQrManager.getInstance(ctx).isQrLockEnabled()
@@ -272,6 +273,7 @@ class SelfControlFragment : Fragment() {
             TAG_NAV_APPS -> SelfControlSection.APP_MANAGER
             TAG_NAV_WAQFA -> SelfControlSection.WAQFA
             TAG_NAV_PAGE_SHIELD -> SelfControlSection.PAGE_SHIELD
+            TAG_NAV_OTHER -> SelfControlSection.OTHER_SETTINGS
             else -> SelfControlSection.GENERAL
         }
         if (!SelfControlAccessGateRegistry.isSectionPermitted(policy, section)) {

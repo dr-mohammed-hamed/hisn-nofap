@@ -43,10 +43,10 @@ data class DevicePolicyBundle(
     val isSupervised: Boolean = false,
     val isSelfControlAllowed: Boolean = true,
     val selfControlCurfewAllowed: Boolean = true,
-    val selfControlWebAllowed: Boolean = false,
-    val selfControlAppsAllowed: Boolean = false,
+    val selfControlWebAllowed: Boolean = true,
+    val selfControlAppsAllowed: Boolean = true,
     val selfControlWaqfaAllowed: Boolean = true,
-    val selfControlNewAppsAllowed: Boolean = false,
+    val selfControlNewAppsAllowed: Boolean = true,
     val isDateTimeLocked: Boolean = false,
     val isClearAppDataAllowed: Boolean = true,
     val timeZoneId: String = com.drmohammed.antiporn.curfew.CurfewConfig.getDefaultFallbackTimeZone(),
@@ -62,7 +62,7 @@ data class DevicePolicyBundle(
     val lastSelfModifiedAt: Long? = null,
     val waqfaConfig: WaqfaConfig = WaqfaConfig(),
     val pageShieldConfig: com.drmohammed.antiporn.pageshield.model.PageShieldConfig = com.drmohammed.antiporn.pageshield.model.PageShieldConfig(),
-    val selfControlPageShieldAllowed: Boolean = false,
+    val selfControlPageShieldAllowed: Boolean = true,
     val version: Long = 1L,
     val updatedAt: Long = 0L,
     val remoteSelfControlResetRequestedAt: Long? = null,
@@ -77,7 +77,8 @@ data class DevicePolicyBundle(
     // Fortresses & Remote Mode Unlock policy fields
     val fortressesConfig: FortressesConfig = FortressesConfig.default(),
     val selfControlFortressesAllowed: Boolean = true,
-    val selfControlFortressUnlockAllowed: Boolean = false,
+    val selfControlFortressUnlockAllowed: Boolean = true,
+    val selfControlOtherSettingsAllowed: Boolean = true,
     val remoteModeUnlockTarget: String? = null,
     val remoteModeUnlockRequestedAt: Long? = null,
     // Ward active-mode read-only telemetry (NEVER written by Guardian toMap() pushes)
@@ -88,6 +89,31 @@ data class DevicePolicyBundle(
     val wardIsCurfewActiveNow: Boolean = false,
     val wardActiveModesUpdatedAt: Long = 0L
 ) {
+
+    fun hasAllSelfControlPermissionsEnabled(): Boolean =
+        isSelfControlAllowed &&
+            selfControlCurfewAllowed &&
+            selfControlWebAllowed &&
+            selfControlAppsAllowed &&
+            selfControlWaqfaAllowed &&
+            selfControlNewAppsAllowed &&
+            selfControlPageShieldAllowed &&
+            selfControlFortressesAllowed &&
+            selfControlFortressUnlockAllowed &&
+            selfControlOtherSettingsAllowed
+
+    fun withAllSelfControlPermissionsEnabled(): DevicePolicyBundle = copy(
+        isSelfControlAllowed = true,
+        selfControlCurfewAllowed = true,
+        selfControlWebAllowed = true,
+        selfControlAppsAllowed = true,
+        selfControlWaqfaAllowed = true,
+        selfControlNewAppsAllowed = true,
+        selfControlPageShieldAllowed = true,
+        selfControlFortressesAllowed = true,
+        selfControlFortressUnlockAllowed = true,
+        selfControlOtherSettingsAllowed = true
+    )
 
     fun toMap(): Map<String, Any?> {
         val map = mutableMapOf<String, Any?>(
@@ -152,6 +178,7 @@ data class DevicePolicyBundle(
             "fortressesConfig" to fortressesConfig.toMap(),
             "selfControlFortressesAllowed" to selfControlFortressesAllowed,
             "selfControlFortressUnlockAllowed" to selfControlFortressUnlockAllowed,
+            "selfControlOtherSettingsAllowed" to selfControlOtherSettingsAllowed,
             "remoteModeUnlockTarget" to remoteModeUnlockTarget,
             "remoteModeUnlockRequestedAt" to remoteModeUnlockRequestedAt
         )
@@ -245,6 +272,7 @@ data class DevicePolicyBundle(
         json.put("fortressesConfig", fortressesConfig.toJson())
         json.put("selfControlFortressesAllowed", selfControlFortressesAllowed)
         json.put("selfControlFortressUnlockAllowed", selfControlFortressUnlockAllowed)
+        json.put("selfControlOtherSettingsAllowed", selfControlOtherSettingsAllowed)
         if (remoteModeUnlockTarget != null) json.put("remoteModeUnlockTarget", remoteModeUnlockTarget)
         if (remoteModeUnlockRequestedAt != null) json.put("remoteModeUnlockRequestedAt", remoteModeUnlockRequestedAt)
         if (wardActiveFortressId != null) json.put("wardActiveFortressId", wardActiveFortressId)
@@ -371,10 +399,10 @@ data class DevicePolicyBundle(
             val supervised = (map["isSupervised"] as? Boolean) ?: (!gUid.isNullOrBlank())
             val isSelfControlAllowed = (map["isSelfControlAllowed"] as? Boolean) ?: true
             val selfControlCurfewAllowed = (map["selfControlCurfewAllowed"] as? Boolean) ?: true
-            val selfControlWebAllowed = (map["selfControlWebAllowed"] as? Boolean) ?: false
-            val selfControlAppsAllowed = (map["selfControlAppsAllowed"] as? Boolean) ?: false
+            val selfControlWebAllowed = (map["selfControlWebAllowed"] as? Boolean) ?: true
+            val selfControlAppsAllowed = (map["selfControlAppsAllowed"] as? Boolean) ?: true
             val selfControlWaqfaAllowed = (map["selfControlWaqfaAllowed"] as? Boolean) ?: true
-            val selfControlNewAppsAllowed = (map["selfControlNewAppsAllowed"] as? Boolean) ?: false
+            val selfControlNewAppsAllowed = (map["selfControlNewAppsAllowed"] as? Boolean) ?: true
             val isDateTimeLocked = (map["isDateTimeLocked"] as? Boolean) ?: false
             val isClearAppDataAllowed = (map["isClearAppDataAllowed"] as? Boolean) ?: true
             val timeZoneId = (map["timeZoneId"] as? String)?.takeIf { it.isNotBlank() } ?: com.drmohammed.antiporn.curfew.CurfewConfig.DEFAULT_TIMEZONE_ID
@@ -392,7 +420,7 @@ data class DevicePolicyBundle(
             val remoteTeardownAt = (map["remoteTeardownRequestedAt"] as? Number)?.toLong()
             val waqfa = WaqfaConfig.fromMap(map["waqfaConfig"])
             val pageShield = com.drmohammed.antiporn.pageshield.model.PageShieldConfig.fromMap(map["pageShieldConfig"])
-            val selfControlPageShieldAllowed = (map["selfControlPageShieldAllowed"] as? Boolean) ?: false
+            val selfControlPageShieldAllowed = (map["selfControlPageShieldAllowed"] as? Boolean) ?: true
 
             val version = (map["version"] as? Number)?.toLong() ?: 1L
             val updatedAt = (map["updatedAt"] as? Number)?.toLong() ?: 0L
@@ -405,7 +433,8 @@ data class DevicePolicyBundle(
 
             val fortressesConfig = FortressesConfig.fromMap(map["fortressesConfig"])
             val selfControlFortressesAllowed = (map["selfControlFortressesAllowed"] as? Boolean) ?: true
-            val selfControlFortressUnlockAllowed = (map["selfControlFortressUnlockAllowed"] as? Boolean) ?: false
+            val selfControlFortressUnlockAllowed = (map["selfControlFortressUnlockAllowed"] as? Boolean) ?: true
+            val selfControlOtherSettingsAllowed = (map["selfControlOtherSettingsAllowed"] as? Boolean) ?: true
             val remoteModeUnlockTarget = (map["remoteModeUnlockTarget"] as? String)?.takeIf { it.isNotBlank() }
             val remoteModeUnlockRequestedAt = (map["remoteModeUnlockRequestedAt"] as? Number)?.toLong()
             val wardActiveFortressId = (map["wardActiveFortressId"] as? String)?.takeIf { it.isNotBlank() }
@@ -475,6 +504,7 @@ data class DevicePolicyBundle(
                 fortressesConfig = fortressesConfig,
                 selfControlFortressesAllowed = selfControlFortressesAllowed,
                 selfControlFortressUnlockAllowed = selfControlFortressUnlockAllowed,
+                selfControlOtherSettingsAllowed = selfControlOtherSettingsAllowed,
                 remoteModeUnlockTarget = remoteModeUnlockTarget,
                 remoteModeUnlockRequestedAt = remoteModeUnlockRequestedAt,
                 wardActiveFortressId = wardActiveFortressId,
@@ -544,10 +574,10 @@ data class DevicePolicyBundle(
                 val supervised = json.optBoolean("isSupervised", !gUid.isNullOrBlank())
                 val isSelfControlAllowed = json.optBoolean("isSelfControlAllowed", true)
                 val selfControlCurfewAllowed = json.optBoolean("selfControlCurfewAllowed", true)
-                val selfControlWebAllowed = json.optBoolean("selfControlWebAllowed", false)
-                val selfControlAppsAllowed = json.optBoolean("selfControlAppsAllowed", false)
+                val selfControlWebAllowed = json.optBoolean("selfControlWebAllowed", true)
+                val selfControlAppsAllowed = json.optBoolean("selfControlAppsAllowed", true)
                 val selfControlWaqfaAllowed = json.optBoolean("selfControlWaqfaAllowed", true)
-                val selfControlNewAppsAllowed = json.optBoolean("selfControlNewAppsAllowed", false)
+                val selfControlNewAppsAllowed = json.optBoolean("selfControlNewAppsAllowed", true)
                 val isDateTimeLocked = json.optBoolean("isDateTimeLocked", false)
                 val isClearAppDataAllowed = json.optBoolean("isClearAppDataAllowed", true)
                 val timeZoneId = json.optNonBlankStringOrNull("timeZoneId") ?: com.drmohammed.antiporn.curfew.CurfewConfig.DEFAULT_TIMEZONE_ID
@@ -565,7 +595,7 @@ data class DevicePolicyBundle(
                 val remoteTeardownAt = if (json.has("remoteTeardownRequestedAt") && !json.isNull("remoteTeardownRequestedAt")) json.optLong("remoteTeardownRequestedAt") else null
                 val waqfa = WaqfaConfig.fromJson(json.optJSONObject("waqfaConfig"))
                 val pageShield = com.drmohammed.antiporn.pageshield.model.PageShieldConfig.fromJson(json.optJSONObject("pageShieldConfig"))
-                val selfControlPageShieldAllowed = json.optBoolean("selfControlPageShieldAllowed", false)
+                val selfControlPageShieldAllowed = json.optBoolean("selfControlPageShieldAllowed", true)
                 val wardHasAccessibilityService = if (json.has("wardHasAccessibilityService") && !json.isNull("wardHasAccessibilityService")) {
                     json.optBoolean("wardHasAccessibilityService")
                 } else {
@@ -590,7 +620,8 @@ data class DevicePolicyBundle(
                 }
                 val fortressesConfig = FortressesConfig.fromJson(json.optJSONObject("fortressesConfig"))
                 val selfControlFortressesAllowed = json.optBoolean("selfControlFortressesAllowed", true)
-                val selfControlFortressUnlockAllowed = json.optBoolean("selfControlFortressUnlockAllowed", false)
+                val selfControlFortressUnlockAllowed = json.optBoolean("selfControlFortressUnlockAllowed", true)
+                val selfControlOtherSettingsAllowed = json.optBoolean("selfControlOtherSettingsAllowed", true)
                 val remoteModeUnlockTarget = json.optNonBlankStringOrNull("remoteModeUnlockTarget")
                 val remoteModeUnlockRequestedAt = if (json.has("remoteModeUnlockRequestedAt") && !json.isNull("remoteModeUnlockRequestedAt")) {
                     json.optLong("remoteModeUnlockRequestedAt")
@@ -670,6 +701,7 @@ data class DevicePolicyBundle(
                     fortressesConfig = fortressesConfig,
                     selfControlFortressesAllowed = selfControlFortressesAllowed,
                     selfControlFortressUnlockAllowed = selfControlFortressUnlockAllowed,
+                    selfControlOtherSettingsAllowed = selfControlOtherSettingsAllowed,
                     remoteModeUnlockTarget = remoteModeUnlockTarget,
                     remoteModeUnlockRequestedAt = remoteModeUnlockRequestedAt,
                     wardActiveFortressId = wardActiveFortressId,

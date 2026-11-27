@@ -14,6 +14,9 @@ import com.drmohammed.antiporn.testing.FakeTestPartnerDao
 import com.drmohammed.antiporn.ui.control.gate.SelfControlAccessGateRegistry
 import com.drmohammed.antiporn.ui.control.gate.SelfControlSection
 import com.drmohammed.antiporn.ui.control.qr.SelfControlQrManager
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -37,6 +40,13 @@ class EffectiveRestrictionResolverTest {
         resetSingletons()
         context = FakeTestApplicationContext()
         repository = PolicyRepository(context, FakeTestDevicePolicyDao(), FakeTestPartnerDao())
+        runBlocking {
+            withTimeout(5_000L) {
+                while (!repository.isInitialPolicyLoaded) {
+                    delay(5L)
+                }
+            }
+        }
         PolicyRepository.setInstance(repository)
 
         TrustedTimeProvider.elapsedRealtimeProvider = { fakeElapsedMs }

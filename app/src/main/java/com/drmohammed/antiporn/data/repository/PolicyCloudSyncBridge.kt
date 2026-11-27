@@ -295,6 +295,7 @@ internal class PolicyCloudSyncBridge(
             cloudPolicy.selfControlPageShieldAllowed != current.selfControlPageShieldAllowed ||
             cloudPolicy.selfControlFortressesAllowed != current.selfControlFortressesAllowed ||
             cloudPolicy.selfControlFortressUnlockAllowed != current.selfControlFortressUnlockAllowed ||
+            cloudPolicy.selfControlOtherSettingsAllowed != current.selfControlOtherSettingsAllowed ||
             cloudPolicy.fortressesConfig != current.fortressesConfig ||
             cloudPolicy.remoteModeUnlockTarget != current.remoteModeUnlockTarget ||
             cloudPolicy.remoteModeUnlockRequestedAt != current.remoteModeUnlockRequestedAt ||

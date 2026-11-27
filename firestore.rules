@@ -40,8 +40,8 @@ service cloud.firestore {
     function isSelfNewAppDecisionAllowed(wardUid) {
       return isUnsupervisedOwner(wardUid) || (
         exists(/databases/$(database)/documents/policies/$(wardUid)) &&
-        get(/databases/$(database)/documents/policies/$(wardUid)).data.get('isSelfControlAllowed', false) == true &&
-        get(/databases/$(database)/documents/policies/$(wardUid)).data.get('selfControlNewAppsAllowed', false) == true
+        get(/databases/$(database)/documents/policies/$(wardUid)).data.get('isSelfControlAllowed', true) == true &&
+        get(/databases/$(database)/documents/policies/$(wardUid)).data.get('selfControlNewAppsAllowed', true) == true
       );
     }
 
@@ -49,10 +49,10 @@ service cloud.firestore {
     function isSelfAppDecisionAllowed(wardUid) {
       return isUnsupervisedOwner(wardUid) || (
         exists(/databases/$(database)/documents/policies/$(wardUid)) &&
-        get(/databases/$(database)/documents/policies/$(wardUid)).data.get('isSelfControlAllowed', false) == true &&
+        get(/databases/$(database)/documents/policies/$(wardUid)).data.get('isSelfControlAllowed', true) == true &&
         (
-          get(/databases/$(database)/documents/policies/$(wardUid)).data.get('selfControlNewAppsAllowed', false) == true ||
-          get(/databases/$(database)/documents/policies/$(wardUid)).data.get('selfControlAppsAllowed', false) == true
+          get(/databases/$(database)/documents/policies/$(wardUid)).data.get('selfControlNewAppsAllowed', true) == true ||
+          get(/databases/$(database)/documents/policies/$(wardUid)).data.get('selfControlAppsAllowed', true) == true
         )
       );
     }
@@ -127,18 +127,19 @@ service cloud.firestore {
         )) ||
         // Case 3: Ward updates policy when supervised and self-control is explicitly allowed by guardian
         (resource.data.get('guardianUid', null) != null && isOwner(wardUid) &&
-          resource.data.get('isSelfControlAllowed', false) == true &&
+          resource.data.get('isSelfControlAllowed', true) == true &&
           request.resource.data.get('guardianUid', null) == resource.data.get('guardianUid', null) &&
           request.resource.data.get('isSupervised', null) == resource.data.get('isSupervised', null) &&
-          request.resource.data.get('isSelfControlAllowed', false) == resource.data.get('isSelfControlAllowed', false) &&
+          request.resource.data.get('isSelfControlAllowed', true) == resource.data.get('isSelfControlAllowed', true) &&
           request.resource.data.get('selfControlCurfewAllowed', true) == resource.data.get('selfControlCurfewAllowed', true) &&
-          request.resource.data.get('selfControlWebAllowed', false) == resource.data.get('selfControlWebAllowed', false) &&
-          request.resource.data.get('selfControlAppsAllowed', false) == resource.data.get('selfControlAppsAllowed', false) &&
+          request.resource.data.get('selfControlWebAllowed', true) == resource.data.get('selfControlWebAllowed', true) &&
+          request.resource.data.get('selfControlAppsAllowed', true) == resource.data.get('selfControlAppsAllowed', true) &&
           request.resource.data.get('selfControlWaqfaAllowed', true) == resource.data.get('selfControlWaqfaAllowed', true) &&
-          request.resource.data.get('selfControlPageShieldAllowed', false) == resource.data.get('selfControlPageShieldAllowed', false) &&
-          request.resource.data.get('selfControlNewAppsAllowed', false) == resource.data.get('selfControlNewAppsAllowed', false) &&
+          request.resource.data.get('selfControlPageShieldAllowed', true) == resource.data.get('selfControlPageShieldAllowed', true) &&
+          request.resource.data.get('selfControlNewAppsAllowed', true) == resource.data.get('selfControlNewAppsAllowed', true) &&
           request.resource.data.get('selfControlFortressesAllowed', true) == resource.data.get('selfControlFortressesAllowed', true) &&
-          request.resource.data.get('selfControlFortressUnlockAllowed', false) == resource.data.get('selfControlFortressUnlockAllowed', false) &&
+          request.resource.data.get('selfControlFortressUnlockAllowed', true) == resource.data.get('selfControlFortressUnlockAllowed', true) &&
+          request.resource.data.get('selfControlOtherSettingsAllowed', true) == resource.data.get('selfControlOtherSettingsAllowed', true) &&
           (
             resource.data.get('selfControlFortressesAllowed', true) == true ||
             request.resource.data.get('fortressesConfig', null) == resource.data.get('fortressesConfig', null) ||
@@ -163,7 +164,7 @@ service cloud.firestore {
               request.resource.data.get('curfewEndHour', null) == resource.data.get('curfewEndHour', null) &&
               request.resource.data.get('curfewEndMinute', null) == resource.data.get('curfewEndMinute', null) &&
               request.resource.data.get('isCurfewEnabled', null) == resource.data.get('isCurfewEnabled', null) &&
-              request.resource.data.get('isInstantInternetKillEnabled', null) == resource.data.get('isInstantInternetKillEnabled', null) &&
+              request.resource.data.get('isInstantInternetKillEnabled', false) == resource.data.get('isInstantInternetKillEnabled', false) &&
               request.resource.data.get('isWeekendCurfewEnabled', null) == resource.data.get('isWeekendCurfewEnabled', null) &&
               request.resource.data.get('weekendCurfewStartHour', null) == resource.data.get('weekendCurfewStartHour', null) &&
               request.resource.data.get('weekendCurfewStartMinute', null) == resource.data.get('weekendCurfewStartMinute', null) &&
@@ -175,7 +176,7 @@ service cloud.firestore {
             )
           ) &&
           (
-            resource.data.get('selfControlWebAllowed', false) == true ||
+            resource.data.get('selfControlWebAllowed', true) == true ||
             (
               request.resource.data.get('browserFilterMode', null) == resource.data.get('browserFilterMode', null) &&
               request.resource.data.get('isFullSystemFilteringEnabled', null) == resource.data.get('isFullSystemFilteringEnabled', null) &&
@@ -190,7 +191,7 @@ service cloud.firestore {
             )
           ) &&
           (
-            resource.data.get('selfControlAppsAllowed', false) == true ||
+            resource.data.get('selfControlAppsAllowed', true) == true ||
             (
               request.resource.data.get('isScreenAiEnabledGlobally', null) == resource.data.get('isScreenAiEnabledGlobally', null) &&
               request.resource.data.get('customBlacklistPackages', null) == resource.data.get('customBlacklistPackages', null) &&
@@ -204,18 +205,24 @@ service cloud.firestore {
             request.resource.data.get('waqfaConfig', null) == resource.data.get('waqfaConfig', null)
           ) &&
           (
-            resource.data.get('selfControlPageShieldAllowed', false) == true ||
+            resource.data.get('selfControlPageShieldAllowed', true) == true ||
             request.resource.data.get('pageShieldConfig', null) == resource.data.get('pageShieldConfig', null)
           ) &&
           (
-            resource.data.get('selfControlNewAppsAllowed', false) == true ||
+            resource.data.get('selfControlNewAppsAllowed', true) == true ||
             request.resource.data.get('lockNewInstallsUntilApproved', null) == resource.data.get('lockNewInstallsUntilApproved', null)
           ) &&
-          request.resource.data.get('timeZoneId', null) == resource.data.get('timeZoneId', null) &&
+          (
+            resource.data.get('selfControlOtherSettingsAllowed', true) == true ||
+            (
+              request.resource.data.get('timeZoneId', null) == resource.data.get('timeZoneId', null) &&
+              request.resource.data.get('isDateTimeLocked', false) == resource.data.get('isDateTimeLocked', false) &&
+              request.resource.data.get('isClearAppDataAllowed', true) == resource.data.get('isClearAppDataAllowed', true) &&
+              request.resource.data.get('isInstantInternetKillEnabled', false) == resource.data.get('isInstantInternetKillEnabled', false)
+            )
+          ) &&
           request.resource.data.get('remoteModeUnlockTarget', null) == resource.data.get('remoteModeUnlockTarget', null) &&
           request.resource.data.get('remoteModeUnlockRequestedAt', null) == resource.data.get('remoteModeUnlockRequestedAt', null) &&
-          request.resource.data.get('isDateTimeLocked', false) == resource.data.get('isDateTimeLocked', false) &&
-          request.resource.data.get('isClearAppDataAllowed', true) == resource.data.get('isClearAppDataAllowed', true) &&
           request.resource.data.get('breakoutStatus', null) == resource.data.get('breakoutStatus', null) &&
           request.resource.data.get('breakoutRequestedAt', null) == resource.data.get('breakoutRequestedAt', null) &&
           request.resource.data.get('breakoutUnlockAt', null) == resource.data.get('breakoutUnlockAt', null) &&
@@ -328,8 +335,8 @@ service cloud.firestore {
                 isUnsupervisedOwner(wardUid) ||
                 (
                   exists(/databases/$(database)/documents/policies/$(wardUid)) &&
-                  get(/databases/$(database)/documents/policies/$(wardUid)).data.get('isSelfControlAllowed', false) == true &&
-                  get(/databases/$(database)/documents/policies/$(wardUid)).data.get('selfControlAppsAllowed', false) == true
+                  get(/databases/$(database)/documents/policies/$(wardUid)).data.get('isSelfControlAllowed', true) == true &&
+                  get(/databases/$(database)/documents/policies/$(wardUid)).data.get('selfControlAppsAllowed', true) == true
                 )
               )
             )

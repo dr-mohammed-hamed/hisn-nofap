@@ -235,7 +235,14 @@ open class AccountabilityRepository(
             val currentCode = code
 
             try {
-                val currentLocalPolicy = policyDao.getDevicePolicyBlocking()?.toBundle() ?: DevicePolicyBundle.defaultPolicy()
+                var currentLocalPolicy = policyDao.getDevicePolicyBlocking()?.toBundle() ?: DevicePolicyBundle.defaultPolicy()
+                if (!currentLocalPolicy.isSupervised &&
+                    currentLocalPolicy.guardianUid.isNullOrBlank() &&
+                    !currentLocalPolicy.hasAllSelfControlPermissionsEnabled()
+                ) {
+                    currentLocalPolicy = currentLocalPolicy.withAllSelfControlPermissionsEnabled()
+                    PolicyRepository.getInstance(appContext).updateLocalPolicyWithoutEnforcingAndFlush(currentLocalPolicy)
+                }
                 val publishedExpiresAt: Long? = withTimeout(15_000L) {
                     if (attempts == 1) {
                         repositoryScope.launch(Dispatchers.IO) {
@@ -398,6 +405,16 @@ open class AccountabilityRepository(
                     "guardianUid" to myUid,
                     "guardianName" to myDeviceName,
                     "isSupervised" to true,
+                    "isSelfControlAllowed" to true,
+                    "selfControlCurfewAllowed" to true,
+                    "selfControlWebAllowed" to true,
+                    "selfControlAppsAllowed" to true,
+                    "selfControlWaqfaAllowed" to true,
+                    "selfControlPageShieldAllowed" to true,
+                    "selfControlNewAppsAllowed" to true,
+                    "selfControlFortressesAllowed" to true,
+                    "selfControlFortressUnlockAllowed" to true,
+                    "selfControlOtherSettingsAllowed" to true,
                     "pairingCode" to cleanCode,
                     "version" to targetVersion,
                     "updatedAt" to TrustedTimeProvider.currentTimeMillis(appContext)
@@ -438,13 +455,16 @@ open class AccountabilityRepository(
                     ?: policyDao.getDevicePolicyBlocking()?.toBundle()
                     ?: DevicePolicyBundle.defaultPolicy()
 
-                val updatedMyPolicy = basePolicy.copy(
-                    guardianUid = targetUid,
-                    guardianName = targetName,
-                    isSupervised = true,
-                    version = currentVersion + 1,
-                    updatedAt = TrustedTimeProvider.currentTimeMillis(appContext)
-                )
+                val isSameExistingGuardian = isAlreadySupervised && existingGuardian == targetUid
+                val normalizedBase = if (isSameExistingGuardian) basePolicy else basePolicy.withAllSelfControlPermissionsEnabled()
+                val updatedMyPolicy = normalizedBase
+                    .copy(
+                        guardianUid = targetUid,
+                        guardianName = targetName,
+                        isSupervised = true,
+                        version = currentVersion + 1,
+                        updatedAt = TrustedTimeProvider.currentTimeMillis(appContext)
+                    )
                 firestore.collection("policies").document(myUid).set(updatedMyPolicy.toMap(), SetOptions.merge()).await()
                 policyDao.saveDevicePolicyBlocking(DevicePolicyEntity.fromBundle(updatedMyPolicy))
                 PolicyRepository.getInstance(appContext).updateLocalPolicyAndEnforce(updatedMyPolicy)
