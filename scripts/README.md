@@ -15,7 +15,8 @@
 
 | السكربت | لغة التشغيل | الوصف والوظيفة |
 | :--- | :---: | :--- |
-| **`publish_new_release.ps1`** | PowerShell | السكربت الشامل الكل-في-واحد لبناء إصدار إنتاجي جديد: يقوم بتحديث رقم الإصدار، بناء الـ APK عبر Gradle، توقيعه بشجرة التدوير، ورفعه تلقائياً إلى Cloudflare R2. |
+| **`publish_new_release.ps1`** | PowerShell | السكربت الشامل الكل-في-واحد لبناء إصدار إنتاجي جديد: يقوم بتحديث رقم الإصدار، بناء الـ APK عبر Gradle، توقيعه بشجرة التدوير، ورفعه تلقائياً إلى Cloudflare R2 (مع خيار النشر إلى GitHub Releases). |
+| **`publish_github_release.ps1`** | PowerShell | التحقق المسبق من التوقيع الرقمي (v2/v3) والبصمات وبوابة عدم التسريب، وتوليد `checksums.txt` وملاحظات الإصدار، ثم نشر الإصدار على GitHub Releases. |
 | **`deploy_r2_distribution.ps1`** | PowerShell | رفع حزمة التطبيق الموقعة وبيانات الإصدار الوصفية (`version.json`) إلى حاوية Cloudflare R2 المستقلة عبر أداة Wrangler. |
 | **`sign_rotated_release.ps1`** | PowerShell | توقيع حزمة الـ APK باستخدام معيار التوقيع v2/v3 Lineage Rotation لربط المفتاح الجديد بالمفتاح القديم وضمان الترقية الآمنة. |
 | **`create_backup.bat`** | Windows Batch | مشغل نقرة واحدة سريع للمطورين على ويندوز لتشغيل سكربت النسخ الاحتياطي الشامل بسهولة. |
@@ -31,8 +32,21 @@
 ```powershell
 .\scripts\publish_new_release.ps1 -NewVersionCode 19 -NewVersionName "1.80" -ReleaseNotes "تحسينات في الأداء وثبات النظام"
 ```
+وللنشر على Cloudflare R2 و GitHub Releases معاً:
+```powershell
+.\scripts\publish_new_release.ps1 -NewVersionCode 36 -NewVersionName "1.97" -ReleaseNotes "..." -PublishToGitHub
+```
 
-#### 2. إنشاء نسخة احتياطية محلية سريعة:
+#### 2. نشر الإصدار الحالي إلى GitHub Releases (أو المعاينة التجريبية):
+```powershell
+# معاينة آمنة بدون تعديل Git أو GitHub
+.\scripts\publish_github_release.ps1 -DryRun
+
+# النشر الفعلي مع إرفاق الحزمة القياسية antiporn-release.apk
+.\scripts\publish_github_release.ps1 -IncludeCanonicalAsset
+```
+
+#### 3. إنشاء نسخة احتياطية محلية سريعة:
 ```cmd
 .\scripts\create_backup.bat
 ```
