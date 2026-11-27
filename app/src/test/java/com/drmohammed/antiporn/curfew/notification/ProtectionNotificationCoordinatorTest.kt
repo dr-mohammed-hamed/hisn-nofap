@@ -8,6 +8,7 @@ import com.drmohammed.antiporn.HisnDeviceAdminService
 import com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard
 import com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService
 import com.drmohammed.antiporn.curfew.CurfewVpnStateCoordinator
+import com.drmohammed.antiporn.fortress.notification.FortressNotificationReceiver
 import com.drmohammed.antiporn.notification.registry.NotificationRegistry
 import com.drmohammed.antiporn.waqfa.engine.WaqfaNotificationHelper
 import org.junit.After
@@ -32,23 +33,27 @@ class ProtectionNotificationCoordinatorTest {
 
     @Test
     fun testStateHierarchy_GuardianLockdown_HasHighestPriority() {
-        // State 1: Guardian Lockdown active while Nap and Curfew are also true
+        // State 1: Guardian Lockdown active while Curfew and Fortress are also active
         val state = ProtectionNotificationCoordinator.ProtectionState.GuardianLockdown(
             isCurfewAlsoActive = true,
-            isNapAlsoActive = true
+            activeFortressName = "Study Fortress"
         )
         assertTrue(state.isCurfewAlsoActive)
-        assertTrue(state.isNapAlsoActive)
+        assertEquals("Study Fortress", state.activeFortressName)
     }
 
     @Test
-    fun testStateHierarchy_NapActive_HasChronometerData() {
+    fun testStateHierarchy_FortressActive_HasChronometerData() {
         val endWall = 1_700_000_000_000L
         val remaining = 1_800_000L
-        val state = ProtectionNotificationCoordinator.ProtectionState.NapActive(
+        val state = ProtectionNotificationCoordinator.ProtectionState.FortressActive(
+            fortressName = "Emergency Fortress",
+            isEmergency = true,
             endWallMs = endWall,
             remainingMs = remaining
         )
+        assertEquals("Emergency Fortress", state.fortressName)
+        assertTrue(state.isEmergency)
         assertEquals(endWall, state.endWallMs)
         assertEquals(remaining, state.remainingMs)
     }
@@ -64,23 +69,23 @@ class ProtectionNotificationCoordinatorTest {
     }
 
     @Test
-    fun testStateHierarchy_AppsOnlyActive_DistinguishesNapFromCurfew() {
-        val napAppsOnly = ProtectionNotificationCoordinator.ProtectionState.AppsOnlyActive(
-            isNap = true,
+    fun testStateHierarchy_AppsOnlyActive_DistinguishesFortressFromCurfew() {
+        val fortressAppsOnly = ProtectionNotificationCoordinator.ProtectionState.AppsOnlyActive(
+            activeFortressName = "Focus",
             endHour = 0,
             endMinute = 0,
             endWallMs = 123456L
         )
-        assertTrue(napAppsOnly.isNap)
-        assertEquals(123456L, napAppsOnly.endWallMs)
+        assertEquals("Focus", fortressAppsOnly.activeFortressName)
+        assertEquals(123456L, fortressAppsOnly.endWallMs)
 
         val curfewAppsOnly = ProtectionNotificationCoordinator.ProtectionState.AppsOnlyActive(
-            isNap = false,
+            activeFortressName = null,
             endHour = 7,
             endMinute = 0,
             endWallMs = 0L
         )
-        assertFalse(curfewAppsOnly.isNap)
+        assertEquals(null, curfewAppsOnly.activeFortressName)
         assertEquals(7, curfewAppsOnly.endHour)
     }
 
@@ -91,8 +96,11 @@ class ProtectionNotificationCoordinatorTest {
     }
 
     @Test
-    fun testNapNotificationReceiverAction_matchesActionName() {
-        assertEquals("com.drmohammed.antiporn.curfew.ACTION_EXTEND_NAP", NapNotificationReceiver.ACTION_EXTEND_NAP)
+    fun testFortressNotificationReceiverAction_matchesActionName() {
+        assertEquals(
+            "com.drmohammed.antiporn.fortress.ACTION_EXTEND_FORTRESS",
+            FortressNotificationReceiver.ACTION_EXTEND_FORTRESS
+        )
     }
 
     @Test
@@ -111,7 +119,8 @@ class ProtectionNotificationCoordinatorTest {
 
     @Test
     fun testNewCurfewStringResourceDefined() {
-        assertTrue(com.drmohammed.antiporn.R.string.notif_nap_ended_desc_curfew_still_active != 0)
+        assertTrue(com.drmohammed.antiporn.R.string.notif_fortress_ended_desc_curfew_still_active != 0)
+        assertTrue(com.drmohammed.antiporn.R.string.notif_fortress_ended_desc != 0)
         assertTrue(com.drmohammed.antiporn.R.string.info_quiet_channel_name != 0)
         assertTrue(com.drmohammed.antiporn.R.string.info_quiet_channel_desc != 0)
         assertEquals("antiporn_info_quiet", NotificationRegistry.CHANNEL_ID_INFO_QUIET)

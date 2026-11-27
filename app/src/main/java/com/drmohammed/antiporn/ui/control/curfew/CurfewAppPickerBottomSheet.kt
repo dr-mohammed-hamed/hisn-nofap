@@ -62,9 +62,15 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
         super.onViewCreated(view, savedInstanceState)
 
         val isRemote = arguments?.getBoolean(ARG_IS_REMOTE) ?: false
+        val allowNetSelection = arguments?.getBoolean(ARG_ALLOW_NET_SELECTION, true) ?: true
+
+        binding.tvPickerDesc.setText(
+            if (allowNetSelection) R.string.curfew_picker_desc else R.string.curfew_picker_desc_run_only
+        )
 
         adapter = CurfewAppPickerAdapter(
             isLocalMode = !isRemote,
+            allowNetSelection = allowNetSelection,
             onRunToggled = { item, isChecked ->
                 item.isRunAllowed = isChecked
                 if (!isChecked) {
@@ -252,8 +258,13 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
     }
 
     private fun confirmSelection() {
+        val allowNetSelection = arguments?.getBoolean(ARG_ALLOW_NET_SELECTION, true) ?: true
         val newWhitelist = allApps.filter { it.isRunAllowed }.map { it.packageName }.toSet()
-        val newVpnBypass = allApps.filter { it.isRunAllowed && it.isNetAllowed }.map { it.packageName }.toSet()
+        val newVpnBypass = if (allowNetSelection) {
+            allApps.filter { it.isRunAllowed && it.isNetAllowed }.map { it.packageName }.toSet()
+        } else {
+            emptySet()
+        }
 
         val resultBundle = Bundle().apply {
             putStringArrayList(RESULT_WHITELIST, ArrayList(newWhitelist))
@@ -279,13 +290,15 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
         private const val ARG_INITIAL_WHITELIST = "arg_initial_whitelist"
         private const val ARG_INITIAL_VPN_BYPASS = "arg_initial_vpn_bypass"
         private const val ARG_BLACKLIST = "arg_blacklist"
+        private const val ARG_ALLOW_NET_SELECTION = "arg_allow_net_selection"
 
         fun newInstance(
             isRemote: Boolean,
             wardId: String,
             initialWhitelist: Set<String>,
             initialVpnBypass: Set<String>,
-            blacklist: Set<String>
+            blacklist: Set<String>,
+            allowNetSelection: Boolean = true
         ): CurfewAppPickerBottomSheet {
             return CurfewAppPickerBottomSheet().apply {
                 arguments = Bundle().apply {
@@ -294,6 +307,7 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
                     putStringArrayList(ARG_INITIAL_WHITELIST, ArrayList(initialWhitelist))
                     putStringArrayList(ARG_INITIAL_VPN_BYPASS, ArrayList(initialVpnBypass))
                     putStringArrayList(ARG_BLACKLIST, ArrayList(blacklist))
+                    putBoolean(ARG_ALLOW_NET_SELECTION, allowNetSelection)
                 }
             }
         }
@@ -301,6 +315,7 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
 
     class CurfewAppPickerAdapter(
         private val isLocalMode: Boolean,
+        private val allowNetSelection: Boolean,
         private val onRunToggled: (CurfewAppItem, Boolean) -> Unit,
         private val onNetToggled: (CurfewAppItem, Boolean) -> Unit
     ) : RecyclerView.Adapter<CurfewAppPickerAdapter.ViewHolder>() {
@@ -315,8 +330,7 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
                 override fun areItemsTheSame(oldPos: Int, newPos: Int): Boolean =
                     oldItems[oldPos].packageName == newItems[newPos].packageName
                 override fun areContentsTheSame(oldPos: Int, newPos: Int): Boolean =
-                    oldItems[oldPos].packageName == newItems[newPos].packageName &&
-                        oldItems[oldPos].appName == newItems[newPos].appName
+                    oldItems[oldPos] == newItems[newPos]
             })
             items.clear()
             items.addAll(newItems)
@@ -360,9 +374,10 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
 
             binding.cbRun.isChecked = item.isRunAllowed
             binding.cbNet.isChecked = item.isNetAllowed
+            binding.cbNet.visibility = if (allowNetSelection) View.VISIBLE else View.GONE
 
             // Net is enabled only when Run is allowed
-            binding.cbNet.isEnabled = item.isRunAllowed
+            binding.cbNet.isEnabled = allowNetSelection && item.isRunAllowed
             binding.cbNet.alpha = if (item.isRunAllowed) 1.0f else 0.45f
 
             binding.cbRun.setOnCheckedChangeListener { _, isChecked ->

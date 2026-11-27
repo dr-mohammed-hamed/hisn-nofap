@@ -293,6 +293,11 @@ internal class PolicyCloudSyncBridge(
             cloudPolicy.waqfaConfig != current.waqfaConfig ||
             cloudPolicy.pageShieldConfig != current.pageShieldConfig ||
             cloudPolicy.selfControlPageShieldAllowed != current.selfControlPageShieldAllowed ||
+            cloudPolicy.selfControlFortressesAllowed != current.selfControlFortressesAllowed ||
+            cloudPolicy.selfControlFortressUnlockAllowed != current.selfControlFortressUnlockAllowed ||
+            cloudPolicy.fortressesConfig != current.fortressesConfig ||
+            cloudPolicy.remoteModeUnlockTarget != current.remoteModeUnlockTarget ||
+            cloudPolicy.remoteModeUnlockRequestedAt != current.remoteModeUnlockRequestedAt ||
             cloudPolicy.remoteSelfControlResetRequestedAt != current.remoteSelfControlResetRequestedAt ||
             cloudPolicy.remoteTeardownRequestedAt != current.remoteTeardownRequestedAt
     }
@@ -520,7 +525,7 @@ internal class PolicyCloudSyncBridge(
     fun syncPolicyToCloudAsync(uid: String, bundle: DevicePolicyBundle): kotlinx.coroutines.Job? {
         if (uid.isBlank()) return null
         if (!isCloudSyncEnabledProvider()) {
-            Log.d(TAG, "Cloud sync is disabled; skipping syncPolicyToCloudAsync (offline mode)")
+            Timber.tag(TAG).d("Cloud sync is disabled; skipping syncPolicyToCloudAsync (offline mode)")
             return null
         }
         val maskedUid = AiTelemetryReporter.maskIdentifier(uid)
@@ -532,13 +537,13 @@ internal class PolicyCloudSyncBridge(
                             .set(bundle.toMap(), SetOptions.merge())
                             .await()
                         lastSyncedCloudVersion = bundle.version
-                        Log.i(TAG, "Successfully synced policy v${bundle.version} to cloud ($maskedUid)")
+                        Timber.tag(TAG).i("Successfully synced policy v${bundle.version} to cloud ($maskedUid)")
                     } else {
-                        Log.d(TAG, "Skipping cloud sync for stale policy v${bundle.version} (already at v$lastSyncedCloudVersion)")
+                        Timber.tag(TAG).d("Skipping cloud sync for stale policy v${bundle.version} (already at v$lastSyncedCloudVersion)")
                     }
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
-                    Log.w(TAG, "Policy cloud sync deferred (offline or error): ${e.message}")
+                    Timber.tag(TAG).w("Policy cloud sync deferred (offline or error): ${e.message}")
                 }
             }
         }

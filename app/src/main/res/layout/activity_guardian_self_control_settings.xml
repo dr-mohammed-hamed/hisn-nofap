@@ -83,7 +83,7 @@
                             android:layout_marginTop="2dp"
                             android:fontFamily="@font/tajawal"
                             android:text="@string/guardian_self_control_master_switch_desc"
-                            android:textColor="?attr/colorOutline"
+                            android:textColor="?attr/colorOnSurfaceVariant"
                             android:textSize="12sp" />
                     </LinearLayout>
 
@@ -166,7 +166,7 @@
                                 android:layout_marginTop="2dp"
                                 android:fontFamily="@font/tajawal"
                                 android:text="@string/self_control_perm_curfew_desc"
-                                android:textColor="?attr/colorOutline"
+                                android:textColor="?attr/colorOnSurfaceVariant"
                                 android:textSize="11.5sp" />
                         </LinearLayout>
 
@@ -229,7 +229,7 @@
                                 android:layout_marginTop="2dp"
                                 android:fontFamily="@font/tajawal"
                                 android:text="@string/self_control_perm_web_desc"
-                                android:textColor="?attr/colorOutline"
+                                android:textColor="?attr/colorOnSurfaceVariant"
                                 android:textSize="11.5sp" />
                         </LinearLayout>
 
@@ -292,7 +292,7 @@
                                 android:layout_marginTop="2dp"
                                 android:fontFamily="@font/tajawal"
                                 android:text="@string/self_control_perm_apps_desc"
-                                android:textColor="?attr/colorOutline"
+                                android:textColor="?attr/colorOnSurfaceVariant"
                                 android:textSize="11.5sp" />
                         </LinearLayout>
 
@@ -355,7 +355,7 @@
                                 android:layout_marginTop="2dp"
                                 android:fontFamily="@font/tajawal"
                                 android:text="@string/self_control_perm_waqfa_desc"
-                                android:textColor="?attr/colorOutline"
+                                android:textColor="?attr/colorOnSurfaceVariant"
                                 android:textSize="11.5sp" />
                         </LinearLayout>
 
@@ -418,7 +418,7 @@
                                 android:layout_marginTop="2dp"
                                 android:fontFamily="@font/tajawal"
                                 android:text="@string/self_control_perm_page_shield_desc"
-                                android:textColor="?attr/colorOutline"
+                                android:textColor="?attr/colorOnSurfaceVariant"
                                 android:textSize="11.5sp" />
                         </LinearLayout>
 
@@ -434,7 +434,7 @@
                     android:id="@+id/cardPermNewApps"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginBottom="14dp"
+                    android:layout_marginBottom="10dp"
                     android:clickable="true"
                     android:focusable="true"
                     app:cardBackgroundColor="?attr/colorSurfaceContainer"
@@ -481,12 +481,138 @@
                                 android:layout_marginTop="2dp"
                                 android:fontFamily="@font/tajawal"
                                 android:text="@string/self_control_perm_new_apps_desc"
-                                android:textColor="?attr/colorOutline"
+                                android:textColor="?attr/colorOnSurfaceVariant"
                                 android:textSize="11.5sp" />
                         </LinearLayout>
 
                         <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/switchPermNewApps"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <!-- 7. Manage Fortresses Permission -->
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/cardPermFortresses"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="10dp"
+                    android:clickable="true"
+                    android:focusable="true"
+                    app:cardBackgroundColor="?attr/colorSurfaceContainer"
+                    app:cardCornerRadius="18dp"
+                    app:cardElevation="0dp"
+                    app:strokeColor="?attr/colorOutlineVariant"
+                    app:strokeWidth="1dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingHorizontal="16dp"
+                        android:paddingVertical="12dp">
+
+                        <ImageView
+                            android:layout_width="26dp"
+                            android:layout_height="26dp"
+                            android:contentDescription="@null"
+                            android:src="@drawable/ic_shield_time"
+                            app:tint="?attr/colorPrimary" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="14dp"
+                            android:layout_marginEnd="8dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:fontFamily="@font/tajawal"
+                                android:text="@string/self_control_perm_fortresses"
+                                android:textColor="?attr/colorOnSurface"
+                                android:textSize="14sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:fontFamily="@font/tajawal"
+                                android:text="@string/self_control_perm_fortresses_desc"
+                                android:textColor="?attr/colorOnSurfaceVariant"
+                                android:textSize="11.5sp" />
+                        </LinearLayout>
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/switchPermFortresses"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <!-- 8. Allow Fortress & Curfew Unlock Permission -->
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/cardPermFortressUnlock"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="14dp"
+                    android:clickable="true"
+                    android:focusable="true"
+                    app:cardBackgroundColor="?attr/colorSurfaceContainer"
+                    app:cardCornerRadius="18dp"
+                    app:cardElevation="0dp"
+                    app:strokeColor="?attr/colorOutlineVariant"
+                    app:strokeWidth="1dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingHorizontal="16dp"
+                        android:paddingVertical="12dp">
+
+                        <ImageView
+                            android:layout_width="26dp"
+                            android:layout_height="26dp"
+                            android:contentDescription="@null"
+                            android:src="@drawable/ic_lock"
+                            app:tint="?attr/colorPrimary" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="14dp"
+                            android:layout_marginEnd="8dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:fontFamily="@font/tajawal"
+                                android:text="@string/self_control_perm_fortress_unlock"
+                                android:textColor="?attr/colorOnSurface"
+                                android:textSize="14sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:fontFamily="@font/tajawal"
+                                android:text="@string/self_control_perm_fortress_unlock_desc"
+                                android:textColor="?attr/colorOnSurfaceVariant"
+                                android:textSize="11.5sp" />
+                        </LinearLayout>
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/switchPermFortressUnlock"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content" />
                     </LinearLayout>
@@ -527,7 +653,7 @@
                         android:layout_marginBottom="12dp"
                         android:fontFamily="@font/tajawal"
                         android:text="@string/guardian_qr_reset_section_desc"
-                        android:textColor="?attr/colorOutline"
+                        android:textColor="?attr/colorOnSurfaceVariant"
                         android:textSize="12sp" />
 
                     <com.google.android.material.button.MaterialButton

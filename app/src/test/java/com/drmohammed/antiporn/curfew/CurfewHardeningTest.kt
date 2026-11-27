@@ -12,7 +12,7 @@ import java.util.TimeZone
 
 /**
  * Regression tests for Thursday same-day curfew windows, partial-release package tracking,
- * and Nap veto invariants over curfew snooze requests.
+ * and Fortress veto invariants over curfew snooze requests.
  */
 class CurfewHardeningTest {
 
@@ -226,37 +226,36 @@ class CurfewHardeningTest {
     }
 
     @Test
-    fun testCurfewEnforcer_snoozeRejectedWhileNapIsActive() {
+    fun testCurfewEnforcer_snoozeRejectedWhileFortressIsActive() {
         val prefsMap = mutableMapOf<String, InMemoryPrefs>()
         val context = object : ContextWrapper(null) {
             override fun getSharedPreferences(name: String?, mode: Int): SharedPreferences =
                 prefsMap.getOrPut(name ?: "default") { InMemoryPrefs() }
             override fun getApplicationContext(): Context = this
         }
-        val origElapsed = NapController.elapsedProvider
-        val origWall = NapController.wallProvider
-        val origBoot = NapController.bootCountProvider
+        val fortressController = com.drmohammed.antiporn.fortress.engine.FortressSessionController
         try {
-            NapController.elapsedProvider = { 10_000L }
-            NapController.wallProvider = { 1_000_000L }
-            NapController.bootCountProvider = { 1 }
+            fortressController.elapsedProvider = { 10_000L }
+            fortressController.wallProvider = { 1_000_000L }
+            fortressController.bootCountProvider = { 1 }
 
-            NapController.startNap(context)
-            assertTrue(NapController.isNapActive(context))
+            fortressController.startFortress(
+                context,
+                com.drmohammed.antiporn.fortress.model.FortressProfile.defaultEmergency()
+            )
+            assertTrue(fortressController.isFortressActive(context))
             assertFalse(
-                "Curfew snooze must be rejected while Nap session is active",
+                "Curfew snooze must be rejected while Fortress session is active",
                 CurfewEnforcer.snoozeCurfew(context, minutes = 15)
             )
             val curfewPrefs = prefsMap[CurfewConfig.PREFS_NAME]
             assertEquals(
-                "Snooze end timestamp must not be written when Nap vetoes snooze",
+                "Snooze end timestamp must not be written when Fortress vetoes snooze",
                 0L,
                 curfewPrefs?.getLong(CurfewConfig.KEY_CURFEW_SNOOZE_END_WALL, 0L) ?: 0L
             )
         } finally {
-            NapController.elapsedProvider = origElapsed
-            NapController.wallProvider = origWall
-            NapController.bootCountProvider = origBoot
+            fortressController.resetForTesting()
         }
     }
 

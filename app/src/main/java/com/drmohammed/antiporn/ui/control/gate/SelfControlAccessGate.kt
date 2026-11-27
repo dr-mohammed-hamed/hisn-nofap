@@ -2,8 +2,8 @@ package com.drmohammed.antiporn.ui.control.gate
 
 import android.app.Activity
 import android.content.Context
-import android.util.Log
 import com.drmohammed.antiporn.R
+import timber.log.Timber
 
 private const val TAG = "SelfControlGate"
 
@@ -17,7 +17,9 @@ enum class SelfControlSection {
     APP_MANAGER,
     WAQFA,
     PAGE_SHIELD,
-    NEW_APPS
+    NEW_APPS,
+    FORTRESSES,
+    FORTRESS_UNLOCK
 }
 
 /**
@@ -61,7 +63,7 @@ object OpenAccessGate : SelfControlAccessGate {
             val policy = try {
                 com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(activity.applicationContext).getCurrentPolicy()
             } catch (e: Exception) {
-                Log.w(TAG, "[SelfControlDiag] Failed to retrieve local policy in requestAccess", e)
+                Timber.tag(TAG).w(e, "[SelfControlDiag] Failed to retrieve local policy in requestAccess")
                 null
             }
             val msgRes = if (policy?.isSupervised == true && !policy.isSelfControlAllowed) {
@@ -97,7 +99,7 @@ object SelfControlAccessGateRegistry {
         val policy = try {
             com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(context.applicationContext).getCurrentPolicy()
         } catch (e: Exception) {
-            Log.w(TAG, "[SelfControlDiag] Failed retrieving local policy in isSelfControlPermitted", e)
+            Timber.tag(TAG).w(e, "[SelfControlDiag] Failed retrieving local policy in isSelfControlPermitted")
             null
         }
 
@@ -105,7 +107,9 @@ object SelfControlAccessGateRegistry {
         val isAllowed = policy?.isSelfControlAllowed ?: true
         val permitted = if (isSupervised) isAllowed else true
 
-        Log.i(TAG, "[SelfControlDiag] isSelfControlPermitted evaluated: isSupervised=$isSupervised (policySupervised=${policy?.isSupervised}, hasGuardianUid=${!policy?.guardianUid.isNullOrBlank()}), isSelfControlAllowed=$isAllowed => PERMITTED=$permitted")
+        Timber.tag(TAG).i(
+            "[SelfControlDiag] isSelfControlPermitted evaluated: isSupervised=$isSupervised (policySupervised=${policy?.isSupervised}, hasGuardianUid=${!policy?.guardianUid.isNullOrBlank()}), isSelfControlAllowed=$isAllowed => PERMITTED=$permitted"
+        )
         return permitted
     }
 
@@ -116,11 +120,11 @@ object SelfControlAccessGateRegistry {
         val policy = try {
             com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(context.applicationContext).getCurrentPolicy()
         } catch (e: Exception) {
-            Log.w(TAG, "[SelfControlDiag] Failed retrieving local policy in isSectionPermitted", e)
+            Timber.tag(TAG).w(e, "[SelfControlDiag] Failed retrieving local policy in isSectionPermitted")
             null
         }
         val permitted = isSectionPermitted(policy, section)
-        Log.i(TAG, "[SelfControlDiag] isSectionPermitted evaluated for $section => PERMITTED=$permitted")
+        Timber.tag(TAG).i("[SelfControlDiag] isSectionPermitted evaluated for $section => PERMITTED=$permitted")
         return permitted
     }
 
@@ -137,6 +141,8 @@ object SelfControlAccessGateRegistry {
             SelfControlSection.WAQFA -> policy.selfControlWaqfaAllowed
             SelfControlSection.PAGE_SHIELD -> policy.selfControlPageShieldAllowed
             SelfControlSection.NEW_APPS -> policy.selfControlNewAppsAllowed
+            SelfControlSection.FORTRESSES -> policy.selfControlFortressesAllowed
+            SelfControlSection.FORTRESS_UNLOCK -> policy.selfControlFortressUnlockAllowed
         }
     }
 
@@ -149,18 +155,20 @@ object SelfControlAccessGateRegistry {
             override fun canAccess(context: Context): Boolean {
                 val permitted = isSelfControlPermitted(context)
                 val delegateAllowed = if (permitted) delegate.canAccess(context) else false
-                Log.i(TAG, "[SelfControlDiag] Gate (${delegate.gateId}) canAccess: permitted=$permitted, delegateAllowed=$delegateAllowed")
+                Timber.tag(TAG).i(
+                    "[SelfControlDiag] Gate (${delegate.gateId}) canAccess: permitted=$permitted, delegateAllowed=$delegateAllowed"
+                )
                 return permitted && delegateAllowed
             }
 
             override fun requestAccess(activity: Activity, onGranted: () -> Unit) {
                 val permitted = isSelfControlPermitted(activity)
-                Log.i(TAG, "[SelfControlDiag] Gate (${delegate.gateId}) requestAccess: permitted=$permitted")
+                Timber.tag(TAG).i("[SelfControlDiag] Gate (${delegate.gateId}) requestAccess: permitted=$permitted")
                 if (!permitted) {
                     val policy = try {
                         com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(activity.applicationContext).getCurrentPolicy()
                     } catch (e: Exception) {
-                        Log.w(TAG, "[SelfControlDiag] Failed to retrieve local policy in requestAccess", e)
+                        Timber.tag(TAG).w(e, "[SelfControlDiag] Failed to retrieve local policy in requestAccess")
                         null
                     }
                     val msgRes = if (policy?.isSupervised == true && !policy.isSelfControlAllowed) {

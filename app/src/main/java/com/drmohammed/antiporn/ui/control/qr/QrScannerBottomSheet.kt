@@ -275,6 +275,7 @@ class QrScannerBottomSheet : BottomSheetDialogFragment() {
                             reqKey,
                             Bundle().apply {
                                 putBoolean(RESULT_KEY_VERIFIED, true)
+                                putString(RESULT_KEY_SCANNED_TOKEN, token)
                                 if (payload != null) putString(RESULT_KEY_PAYLOAD, payload)
                             }
                         )
@@ -475,6 +476,7 @@ class QrScannerBottomSheet : BottomSheetDialogFragment() {
         const val RESULT_KEY_VERIFIED = "result_key_verified"
         const val RESULT_KEY_EMERGENCY_BYPASS = "result_key_emergency_bypass"
         const val RESULT_KEY_PAYLOAD = "result_key_payload"
+        const val RESULT_KEY_SCANNED_TOKEN = "result_key_scanned_token"
 
         fun newInstance(requestKey: String? = null, payload: String? = null): QrScannerBottomSheet {
             return QrScannerBottomSheet().apply {

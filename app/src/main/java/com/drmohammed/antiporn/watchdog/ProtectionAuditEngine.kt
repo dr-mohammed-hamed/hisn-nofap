@@ -18,6 +18,7 @@ import com.drmohammed.antiporn.curfew.CurfewEnforcer
 import com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge
 import com.drmohammed.antiporn.data.repository.ApprovalRepository
 import com.drmohammed.antiporn.data.repository.PolicyRepository
+import com.drmohammed.antiporn.fortress.engine.EffectiveRestrictionResolver
 import com.drmohammed.antiporn.notification.manager.AppNotificationManager
 import com.drmohammed.antiporn.notification.model.NotificationActionType
 import com.drmohammed.antiporn.notification.model.NotificationCategory
@@ -54,12 +55,20 @@ internal object ProtectionAuditEngine {
             return
         }
 
-        val shouldBlockBeActive = CurfewEnforcer.isEffectiveBlockActive(appContext)
+        val effectiveProfile = EffectiveRestrictionResolver.resolve(appContext)
         val wasBlockEnforced = CurfewConfig.isLastBlockEnforced(appContext)
-        if (shouldBlockBeActive != wasBlockEnforced) {
-            Timber.tag(TAG).i("Scheduled block transition pending ($wasBlockEnforced -> $shouldBlockBeActive). Reconciling.")
-            CurfewEnforcer.syncBlockState(appContext)
-            if (ProtectionTransitionGuard.isWithinSettleWindow()) {
+        val signatureMismatch = effectiveProfile.isBlockActive &&
+            CurfewConfig.getLastAppliedEffectiveSignature(appContext) != effectiveProfile.signature
+        if (effectiveProfile.isBlockActive != wasBlockEnforced || signatureMismatch) {
+            Timber.tag(TAG).i(
+                "Scheduled/effective block transition pending (enforced=%b -> active=%b, sigMismatch=%b). Reconciling.",
+                wasBlockEnforced,
+                effectiveProfile.isBlockActive,
+                signatureMismatch
+            )
+            val stateTransitioned = effectiveProfile.isBlockActive != wasBlockEnforced
+            val synced = CurfewEnforcer.syncBlockState(appContext)
+            if (stateTransitioned && synced && ProtectionTransitionGuard.isWithinSettleWindow()) {
                 Timber.tag(TAG).d("Curfew reconciliation triggered internal transition. Postponing watchdog audit...")
                 scheduleCheck(3500L)
                 return

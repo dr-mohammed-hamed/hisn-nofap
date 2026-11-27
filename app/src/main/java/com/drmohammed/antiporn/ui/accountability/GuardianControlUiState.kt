@@ -45,6 +45,12 @@ data class GuardianControlUiState(
     val wardCapabilitiesUpdatedAt: Long = 0L,
     val wardA11yTamperAt: Long = 0L,
     val wardSdkInt: Int? = null,
+    val wardActiveFortressId: String? = null,
+    val wardActiveFortressName: String? = null,
+    val wardActiveFortressIsEmergency: Boolean = false,
+    val wardActiveFortressEndsAtWall: Long = 0L,
+    val wardIsCurfewActiveNow: Boolean = false,
+    val wardActiveModesUpdatedAt: Long = 0L,
     val errorMessage: String? = null
 ) {
     val hasUnsavedChanges: Boolean
@@ -79,9 +85,6 @@ data class GuardianControlUiState(
                     currentPolicy.waqfaConfig != initial.waqfaConfig ||
                     currentPolicy.customAiScanPackages != initial.customAiScanPackages
         }
-
-    val isSaveEnabled: Boolean
-        get() = hasUnsavedChanges && !isSaving && !isLoading
 }
 
 /**
@@ -90,8 +93,6 @@ data class GuardianControlUiState(
 sealed interface GuardianControlEvent {
     data class ShowToastRes(val resId: Int, val isLong: Boolean = false) : GuardianControlEvent
     data class ShowToastString(val message: String, val isLong: Boolean = false) : GuardianControlEvent
-    data class DnsValidationError(val titleRes: Int, val message: String) : GuardianControlEvent
-    object SaveSuccess : GuardianControlEvent
     data object WardTeardownCompleted : GuardianControlEvent
     data object SupervisionEnded : GuardianControlEvent
 }

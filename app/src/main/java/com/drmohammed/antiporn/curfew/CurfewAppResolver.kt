@@ -11,80 +11,65 @@ import android.provider.ContactsContract
 import android.provider.MediaStore
 import android.provider.Telephony
 import android.telecom.TelecomManager
-import android.util.Log
 import android.view.inputmethod.InputMethodManager
+import androidx.annotation.VisibleForTesting
 import com.drmohammed.antiporn.core.policy.AppPolicyRegistry
+import com.drmohammed.antiporn.data.repository.PolicyRepository
+import com.drmohammed.antiporn.fortress.engine.EffectiveRestrictionResolver
+import com.drmohammed.antiporn.fortress.model.EffectiveRestrictionProfile
+import timber.log.Timber
 
 /**
- * Resolves packages to suspend during night curfew while safeguarding essential
- * system services, user whitelisted productivity apps, dialer, camera, keyboards,
- * and dynamically detecting all Quran, Islamic, and Athan apps on the device.
+ * Resolves packages to suspend during active curfew/fortress windows while safeguarding
+ * essential device services (launcher, dialer, SMS, IME, camera, contacts, clock) and
+ * combining them with the non-cached user allowances from [EffectiveRestrictionResolver].
  */
 object CurfewAppResolver {
 
     private const val TAG = "AntiPorn_CurfewResolver"
     private val TOKEN_DELIMITER_REGEX = Regex("[\\s_.,;:!?/()\\[\\]\\-]+")
 
-    @Volatile
-    private var cachedCoreCriticalPackages: Set<String>? = null
-    @Volatile
-    private var lastCoreCriticalCacheMs: Long = 0L
-    private const val CORE_CRITICAL_CACHE_TTL_MS = 60_000L // 60s TTL
+    private data class PackageCacheEntry(
+        val packages: Set<String>,
+        val cachedAtElapsedMs: Long
+    )
 
     @Volatile
-    private var cachedImmunePackages: Set<String>? = null
-    @Volatile
-    private var lastImmuneCacheMs: Long = 0L
-    private const val IMMUNE_CACHE_TTL_MS = 30_000L // 30s TTL
+    private var coreCriticalCache: PackageCacheEntry? = null
+    private const val CORE_CRITICAL_CACHE_TTL_MS = 60_000L
 
-    /**
-     * Invalidates in-memory caches when packages change or policy updates.
-     */
+    @Volatile
+    private var essentialImmuneCache: PackageCacheEntry? = null
+    private const val ESSENTIAL_IMMUNE_CACHE_TTL_MS = 30_000L
+
+    @VisibleForTesting
+    internal var elapsedRealtimeProvider: () -> Long = { SystemClock.elapsedRealtime() }
+
     @Synchronized
     fun invalidateCache() {
-        cachedCoreCriticalPackages = null
-        cachedImmunePackages = null
-        lastCoreCriticalCacheMs = 0L
-        lastImmuneCacheMs = 0L
+        coreCriticalCache = null
+        essentialImmuneCache = null
     }
 
-    /**
-     * Dynamically identifies if an installed application is a Quran, Islamic, Prayer, or Athan app
-     * by evaluating both its package name and human-readable localized application label.
-     */
     fun isIslamicOrQuranApp(pm: PackageManager, appInfo: ApplicationInfo): Boolean {
         val pkg = appInfo.packageName.lowercase()
-        val islamicPkgKeywords = listOf(
-            "quran", "moshaf", "mushaf", "koran", "furqan",
-            "surah", "tilawat", "athkar", "azkar", "athan", "adthan",
-            "islam", "tafsir", "hadith", "sunnah", "muslim", "alroqia",
-            "hisn", "zekr", "dhikr", "salat", "namaz"
+        val keywords = listOf(
+            "quran", "moshaf", "mushaf", "koran", "furqan", "surah", "tilawat",
+            "athkar", "azkar", "athan", "adthan", "islam", "tafsir", "hadith",
+            "sunnah", "muslim", "alroqia", "hisn", "zekr", "dhikr", "salat", "namaz"
         )
-        if (islamicPkgKeywords.any { pkg.contains(it) }) {
-            return true
-        }
-
-        val label = try {
-            pm.getApplicationLabel(appInfo).toString().lowercase()
-        } catch (e: Exception) {
-            ""
-        }
-        val labelTokens = label.split(TOKEN_DELIMITER_REGEX).filter { it.isNotBlank() }
+        if (keywords.any { pkg.contains(it) }) return true
+        val label = readAppLabelLower(pm, appInfo)
+        val tokens = label.split(TOKEN_DELIMITER_REGEX).filter { it.isNotBlank() }
         val islamicTokens = setOf(
-            "قرآن", "قران", "مصحف", "آية", "اية", "أذكار", "اذكار",
-            "تفسير", "أذان", "اذان", "صلاة", "quran",
-            "mushaf", "ayah", "athan", "azkar", "athkar", "tafsir",
-            "hadith", "islamic", "muslim"
+            "قرآن", "قران", "مصحف", "آية", "اية", "أذكار", "اذكار", "تفسير",
+            "أذان", "اذان", "صلاة", "quran", "mushaf", "ayah", "athan", "azkar",
+            "athkar", "tafsir", "hadith", "islamic", "muslim"
         )
-        if (labelTokens.any { islamicTokens.contains(it) }) return true
-
-        val islamicPhrases = listOf("حصن المسلم", "القرآن الكريم", "المصحف الشريف", "تفسير القرآن")
-        return islamicPhrases.any { label.contains(it) }
+        if (tokens.any { islamicTokens.contains(it) }) return true
+        return listOf("حصن المسلم", "القرآن الكريم", "المصحف الشريف", "تفسير القرآن").any { label.contains(it) }
     }
 
-    /**
-     * Dynamically identifies if an application is an audiobook, podcast, or spoken audio player.
-     */
     fun isAudiobookOrPodcastApp(pm: PackageManager, appInfo: ApplicationInfo): Boolean {
         val pkg = appInfo.packageName.lowercase()
         val keywords = listOf(
@@ -92,245 +77,205 @@ object CurfewAppResolver {
             "pocketcasts", "storytel", "wajeez", "akhdar", "abjjad", "rufoof", "dhad"
         )
         if (keywords.any { pkg.contains(it) }) return true
-
-        val label = try { pm.getApplicationLabel(appInfo).toString().lowercase() } catch (e: Exception) { "" }
-        val labelTokens = label.split(TOKEN_DELIMITER_REGEX).filter { it.isNotBlank() }
+        val label = readAppLabelLower(pm, appInfo)
+        val tokens = label.split(TOKEN_DELIMITER_REGEX).filter { it.isNotBlank() }
         val audioTokens = setOf("بودكاست", "audiobook", "podcast", "podcasts", "audiobooks")
-        if (labelTokens.any { audioTokens.contains(it) }) return true
-
-        val phrases = listOf("كتب صوتية", "كتب صوتيه", "كتاب صوتي")
-        return phrases.any { label.contains(it) }
+        if (tokens.any { audioTokens.contains(it) }) return true
+        return listOf("كتب صوتية", "كتب صوتيه", "كتاب صوتي").any { label.contains(it) }
     }
 
-    /**
-     * Dynamically identifies if an application is a medical, pediatric dose, or study/clinical reference app.
-     */
     fun isMedicalOrStudyApp(pm: PackageManager, appInfo: ApplicationInfo): Boolean {
         val pkg = appInfo.packageName.lowercase()
         val keywords = listOf(
-            "pedidose", "pedi_dose", "pediatric", "medscape", "uptodate", "lexicomp",
-            "sanford", "pharma", "clinical", "medical"
+            "pedidose", "pedi_dose", "pediatric", "medscape", "uptodate",
+            "lexicomp", "sanford", "pharma", "clinical", "medical"
         )
         if (keywords.any { pkg.contains(it) }) return true
-
-        val label = try { pm.getApplicationLabel(appInfo).toString().lowercase() } catch (e: Exception) { "" }
-        val labelTokens = label.split(TOKEN_DELIMITER_REGEX).filter { it.isNotBlank() }
-        val exactMatchTokens = setOf(
-            "جرعات", "أدوية", "ادوية", "طبي", "طبية", "صيدلة", "medical", "pharma", "pediatric", "pedidose"
+        val label = readAppLabelLower(pm, appInfo)
+        val tokens = label.split(TOKEN_DELIMITER_REGEX).filter { it.isNotBlank() }
+        val exactTokens = setOf(
+            "جرعات", "أدوية", "ادوية", "طبي", "طبية", "صيدلة",
+            "medical", "pharma", "pediatric", "pedidose"
         )
-        if (labelTokens.any { exactMatchTokens.contains(it) }) return true
-
-        val phrases = listOf("جرعات الأطفال", "مرجع طبي", "معجم طبي")
-        return phrases.any { label.contains(it) }
+        if (tokens.any { exactTokens.contains(it) }) return true
+        return listOf("جرعات الأطفال", "مرجع طبي", "معجم طبي").any { label.contains(it) }
     }
 
-    /**
-     * Dynamically identifies if an application is an alternative YouTube player, NewPipe client/fork, or local media player.
-     */
     fun isMediaOrAlternativePlayerApp(pm: PackageManager, appInfo: ApplicationInfo): Boolean {
         val pkg = appInfo.packageName.lowercase()
         val keywords = listOf("newpipe", "puretube", "tubular", "musicolet", "mxtech", "mxplayer")
         if (keywords.any { pkg.contains(it) }) return true
+        val label = readAppLabelLower(pm, appInfo)
+        val tokens = label.split(TOKEN_DELIMITER_REGEX).filter { it.isNotBlank() }
+        if (tokens.any { setOf("newpipe", "puretube", "tubular", "mxplayer").contains(it) }) return true
+        return listOf("mx player", "مشغل mx").any { label.contains(it) }
+    }
 
-        val label = try { pm.getApplicationLabel(appInfo).toString().lowercase() } catch (e: Exception) { "" }
-        val labelTokens = label.split(TOKEN_DELIMITER_REGEX).filter { it.isNotBlank() }
-        val playerTokens = setOf("newpipe", "puretube", "tubular", "mxplayer")
-        if (labelTokens.any { playerTokens.contains(it) }) return true
-
-        val mediaPhrases = listOf("mx player", "مشغل mx")
-        return mediaPhrases.any { label.contains(it) }
+    private fun readAppLabelLower(pm: PackageManager, appInfo: ApplicationInfo): String = try {
+        pm.getApplicationLabel(appInfo).toString().lowercase()
+    } catch (_: Exception) {
+        ""
     }
 
     /**
-     * Resolves all system immune packages dynamically (keyboards, launcher, dialer, camera, SMS, contacts, clock, and whitelisted/exempt packages).
+     * Resolves and caches ONLY essential device packages (system critical, self, launcher,
+     * keyboards, dialer, SMS, camera excluding galleries, contacts, clocks & alarms),
+     * minus custom blacklist, known app stores, and curfew search loophole apps.
      */
-    fun resolveImmunePackages(context: Context, forceRefresh: Boolean = false): Set<String> {
-        val now = SystemClock.elapsedRealtime()
-        val cached = cachedImmunePackages
-        if (!forceRefresh && cached != null && (now - lastImmuneCacheMs < IMMUNE_CACHE_TTL_MS)) {
-            return cached
+    fun resolveEssentialImmunePackages(context: Context, forceRefresh: Boolean = false): Set<String> {
+        val essentials = getOrComputeRawEssentialPackages(context, forceRefresh)
+        val customBlacklist = readCustomBlacklistSafely(context)
+        return (essentials - customBlacklist - CurfewConfig.KNOWN_APP_STORES - CurfewConfig.CURFEW_SEARCH_APPS)
+    }
+
+    /**
+     * Combines cached essential device exemptions with instantaneous (uncached) user allowances
+     * from [EffectiveRestrictionResolver.resolve].
+     */
+    fun resolveImmunePackages(context: Context, forceRefresh: Boolean = false): Set<String> =
+        resolveImmunePackages(context, EffectiveRestrictionResolver.resolve(context), forceRefresh)
+
+    /**
+     * Overload accepting a precomputed [EffectiveRestrictionProfile] to avoid duplicate policy resolution.
+     */
+    fun resolveImmunePackages(
+        context: Context,
+        effectiveProfile: EffectiveRestrictionProfile,
+        forceRefresh: Boolean = false
+    ): Set<String> {
+        val essentials = resolveEssentialImmunePackages(context, forceRefresh)
+        val customBlacklist = readCustomBlacklistSafely(context)
+        return (essentials + effectiveProfile.effectiveAllowedUserApps) -
+            customBlacklist -
+            CurfewConfig.KNOWN_APP_STORES -
+            CurfewConfig.CURFEW_SEARCH_APPS
+    }
+
+    private fun getOrComputeRawEssentialPackages(context: Context, forceRefresh: Boolean): Set<String> {
+        val now = elapsedRealtimeProvider()
+        val entry = essentialImmuneCache
+        if (!forceRefresh && entry != null && (now - entry.cachedAtElapsedMs < ESSENTIAL_IMMUNE_CACHE_TTL_MS)) {
+            return entry.packages
         }
 
         val immune = mutableSetOf<String>()
         val pm = context.packageManager
 
-        // 1. Static Critical & Self Package
         immune.addAll(CurfewConfig.SYSTEM_CRITICAL_PACKAGES)
         immune.add(context.packageName)
 
-        // 2. User Curfew Whitelist from Policy (authoritative Single Source of Truth)
-        val customBlacklist = try {
-            com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(context)
-                .getCurrentPolicy().customBlacklistPackages
-        } catch (e: Exception) {
-            Log.w(TAG, "Error querying customBlacklistPackages", e)
-            emptySet()
-        }
-
-        try {
-            val customWhitelist = com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(context)
-                .getCurrentPolicy().customCurfewWhitelistPackages
-            immune.addAll(customWhitelist - customBlacklist)
-        } catch (e: Exception) {
-            Log.w(TAG, "Error querying customCurfewWhitelistPackages, falling back to static whitelist", e)
-            immune.addAll(CurfewConfig.STATIC_WHITELIST - customBlacklist)
-        }
-
-        // 3. Default Home Launcher
+        // Default Home Launcher
         try {
             val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-            val homeInfo = pm.resolveActivity(homeIntent, PackageManager.MATCH_DEFAULT_ONLY)
-            homeInfo?.activityInfo?.packageName?.let {
-                immune.add(it)
-                Log.d(TAG, "Resolved home launcher: $it")
-            }
+            pm.resolveActivity(homeIntent, PackageManager.MATCH_DEFAULT_ONLY)
+                ?.activityInfo?.packageName?.let { immune.add(it) }
         } catch (e: Exception) {
-            Log.w(TAG, "Error resolving home launcher", e)
+            Timber.tag(TAG).w(e, "Error resolving home launcher")
         }
 
-        // 4. Input Method Editors (Keyboards: Gboard, SwiftKey, FlorisBoard, etc.)
+        // Input Method Editors (Keyboards)
         try {
             val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-            imm?.inputMethodList?.forEach { imi ->
-                val pkg = imi.packageName
-                immune.add(pkg)
-                Log.d(TAG, "Resolved keyboard IME: $pkg")
-            }
+            imm?.inputMethodList?.forEach { immune.add(it.packageName) }
         } catch (e: Exception) {
-            Log.w(TAG, "Error resolving input methods", e)
+            Timber.tag(TAG).w(e, "Error resolving input methods")
         }
 
-        // 5. Default Dialer (Phone)
+        // Default Dialer (Phone)
         try {
             val telecom = context.getSystemService(Context.TELECOM_SERVICE) as? TelecomManager
-            telecom?.defaultDialerPackage?.let {
-                immune.add(it)
-                Log.d(TAG, "Resolved default dialer: $it")
-            }
-            val dialIntent = Intent(Intent.ACTION_DIAL)
-            val dialResolve = pm.resolveActivity(dialIntent, PackageManager.MATCH_DEFAULT_ONLY)
-            dialResolve?.activityInfo?.packageName?.let { immune.add(it) }
+            telecom?.defaultDialerPackage?.let { immune.add(it) }
+            pm.resolveActivity(Intent(Intent.ACTION_DIAL), PackageManager.MATCH_DEFAULT_ONLY)
+                ?.activityInfo?.packageName?.let { immune.add(it) }
         } catch (e: Exception) {
-            Log.w(TAG, "Error resolving dialer", e)
+            Timber.tag(TAG).w(e, "Error resolving dialer")
         }
 
-        // 6. Default SMS / Messages
+        // Default SMS / Messages
         try {
-            Telephony.Sms.getDefaultSmsPackage(context)?.let {
-                immune.add(it)
-                Log.d(TAG, "Resolved default SMS: $it")
-            }
+            Telephony.Sms.getDefaultSmsPackage(context)?.let { immune.add(it) }
         } catch (e: Exception) {
-            Log.w(TAG, "Error resolving SMS package", e)
+            Timber.tag(TAG).w(e, "Error resolving SMS package")
         }
 
-        // 7. Camera Apps (STRICTLY excluding Gallery apps)
+        // Camera Apps (strictly excluding Gallery apps)
         try {
-            val cameraIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-            val cameraActivities = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                pm.queryIntentActivities(cameraIntent, PackageManager.ResolveInfoFlags.of(0))
-            } else {
-                @Suppress("DEPRECATION")
-                pm.queryIntentActivities(cameraIntent, 0)
-            }
+            val cameraActivities = queryIntentActivitiesCompat(pm, Intent(MediaStore.ACTION_IMAGE_CAPTURE))
             for (resolveInfo in cameraActivities) {
                 val pkg = resolveInfo.activityInfo.packageName
                 if (!CurfewConfig.EXCLUDED_GALLERY_PACKAGES.contains(pkg)) {
                     immune.add(pkg)
-                    Log.d(TAG, "Resolved camera package: $pkg")
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Error resolving camera packages", e)
+            Timber.tag(TAG).w(e, "Error resolving camera packages")
         }
 
-        // 8. Contacts Provider / App
+        // Contacts Provider / App
         try {
             val contactsIntent = Intent(Intent.ACTION_VIEW, ContactsContract.Contacts.CONTENT_URI)
-            val contactsActivities = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                pm.queryIntentActivities(contactsIntent, PackageManager.ResolveInfoFlags.of(0))
-            } else {
-                @Suppress("DEPRECATION")
-                pm.queryIntentActivities(contactsIntent, 0)
-            }
-            for (resolveInfo in contactsActivities) {
+            for (resolveInfo in queryIntentActivitiesCompat(pm, contactsIntent)) {
                 immune.add(resolveInfo.activityInfo.packageName)
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Error resolving contacts packages", e)
+            Timber.tag(TAG).w(e, "Error resolving contacts packages")
         }
 
-        // 9. Clocks & Alarms (Unconditionally immune to guarantee morning wakeups and alarms)
+        // Clocks & Alarms
         try {
             immune.addAll(CurfewConfig.KNOWN_CLOCK_PACKAGES)
-            val clockIntent = Intent(AlarmClock.ACTION_SHOW_ALARMS)
-            val clockResolveInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                pm.resolveActivity(clockIntent, PackageManager.ResolveInfoFlags.of(0))
-            } else {
-                @Suppress("DEPRECATION")
-                pm.resolveActivity(clockIntent, 0)
-            }
-            clockResolveInfo?.activityInfo?.packageName?.let { immune.add(it) }
+            val clockResolve = resolveActivityCompat(pm, Intent(AlarmClock.ACTION_SHOW_ALARMS))
+            clockResolve?.activityInfo?.packageName?.let { immune.add(it) }
         } catch (e: Exception) {
-            Log.w(TAG, "Error resolving clock packages", e)
+            Timber.tag(TAG).w(e, "Error resolving clock packages")
         }
-
-        // 10. Check installed packages against AppPolicyRegistry.isExemptFromCurfew(pkg)
-        // to ensure wildcard rules (e.g. "com.dr.tech.*", "org.schabi.newpipe.*") and policy exemptions are respected
-        try {
-            val installedApps = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0))
-            } else {
-                @Suppress("DEPRECATION")
-                pm.getInstalledApplications(0)
-            }
-            for (app in installedApps) {
-                val pkg = app.packageName
-                if (AppPolicyRegistry.isExemptFromCurfew(pkg)) {
-                    immune.add(pkg)
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error checking installed packages for curfew exemption", e)
-        }
-
-        // Strictly ensure no custom blacklisted, app store, or curfew search loophole package ever gains immunity
-        immune.removeAll(customBlacklist)
-        immune.removeAll(CurfewConfig.KNOWN_APP_STORES)
-        immune.removeAll(CurfewConfig.CURFEW_SEARCH_APPS)
 
         val result = immune.toSet()
-        cachedImmunePackages = result
-        lastImmuneCacheMs = SystemClock.elapsedRealtime()
+        essentialImmuneCache = PackageCacheEntry(result, elapsedRealtimeProvider())
         return result
     }
 
-    /**
-     * Determines all installed user applications that must be suspended during curfew.
-     * Encompasses all launchable activities, user-installed non-system apps, and Play Store / OEM App Stores.
-     */
-    fun getCurfewTargetPackages(context: Context): Set<String> {
-        val pm = context.packageManager
-        val immunePackages = resolveImmunePackages(context)
-        val targets = mutableSetOf<String>()
+    private fun readCustomBlacklistSafely(context: Context): Set<String> = try {
+        PolicyRepository.getInstance(context).getCurrentPolicy().customBlacklistPackages
+    } catch (e: Exception) {
+        Timber.tag(TAG).w(e, "Error querying customBlacklistPackages")
+        emptySet()
+    }
 
-        // 1. All Launchable Applications
-        try {
-            val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
-                addCategory(Intent.CATEGORY_LAUNCHER)
-            }
-            val launchablePackages = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                pm.queryIntentActivities(mainIntent, PackageManager.ResolveInfoFlags.of(0))
-            } else {
-                @Suppress("DEPRECATION")
-                pm.queryIntentActivities(mainIntent, 0)
-            }.map { it.activityInfo.packageName }
-            targets.addAll(launchablePackages)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error querying launchable activities", e)
+    private fun queryIntentActivitiesCompat(pm: PackageManager, intent: Intent) =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            pm.queryIntentActivities(intent, PackageManager.ResolveInfoFlags.of(0))
+        } else {
+            @Suppress("DEPRECATION")
+            pm.queryIntentActivities(intent, 0)
         }
 
-        // 2. All User-Installed Applications (Non-system 3rd party apps, including newly installed ones)
+    private fun resolveActivityCompat(pm: PackageManager, intent: Intent) =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            pm.resolveActivity(intent, PackageManager.ResolveInfoFlags.of(0))
+        } else {
+            @Suppress("DEPRECATION")
+            pm.resolveActivity(intent, 0)
+        }
+
+    /**
+     * Determines all installed user applications that must be suspended under [effectiveProfile].
+     */
+    fun getCurfewTargetPackages(
+        context: Context,
+        effectiveProfile: EffectiveRestrictionProfile = EffectiveRestrictionResolver.resolve(context)
+    ): Set<String> {
+        val pm = context.packageManager
+        val immunePackages = resolveImmunePackages(context, effectiveProfile)
+        val targets = mutableSetOf<String>()
+
+        try {
+            val mainIntent = Intent(Intent.ACTION_MAIN, null).addCategory(Intent.CATEGORY_LAUNCHER)
+            targets.addAll(queryIntentActivitiesCompat(pm, mainIntent).map { it.activityInfo.packageName })
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "Error querying launchable activities")
+        }
+
         try {
             val installedApps = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0))
@@ -346,101 +291,72 @@ object CurfewAppResolver {
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error querying installed applications", e)
+            Timber.tag(TAG).e(e, "Error querying installed applications")
         }
 
-        // 3. OEM App Stores (Realme Market, Xiaomi, etc.) & Search Loophole Apps
         targets.addAll(CurfewConfig.OEM_APP_STORES)
         targets.addAll(CurfewConfig.CURFEW_SEARCH_APPS)
 
-        // Filter out immune packages, self, Google Play Store, and Google Search.
         val finalTargets = targets
             .filterNot { immunePackages.contains(it) }
             .filterNot { it == CurfewConfig.GOOGLE_PLAY_STORE_PACKAGE }
             .filterNot { it == CurfewConfig.GOOGLE_SEARCH_PACKAGE }
             .toSet()
-        Log.i(TAG, "Curfew target resolution: ${finalTargets.size} packages targeted for curfew")
+        Timber.tag(TAG).i("Curfew target resolution: ${finalTargets.size} packages targeted")
         return finalTargets
     }
 
-    /**
-     * Ultra-fast resolution of core system packages that must NEVER be suspended or hidden.
-     * Safely resolves:
-     * 1. AntiPorn self package
-     * 2. Android Core Framework ("android", "com.android.systemui")
-     * 3. Static critical packages & explicit immune packages
-     * 4. Default Home Launcher (Current active launcher)
-     * 5. Active Input Method Editors (Keyboards: Gboard, SwiftKey, Samsung Keyboard, etc.)
-     * 6. Default Telecom / Phone Dialer
-     * 7. Default SMS package
-     */
     fun resolveCoreSystemCriticalPackages(context: Context, forceRefresh: Boolean = false): Set<String> {
-        val now = SystemClock.elapsedRealtime()
-        val cached = cachedCoreCriticalPackages
-        if (!forceRefresh && cached != null && (now - lastCoreCriticalCacheMs < CORE_CRITICAL_CACHE_TTL_MS)) {
-            return cached
+        val now = elapsedRealtimeProvider()
+        val entry = coreCriticalCache
+        if (!forceRefresh && entry != null && (now - entry.cachedAtElapsedMs < CORE_CRITICAL_CACHE_TTL_MS)) {
+            return entry.packages
         }
 
         val critical = mutableSetOf<String>()
         val pm = context.packageManager
-
-        // 1. Self package & Android OS core
         critical.add(context.packageName)
         critical.add("android")
         critical.add("com.android.systemui")
-
-        // 2. Static system criticals & explicit immune packages
         critical.addAll(CurfewConfig.SYSTEM_CRITICAL_PACKAGES)
         critical.addAll(AppPolicyRegistry.getSystemCriticalPackages())
         critical.addAll(AppPolicyRegistry.getImmunePackages())
 
-        // 3. Default Home Launcher
         try {
             val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-            val homeInfo = pm.resolveActivity(homeIntent, PackageManager.MATCH_DEFAULT_ONLY)
-            homeInfo?.activityInfo?.packageName?.let { critical.add(it) }
+            pm.resolveActivity(homeIntent, PackageManager.MATCH_DEFAULT_ONLY)
+                ?.activityInfo?.packageName?.let { critical.add(it) }
         } catch (e: Exception) {
-            Log.w(TAG, "Error resolving home launcher for critical whitelist", e)
+            Timber.tag(TAG).w(e, "Error resolving home launcher for critical whitelist")
         }
 
-        // 4. Active Keyboards / IMEs
         try {
             val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-            imm?.inputMethodList?.forEach { imi ->
-                critical.add(imi.packageName)
-            }
+            imm?.inputMethodList?.forEach { critical.add(it.packageName) }
         } catch (e: Exception) {
-            Log.w(TAG, "Error resolving input methods for critical whitelist", e)
+            Timber.tag(TAG).w(e, "Error resolving input methods for critical whitelist")
         }
 
-        // 5. Default Dialer (Phone)
         try {
             val telecom = context.getSystemService(Context.TELECOM_SERVICE) as? TelecomManager
             telecom?.defaultDialerPackage?.let { critical.add(it) }
-            val dialIntent = Intent(Intent.ACTION_DIAL)
-            val dialResolve = pm.resolveActivity(dialIntent, PackageManager.MATCH_DEFAULT_ONLY)
-            dialResolve?.activityInfo?.packageName?.let { critical.add(it) }
+            pm.resolveActivity(Intent(Intent.ACTION_DIAL), PackageManager.MATCH_DEFAULT_ONLY)
+                ?.activityInfo?.packageName?.let { critical.add(it) }
         } catch (e: Exception) {
-            Log.w(TAG, "Error resolving dialer for critical whitelist", e)
+            Timber.tag(TAG).w(e, "Error resolving dialer for critical whitelist")
         }
 
-        // 6. Default SMS
         try {
             Telephony.Sms.getDefaultSmsPackage(context)?.let { critical.add(it) }
         } catch (e: Exception) {
-            Log.w(TAG, "Error resolving SMS for critical whitelist", e)
+            Timber.tag(TAG).w(e, "Error resolving SMS for critical whitelist")
         }
 
         val result = critical.toSet()
-        cachedCoreCriticalPackages = result
-        lastCoreCriticalCacheMs = SystemClock.elapsedRealtime()
+        coreCriticalCache = PackageCacheEntry(result, elapsedRealtimeProvider())
         return result
     }
 
-    /**
-     * Unified system-wide safety check: returns true if the package is a critical system component,
-     * launcher, dialer, keyboard, or immune package that must NEVER be suspended.
-     */
     fun isSystemCriticalOrImmune(context: Context, packageName: String): Boolean {
         if (packageName.isBlank()) return true
         if (packageName == context.packageName || packageName == "android" || packageName == "com.android.systemui") return true
@@ -448,7 +364,6 @@ object CurfewAppResolver {
         if (AppPolicyRegistry.isAppStore(packageName)) return true
         if (AppPolicyRegistry.getSystemCriticalPackages().contains(packageName)) return true
         if (AppPolicyRegistry.getImmunePackages().contains(packageName)) return true
-
         return resolveCoreSystemCriticalPackages(context).contains(packageName)
     }
 }

@@ -1814,4 +1814,108 @@
     <string name="waqf_share_chooser_title">مشاركة تطبيق حِصن عبر...</string>
     <string name="waqf_share_message">تطبيق «حِصْن» — أول تطبيق يستخدم أقوى صلاحية في نظام أندرويد (Device Owner) لمنع الفتنة والإدمان الرقمي، ليُحرّر الإنسان من ذلّ العبودية الحديثة ويعيد الإرادة لمن سُلبت منه.\n\nمشروع وقفي مجاني 100% لوجه الله، بلا إعلانات ولا اشتراكات.\n\nالموقع الرسمي:\nhttps://hisn.uk/\n\nقناة تيليجرام:\nhttps://t.me/hisn_org</string>
     <string name="waqf_share_failed">تعذر فتح نافذة المشاركة</string>
+
+    <!-- Fortresses -->
+    <string name="fortress_emergency_default_name">حصن الطوارئ</string>
+    <string name="toast_fortress_extended">تم تمديد الحصن بنجاح</string>
+    <string name="notif_fortress_active_title">الحصن نشط: تم عزل الإنترنت</string>
+    <string name="notif_fortress_active_desc_format">حصن «%1$s» نشط: تم عزل الإنترنت وتجميد التطبيقات المشتتة.</string>
+    <string name="notif_fortress_ended_title">انتهت مدة الحصن</string>
+    <string name="notif_fortress_ended_desc">تمت استعادة التطبيقات والاتصال بالإنترنت بنجاح.</string>
+    <string name="notif_fortress_ended_desc_curfew_still_active">انتهى الحصن، لكن الحظر لا يزال نشطاً على جهازك.</string>
+    <string name="notif_action_extend_fortress">تمديد الحصن</string>
+    <string name="notif_apps_suspended_fortress_desc_format">حصن «%1$s» نشط: التطبيقات المشتتة معطلة مؤقتاً.</string>
+    <string name="notif_guardian_lockdown_desc_fortress_format">حظر المشرف نشط (بالتزامن مع حصن «%1$s»). المكالمات وSMS تعمل بشكل طبيعي.</string>
+
+    <!-- Fortresses UI (Phase 3) -->
+    <string name="curfew_picker_desc_run_only">حدد التطبيقات التي يُسمح بفتحها فقط أثناء التقييد (بدون إنترنت)</string>
+    <string name="fortresses_title">الحصون</string>
+    <string name="fortresses_subtitle">حصن الطوارئ والحصون المخصصة للتركيز والعزل</string>
+    <string name="fortresses_btn_add">إضافة حصن جديد</string>
+    <string name="fortress_badge_emergency">إلزامي • طوارئ</string>
+    <string name="fortress_badge_active">نشط حالياً</string>
+    <string name="fortress_duration_minutes_format">%1$d دقيقة</string>
+    <string name="fortress_internet_cut_on">عزل الإنترنت: مفعّل</string>
+    <string name="fortress_internet_cut_off">عزل الإنترنت: معطّل</string>
+    <string name="fortress_allowed_apps_summary_none">لا توجد تطبيقات مستثناة</string>
+    <string name="fortress_allowed_apps_summary_run_only">%1$d تطبيق مسموح</string>
+    <string name="fortress_allowed_apps_summary_with_net">%1$d مسموح (%2$d بالنت)</string>
+    <string name="fortress_active_edit_blocked_toast">هذا الحصن نشط حالياً. يرجى فكّه أو انتظار انتهائه قبل التعديل أو الحذف.</string>
+    <string name="fortress_delete_confirm_title">حذف الحصن</string>
+    <string name="fortress_delete_confirm_msg">هل تريد حذف حصن «%1$s» نهائياً؟</string>
+    <string name="fortress_btn_delete">حذف الحصن</string>
+    <string name="fortress_btn_edit">تعديل</string>
+    <string name="fortress_toast_deleted">تم حذف الحصن بنجاح</string>
+    <string name="fortress_toast_saved">تم حفظ إعدادات الحصن بنجاح</string>
+    <string name="fortress_editor_title_create">إضافة حصن جديد</string>
+    <string name="fortress_editor_title_edit">تعديل الحصن</string>
+    <string name="fortress_editor_title_emergency">إعدادات حصن الطوارئ</string>
+    <string name="fortress_editor_name_label">اسم الحصن</string>
+    <string name="fortress_editor_name_hint">مثال: حصن المذاكرة أو حصن النوم</string>
+    <string name="fortress_editor_duration_label">مدة الحصن</string>
+    <string name="fortress_chip_30m">30 دقيقة</string>
+    <string name="fortress_chip_1h">ساعة</string>
+    <string name="fortress_chip_2h">ساعتان</string>
+    <string name="fortress_chip_custom">مخصص</string>
+    <string name="fortress_editor_custom_minutes_label">المدة بالدقائق (1 - 720)</string>
+    <string name="fortress_editor_internet_cut_title">عزل الإنترنت بالكامل</string>
+    <string name="fortress_editor_internet_cut_desc">قطع الاتصال بالإنترنت عن التطبيقات غير المستثناة أثناء الحصن</string>
+    <string name="fortress_editor_emergency_internet_note">عزل الإنترنت إلزامي ولا يمكن تعطيله في حصن الطوارئ لضمان الحماية القصوى.</string>
+    <string name="fortress_editor_allowed_apps_title">التطبيقات المسموحة أثناء الحصن</string>
+    <string name="fortress_editor_emergency_apps_note">في حصن الطوارئ يُسمح بتشغيل التطبيقات المختارة دون إنترنت فقط.</string>
+    <string name="fortress_editor_btn_select_apps">تحديد التطبيقات</string>
+    <string name="fortress_error_name_required">يرجى إدخال اسم الحصن</string>
+    <string name="fortress_error_duration_range">يرجى إدخال مدة صحيحة بين 1 و 720 دقيقة</string>
+
+    <!-- Home Fortresses -->
+    <string name="home_fortresses_section_title">الحصون السريعة</string>
+    <string name="home_emergency_fortress_desc">عزل فوري للإنترنت وتجميد التطبيقات المشتتة لاستعادة التركيز</string>
+    <string name="home_btn_start_emergency_fortress">تشغيل %1$s (%2$d د)</string>
+    <string name="home_btn_start_custom_fortress">تشغيل (%1$d د)</string>
+    <string name="home_fortress_active_badge">نشط</string>
+    <string name="home_fortress_another_active_hint">حصن آخر نشط حالياً</string>
+    <string name="home_btn_extend_fortress_minutes">+%1$d د تمديد</string>
+    <string name="fortress_countdown_format">المتبقي: %1$s</string>
+    <string name="dialog_fortress_start_title">تفعيل %1$s</string>
+    <string name="dialog_fortress_start_msg_emergency">سيتم عزل الإنترنت وتجميد التطبيقات غير المستثناة لمدة %1$d دقيقة. لا يمكن إلغاء حصن الطوارئ يدوياً بدون قفل QR. هل تريد المتابعة؟</string>
+    <string name="dialog_fortress_start_msg_custom_net_cut">سيتم عزل الإنترنت وتجميد التطبيقات غير المستثناة لمدة %1$d دقيقة. هل تريد المتابعة؟</string>
+    <string name="dialog_fortress_start_msg_custom_no_net">سيتم تجميد التطبيقات غير المستثناة لمدة %1$d دقيقة. هل تريد المتابعة؟</string>
+    <string name="toast_fortress_started">تم تفعيل %1$s لمدة %2$d دقيقة</string>
+    <string name="toast_fortress_another_active">يوجد حصن آخر نشط حالياً</string>
+
+    <!-- Self-Control Fortresses & Active Modes -->
+    <string name="hub_title_fortresses">الحصون</string>
+    <string name="hub_subtitle_fortresses">إدارة حصن الطوارئ والحصون المخصصة</string>
+    <string name="self_control_active_modes_title">أوضاع الحماية النشطة الآن</string>
+    <string name="self_control_active_curfew_row">الحظر الليلي نشط حالياً</string>
+    <string name="self_control_active_fortress_row">حصن نشط: %1$s (المتبقي %2$s)</string>
+    <string name="self_control_btn_unlock_curfew_qr">فك الحظر الليلي عبر QR</string>
+    <string name="self_control_btn_unlock_curfew_direct">فك الحظر الليلي مؤقتاً</string>
+    <string name="self_control_btn_unlock_fortress_qr">فك الحصن عبر QR</string>
+    <string name="self_control_btn_unlock_fortress_direct">فك الحصن الآن</string>
+    <string name="self_control_unlock_curfew_confirm_title">فك الحظر الليلي</string>
+    <string name="self_control_unlock_curfew_confirm_msg">سيتم فك الحظر الليلي لهذه الفترة الليلية فقط، وسيعود تلقائياً في الفترة القادمة.</string>
+    <string name="self_control_unlock_fortress_confirm_title">فك الحصن النشط</string>
+    <string name="self_control_unlock_fortress_confirm_msg">هل تريد إنهاء حصن «%1$s» واستعادة التطبيقات والاتصال الآن؟</string>
+    <string name="toast_curfew_unlocked">تم فك الحظر الليلي لهذه الفترة</string>
+    <string name="toast_fortress_unlocked">تم فك الحصن بنجاح</string>
+    <string name="toast_mode_unlock_failed">تعذر فك الوضع النشط؛ تحقق من الصلاحيات أو رمز QR</string>
+
+    <!-- Guardian Active Modes & Fortress Permissions -->
+    <string name="guardian_active_modes_banner_title">أوضاع نشطة لدى المكفول</string>
+    <string name="guardian_active_fortress_status">حصن نشط: %1$s (المتبقي %2$s)</string>
+    <string name="guardian_active_curfew_status">الحظر الليلي نشط حالياً</string>
+    <string name="guardian_btn_unlock_fortress">فك الحصن</string>
+    <string name="guardian_btn_unlock_curfew">فك الحظر الليلي</string>
+    <string name="guardian_btn_unlock_all_modes">فك الكل</string>
+    <string name="guardian_confirm_unlock_title">فك الوضع النشط عن بُعد</string>
+    <string name="guardian_confirm_unlock_fortress_msg">هل تريد إرسال أمر فك الحصن النشط لدى %1$s الآن؟</string>
+    <string name="guardian_confirm_unlock_curfew_msg">هل تريد إرسال أمر فك الحظر الليلي الحالي لدى %1$s؟</string>
+    <string name="guardian_confirm_unlock_all_msg">هل تريد إرسال أمر فك الحصن النشط والحظر الليلي لدى %1$s الآن؟</string>
+    <string name="toast_guardian_remote_unlock_sent">تم إرسال أمر الفك عن بُعد بنجاح</string>
+    <string name="self_control_perm_fortresses">إدارة وتعديل الحصون</string>
+    <string name="self_control_perm_fortresses_desc">السماح للمكفول بإضافة وتعديل الحصون وإعدادات حصن الطوارئ</string>
+    <string name="self_control_perm_fortress_unlock">السماح بفك الحصون</string>
+    <string name="self_control_perm_fortress_unlock_desc">السماح للمكفول بفك الحصون المخصصة أو الحظر الليلي من شاشة التحكم الذاتي</string>
+    <string name="fortress_meta_separator" translatable="false">•</string>
 </resources>

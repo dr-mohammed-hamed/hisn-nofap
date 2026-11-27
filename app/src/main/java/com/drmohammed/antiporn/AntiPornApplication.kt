@@ -80,15 +80,16 @@ class AntiPornApplication : Application(), Configuration.Provider {
         TrustedTimeProvider.onTimeDriftCorrected = { driftMs ->
             Timber.i("Trusted time drift of ${driftMs}ms corrected; rescheduling alarms and verifying curfew/block state")
             com.drmohammed.antiporn.curfew.CurfewScheduler.scheduleNextAlarms(this)
-            if (com.drmohammed.antiporn.curfew.NapController.isNapActive(this) &&
-                com.drmohammed.antiporn.curfew.NapController.remainingMs(this) > 0L
+            com.drmohammed.antiporn.fortress.engine.FortressSessionController.migrateLegacyNapSessionIfNeeded(this)
+            if (com.drmohammed.antiporn.fortress.engine.FortressSessionController.isFortressActive(this) &&
+                com.drmohammed.antiporn.fortress.engine.FortressSessionController.remainingMs(this) > 0L
             ) {
-                com.drmohammed.antiporn.curfew.CurfewScheduler.scheduleNapEndAlarm(
+                com.drmohammed.antiporn.curfew.CurfewScheduler.scheduleFortressEndAlarm(
                     this,
-                    com.drmohammed.antiporn.curfew.NapController.getEndWall(this)
+                    com.drmohammed.antiporn.fortress.engine.FortressSessionController.getEndWall(this)
                 )
             } else {
-                com.drmohammed.antiporn.curfew.CurfewScheduler.cancelNapEndAlarm(this)
+                com.drmohammed.antiporn.curfew.CurfewScheduler.cancelFortressEndAlarm(this)
             }
             if (com.drmohammed.antiporn.curfew.CurfewEnforcer.isSnoozeActive(this)) {
                 com.drmohammed.antiporn.curfew.CurfewScheduler.scheduleCurfewSnoozeAlarm(

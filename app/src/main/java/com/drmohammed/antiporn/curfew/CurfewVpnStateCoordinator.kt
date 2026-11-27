@@ -14,6 +14,7 @@ import com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService.VpnCommand
 import com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService.VpnMode
 import com.drmohammed.antiporn.curfew.notification.ProtectionNotificationCoordinator
 import com.drmohammed.antiporn.data.repository.PolicyRepository
+import com.drmohammed.antiporn.fortress.engine.EffectiveRestrictionResolver
 import com.drmohammed.antiporn.telemetry.SafeDpmGateway
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -167,8 +168,7 @@ internal object CurfewVpnStateCoordinator {
     }
 
     internal fun isBlackoutActive(context: Context): Boolean =
-        CurfewConfig.isInstantInternetKillEnabled(context) ||
-            (CurfewEnforcer.isEffectiveBlockActive(context) && CurfewConfig.isVpnBlackholeEnabled(context))
+        EffectiveRestrictionResolver.resolve(context).shouldCutInternet
 
     fun evaluateRequiredMode(context: Context, fallbackOnFailure: VpnMode = currentMode): VpnMode {
         if (isBlackoutActive(context)) {

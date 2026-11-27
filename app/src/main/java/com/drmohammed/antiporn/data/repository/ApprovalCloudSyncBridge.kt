@@ -4,7 +4,6 @@ import android.content.Context
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.core.util.SafeAndroidLog as Log
 import com.drmohammed.antiporn.curfew.CurfewAppResolver
-import com.drmohammed.antiporn.curfew.CurfewConfig
 import com.drmohammed.antiporn.curfew.CurfewEnforcer
 import com.drmohammed.antiporn.data.local.db.dao.PendingApprovalDao
 import com.drmohammed.antiporn.data.local.db.entity.PendingApprovalEntity
@@ -285,11 +284,10 @@ internal class ApprovalCloudSyncBridge(
         try {
             val isBlockActive = CurfewEnforcer.isEffectiveBlockActive(appContext)
             val policy = policyProvider()
-            val immunePackages = CurfewAppResolver.resolveImmunePackages(appContext)
-            val isWhitelistedPkg = { pkg: String ->
-                CurfewConfig.STATIC_WHITELIST.contains(pkg) ||
-                    immunePackages.contains(pkg) ||
-                    policy.customCurfewWhitelistPackages.contains(pkg)
+            val effectiveAllowed = if (isBlockActive) {
+                CurfewAppResolver.resolveImmunePackages(appContext)
+            } else {
+                emptySet()
             }
 
             val pendingMap = approvalDao.getPendingApprovalsBlocking().associateBy { it.packageName }
@@ -312,7 +310,7 @@ internal class ApprovalCloudSyncBridge(
                         continue
                     }
 
-                    val isCurfewDeferred = isBlockActive && !isWhitelistedPkg(packageName)
+                    val isCurfewDeferred = isBlockActive && !effectiveAllowed.contains(packageName)
                     if (local != null && local.isApproved) {
                         if (isCurfewDeferred) continue
                         val isPhysicallySuspended = com.drmohammed.antiporn.telemetry.SafeDpmGateway
@@ -365,7 +363,7 @@ internal class ApprovalCloudSyncBridge(
         try {
             val firestore = FirebaseFirestore.getInstance()
             val newStatus = if (approve) PendingApprovalEntity.STATUS_APPROVED else PendingApprovalEntity.STATUS_REJECTED
-            val now = System.currentTimeMillis()
+            val now = currentTimeMillisProvider()
             val batch = firestore.batch()
 
             val approvalDocRef = firestore.collection("policies")

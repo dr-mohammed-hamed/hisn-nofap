@@ -9,6 +9,7 @@ import com.drmohammed.antiporn.banking.BankingCloakManager
 import com.drmohammed.antiporn.core.engine.ProtectionEngine
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
 import com.drmohammed.antiporn.curfew.notification.ProtectionNotificationCoordinator
+import com.drmohammed.antiporn.fortress.engine.FortressSessionController
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -66,7 +67,8 @@ class CurfewBootReceiver : BroadcastReceiver() {
                     if (action == Intent.ACTION_BOOT_COMPLETED) {
                         restoreBankingCloakAfterBoot(appContext)
                     }
-                    rescheduleNapIfNeeded(appContext)
+                    FortressSessionController.migrateLegacyNapSessionIfNeeded(appContext)
+                    rescheduleFortressIfNeeded(appContext)
                     rescheduleSnoozeIfNeeded(appContext)
                     CurfewEnforcer.repairStuckSuspendedApps(appContext)
                     ZeroTrustForegroundWatcher.syncWatcherState(appContext)
@@ -108,15 +110,17 @@ class CurfewBootReceiver : BroadcastReceiver() {
             }
         }
 
-        private fun rescheduleNapIfNeeded(appContext: Context) {
+        private fun rescheduleFortressIfNeeded(appContext: Context) {
             try {
-                if (NapController.isNapActive(appContext) && NapController.remainingMs(appContext) > 0L) {
-                    CurfewScheduler.scheduleNapEndAlarm(appContext, NapController.getEndWall(appContext))
+                if (FortressSessionController.isFortressActive(appContext) &&
+                    FortressSessionController.remainingMs(appContext) > 0L
+                ) {
+                    CurfewScheduler.scheduleFortressEndAlarm(appContext, FortressSessionController.getEndWall(appContext))
                 } else {
-                    CurfewScheduler.cancelNapEndAlarm(appContext)
+                    CurfewScheduler.cancelFortressEndAlarm(appContext)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error rescheduling nap alarm", e)
+                Log.e(TAG, "Error rescheduling fortress alarm", e)
             }
         }
 

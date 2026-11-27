@@ -29,7 +29,9 @@ import com.drmohammed.antiporn.curfew.CurfewForegroundWatcher
 import com.drmohammed.antiporn.curfew.CurfewScheduler
 import com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge
 import com.drmohammed.antiporn.curfew.ZeroTrustForegroundWatcher
+import com.drmohammed.antiporn.curfew.notification.ProtectionNotificationCoordinator
 import com.drmohammed.antiporn.data.local.db.entity.PendingApprovalEntity
+import com.drmohammed.antiporn.fortress.engine.EffectiveRestrictionResolver
 import com.drmohammed.antiporn.notification.registry.NotificationRegistry
 import com.drmohammed.antiporn.shields.BrowserShield
 import com.drmohammed.antiporn.shields.DnsShield
@@ -120,7 +122,21 @@ internal class PolicyEnforcementHandler(
                     enforceTimeAndDatePolicy(bundle)
                 }
 
-                // Reschedule curfew alarms (using the updated timezone) and sync curfew/VPN state
+                // Reschedule curfew alarms (using the updated timezone), invalidate resolver cache, and sync state
+                val scheduleChanged = bundle.isCurfewEnabled != effectivePreviousPolicy.isCurfewEnabled ||
+                    bundle.curfewStartHour != effectivePreviousPolicy.curfewStartHour ||
+                    bundle.curfewStartMinute != effectivePreviousPolicy.curfewStartMinute ||
+                    bundle.curfewEndHour != effectivePreviousPolicy.curfewEndHour ||
+                    bundle.curfewEndMinute != effectivePreviousPolicy.curfewEndMinute ||
+                    bundle.isWeekendCurfewEnabled != effectivePreviousPolicy.isWeekendCurfewEnabled ||
+                    bundle.weekendCurfewStartHour != effectivePreviousPolicy.weekendCurfewStartHour ||
+                    bundle.weekendCurfewStartMinute != effectivePreviousPolicy.weekendCurfewStartMinute ||
+                    bundle.weekendCurfewEndHour != effectivePreviousPolicy.weekendCurfewEndHour ||
+                    bundle.weekendCurfewEndMinute != effectivePreviousPolicy.weekendCurfewEndMinute
+                if (scheduleChanged) {
+                    com.drmohammed.antiporn.fortress.engine.CurfewWindowOverrideStore.clearOverride(appContext)
+                }
+                CurfewAppResolver.invalidateCache()
                 CurfewScheduler.scheduleNextAlarms(appContext)
                 CurfewConfig.setVpnBypassedPackages(appContext, bundle.curfewVpnBypassPackages)
                 CurfewEnforcer.syncBlockState(appContext)
@@ -136,18 +152,24 @@ internal class PolicyEnforcementHandler(
                     )
                     if (targetAlwaysOnPkg != null && !CurfewVpnDnsBridge.isVpnConsentGranted(appContext)) {
                         val lockdown = (requiredVpnMode == CurfewBlackholeVpnService.VpnMode.CURFEW_BLACKHOLE)
-                        val bypassed = if (lockdown) CurfewConfig.getVpnBypassedPackages(appContext) else null
-                        SafeDpmGateway.setAlwaysOnVpnPackageBlocking(
+                        val bypassed = if (lockdown) EffectiveRestrictionResolver.resolve(appContext).effectiveVpnBypassPackages else null
+                        val res = SafeDpmGateway.setAlwaysOnVpnPackageBlocking(
                             context = appContext,
                             vpnPackage = targetAlwaysOnPkg,
                             lockdown = lockdown,
                             bypassedPackages = bypassed
                         )
+                        if (res.isSuccess) {
+                            com.drmohammed.antiporn.curfew.AlwaysOnVpnPolicyBridge.updateCachedBypassedPackages(bypassed)
+                        }
                     } else if (targetAlwaysOnPkg == null) {
                         val currentAlwaysOn = SafeDpmGateway.getAlwaysOnVpnPackageBlocking(appContext, recordSuccess = false).getOrNull()
                         val isLockdown = SafeDpmGateway.isAlwaysOnVpnLockdownEnabledBlocking(appContext, recordSuccess = false).getOrNull() == true
                         if (currentAlwaysOn == appContext.packageName || isLockdown) {
-                            SafeDpmGateway.setAlwaysOnVpnPackageBlocking(appContext, null, false)
+                            val res = SafeDpmGateway.setAlwaysOnVpnPackageBlocking(appContext, null, false)
+                            if (res.isSuccess) {
+                                com.drmohammed.antiporn.curfew.AlwaysOnVpnPolicyBridge.updateCachedBypassedPackages(null)
+                            }
                         }
                     }
                 }
@@ -190,6 +212,8 @@ internal class PolicyEnforcementHandler(
                 WaqfaSessionManager.getInstance(appContext).updateConfig(bundle.waqfaConfig)
                 com.drmohammed.antiporn.pageshield.engine.PageShieldAccessibilityHook.getInstance().updateConfig(bundle.pageShieldConfig)
                 reconcileAccessibilityAndCapabilities(bundle)
+                ProtectionNotificationCoordinator.syncProtectionNotification(appContext)
+                WardActiveModesTelemetrySyncer.syncAsync(appContext)
 
                 synchronized(baselineLock) {
                     lastAppliedPolicyBundle = bundle

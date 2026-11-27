@@ -18,6 +18,7 @@ import com.drmohammed.antiporn.core.network.dns.DnsTunnelWorker
 import com.drmohammed.antiporn.core.network.dns.DnsUpstreamForwarder
 import com.drmohammed.antiporn.curfew.notification.ProtectionNotificationCoordinator
 import com.drmohammed.antiporn.data.repository.PolicyRepository
+import com.drmohammed.antiporn.fortress.engine.EffectiveRestrictionResolver
 import com.drmohammed.antiporn.notification.registry.NotificationRegistry
 import com.drmohammed.antiporn.shields.DnsShield
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
@@ -150,7 +151,14 @@ class CurfewBlackholeVpnService : VpnService() {
                 Timber.tag(TAG).w(e, "BinaryDomainFilter pre-init failed")
             }
             for (cmd in commandChannel) {
-                handleCommand(cmd)
+                try {
+                    handleCommand(cmd)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Timber.tag(TAG).e(e, "Unhandled error processing VPN command $cmd")
+                    CurfewVpnStateCoordinator.completeTunnelWaiters(false)
+                }
             }
         }
     }
@@ -222,9 +230,14 @@ class CurfewBlackholeVpnService : VpnService() {
 
     private fun shouldAbortForPostTeardown(appContext: Context): Boolean {
         if (ProtectionTransitionGuard.isTeardownInProgress) return true
-        return !SafeDpmGateway.isDeviceOwner(appContext) &&
-            PolicyRepository.getInstance(appContext).getCurrentPolicy().deactivationStatus == DevicePolicyBundle.DEACTIVATION_STATUS_COMPLETED &&
-            CurfewVpnStateCoordinator.evaluateRequiredMode(appContext) == VpnMode.IDLE
+        return try {
+            !SafeDpmGateway.isDeviceOwner(appContext) &&
+                PolicyRepository.getInstance(appContext).getCurrentPolicy().deactivationStatus == DevicePolicyBundle.DEACTIVATION_STATUS_COMPLETED &&
+                CurfewVpnStateCoordinator.evaluateRequiredMode(appContext) == VpnMode.IDLE
+        } catch (e: Exception) {
+            Timber.tag(TAG).w(e, "Error evaluating shouldAbortForPostTeardown")
+            false
+        }
     }
 
     private suspend fun handleCommand(cmd: VpnCommand) {
@@ -289,7 +302,7 @@ class CurfewBlackholeVpnService : VpnService() {
 
             if (!forceRebuild && vpnInterface != null && currentMode == targetMode) {
                 if (targetMode == VpnMode.CURFEW_BLACKHOLE) {
-                    if (CurfewConfig.getVpnBypassedPackages(appContext) == lastBypassedPackages) {
+                    if (EffectiveRestrictionResolver.resolve(appContext).effectiveVpnBypassPackages == lastBypassedPackages) {
                         CurfewVpnStateCoordinator.completeTunnelWaiters(true)
                         return@withLock
                     }
@@ -378,7 +391,10 @@ class CurfewBlackholeVpnService : VpnService() {
                         )
                     }.onFailure { Timber.tag(TAG).d(it, "BlackBox VPN record skipped") }
                 } else {
-                    CurfewVpnStateCoordinator.completeTunnelWaiters(oldVpnInterface != null && isRunning)
+                    synchronized(CurfewVpnStateCoordinator.companionStateLock) {
+                        CurfewVpnStateCoordinator.isStartPending = false
+                    }
+                    CurfewVpnStateCoordinator.completeTunnelWaiters(false)
                     if (oldVpnInterface == null) {
                         stopVpnInternal(removeActiveRef = true)
                         stopServiceForStartId(lastStartId)

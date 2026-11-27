@@ -1,54 +1,24 @@
 package com.drmohammed.antiporn.curfew
 
 import android.content.Context
-import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
-import android.os.UserManager
-import android.util.Log
+import com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard
 import com.drmohammed.antiporn.curfew.notification.ProtectionNotificationCoordinator
-import com.drmohammed.antiporn.data.repository.ApprovalRepository
-import com.drmohammed.antiporn.data.repository.PolicyRepository
-import com.drmohammed.antiporn.shields.BrowserShield
+import com.drmohammed.antiporn.fortress.engine.EffectiveRestrictionResolver
+import com.drmohammed.antiporn.fortress.model.EffectiveRestrictionProfile
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import com.drmohammed.antiporn.telemetry.SafeDpmGateway
-import com.drmohammed.antiporn.waqfa.engine.WaqfaCooldownStore
+import timber.log.Timber
 
 /**
- * Executes DevicePolicyManager package suspension, release, newly-installed interception,
- * and stuck-app recovery under strict Zero-Trust and partial-failure tracking guarantees.
+ * Executes DevicePolicyManager package suspension, differential mode-overlap transitions,
+ * daytime release, newly-installed interception, and stuck-app recovery.
  */
 internal object CurfewLifecycleHandler {
 
     private const val TAG = "AntiPorn_CurfewLifecycle"
     private val unfreezableSystemPackages = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-
-    private fun isSafeUnfreezableSystemApp(
-        context: Context,
-        pm: PackageManager,
-        pkg: String,
-        customBlacklist: Set<String> = emptySet()
-    ): Boolean {
-        return try {
-            val ai = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                pm.getApplicationInfo(pkg, PackageManager.ApplicationInfoFlags.of(0))
-            } else {
-                @Suppress("DEPRECATION")
-                pm.getApplicationInfo(pkg, 0)
-            }
-            val isSystem = (ai.flags and ApplicationInfo.FLAG_SYSTEM != 0) ||
-                (ai.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP != 0)
-            val isStoreOrSearch = CurfewConfig.KNOWN_APP_STORES.contains(pkg) ||
-                pkg == CurfewConfig.GOOGLE_PLAY_STORE_PACKAGE ||
-                pkg == CurfewConfig.GOOGLE_SEARCH_PACKAGE ||
-                CurfewConfig.CURFEW_SEARCH_APPS.contains(pkg)
-            val isBrowser = BrowserShield.TARGET_BROWSER_PACKAGES.contains(pkg)
-
-            isSystem && !isStoreOrSearch && !isBrowser && !customBlacklist.contains(pkg)
-        } catch (_: Exception) {
-            false
-        }
-    }
 
     fun isPackageInstalled(
         pm: PackageManager,
@@ -68,16 +38,18 @@ internal object CurfewLifecycleHandler {
         } catch (_: PackageManager.NameNotFoundException) {
             false
         } catch (e: Exception) {
-            Log.w(TAG, "Unexpected error checking package installation for $packageName", e)
+            Timber.tag(TAG).w(e, "Unexpected error checking package installation for %s", packageName)
             false
         }
     }
 
-    fun enforceActivation(context: Context): Boolean {
-        return com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.runInternalTransition {
-            var overallSuccess = true
-        val instantKill = CurfewConfig.isInstantInternetKillEnabled(context)
-        val vpnEnabled = instantKill || CurfewConfig.isVpnBlackholeEnabled(context)
+    fun enforceActivation(
+        context: Context,
+        effectiveProfile: EffectiveRestrictionProfile = EffectiveRestrictionResolver.resolve(context)
+    ): Boolean = ProtectionTransitionGuard.runInternalTransition {
+        var overallSuccess = true
+        val instantKill = effectiveProfile.isInstantInternetKillActive
+        val vpnEnabled = effectiveProfile.shouldCutInternet
 
         val alwaysOnPkg = SafeDpmGateway.getAlwaysOnVpnPackageBlocking(context).getOrNull()
         val isLockdown = SafeDpmGateway.isAlwaysOnVpnLockdownEnabledBlocking(context).getOrNull() == true
@@ -93,14 +65,33 @@ internal object CurfewLifecycleHandler {
 
         syncNotificationSafely(context, "enforceActivation")
 
-        val targets = CurfewAppResolver.getCurfewTargetPackages(context)
-        val policySnapshot = loadPolicyAndApprovalsFailSecure(context, "suspendCurfewApps")
-        Log.i(TAG, "Enforcing Curfew ON for ${targets.size} targeted packages")
-
+        CurfewAppResolver.invalidateCache()
+        val targets = CurfewAppResolver.getCurfewTargetPackages(context, effectiveProfile)
+        val policySnapshot = CurfewLifecycleSupport.loadPolicyAndApprovalsFailSecure(context, "suspendCurfewApps")
         val pm = context.packageManager
+
+        // Differential unsuspend: release tracked packages no longer targeted under the active effective profile
+        if (!policySnapshot.failed) {
+            val previousTracked = CurfewConfig.getTrackedSuspendedPackages(context)
+            val storesAndSearch = CurfewConfig.OEM_APP_STORES + CurfewConfig.CURFEW_SEARCH_APPS
+            val immunePackages = CurfewAppResolver.resolveImmunePackages(context, effectiveProfile)
+            val diffCandidates = previousTracked.filter { pkg ->
+                !targets.contains(pkg) &&
+                    !storesAndSearch.contains(pkg) &&
+                    CurfewLifecycleSupport.isPackageEligibleForDaytimeRelease(context, pm, pkg, policySnapshot, immunePackages) &&
+                    SafeDpmGateway.isPackageSuspendedBlocking(context, pkg).getOrNull() == true
+            }
+            if (diffCandidates.isNotEmpty()) {
+                val (diffOk, failedDiff) = suspendPackagesChecked(context, diffCandidates, suspend = false, label = "differential release")
+                if (!diffOk) overallSuccess = false
+                val releasedDiff = diffCandidates.filterNot { it in failedDiff }
+                CurfewConfig.removeTrackedSuspendedPackages(context, releasedDiff)
+            }
+        }
+
+        Timber.tag(TAG).i("Enforcing block ON for %d targeted packages", targets.size)
         val storesBatchToSuspend = (CurfewConfig.OEM_APP_STORES + CurfewConfig.CURFEW_SEARCH_APPS).filter { pkg ->
-            isPackageInstalled(pm, pkg) &&
-                SafeDpmGateway.isPackageSuspendedBlocking(context, pkg).getOrNull() != true
+            isPackageInstalled(pm, pkg) && SafeDpmGateway.isPackageSuspendedBlocking(context, pkg).getOrNull() != true
         }
         val (storesOk, _) = suspendPackagesChecked(context, storesBatchToSuspend, suspend = true, label = "store/search")
         if (!storesOk) overallSuccess = false
@@ -109,44 +100,48 @@ internal object CurfewLifecycleHandler {
         val toSuspend = installedTargets.filter { pkg ->
             SafeDpmGateway.isPackageSuspendedBlocking(context, pkg).getOrNull() != true
         }
+        CurfewConfig.setLastBlockEnforced(context, true)
+        CurfewConfig.addTrackedSuspendedPackages(context, installedTargets)
         val (appsOk, failedApps) = suspendPackagesChecked(context, toSuspend, suspend = true, label = "curfew target")
         var unmitigatedFailure = false
         for (failed in failedApps) {
-            if (isSafeUnfreezableSystemApp(context, pm, failed, policySnapshot.customBlacklist)) {
+            if (CurfewLifecycleSupport.isSafeUnfreezableSystemApp(pm, failed, policySnapshot.customBlacklist)) {
                 unfreezableSystemPackages.add(failed)
-                Log.w(TAG, "Package $failed is an unfreezable system/OEM app; cached to prevent repeated curfew failure")
+                Timber.tag(TAG).w("Package %s is unfreezable system/OEM app; cached", failed)
             } else {
                 unmitigatedFailure = true
             }
+        }
+        if (failedApps.isNotEmpty()) {
+            CurfewConfig.removeTrackedSuspendedPackages(context, failedApps)
         }
         if (!appsOk && unmitigatedFailure) overallSuccess = false
         val newlySuspendedApps = toSuspend.filterNot { it in failedApps }
         val activeTrackedApps = installedTargets.filterNot { it in failedApps }
 
-        if (!ensureSafeImmuneUnsuspended(context, pm)) {
+        if (!ensureSafeImmuneUnsuspended(context, pm, effectiveProfile)) {
             overallSuccess = false
         }
 
-        clearLegacyInstallRestriction(context)
-
-        CurfewConfig.addTrackedSuspendedPackages(context, activeTrackedApps)
-        CurfewConfig.setLastBlockEnforced(context, true)
+        CurfewLifecycleSupport.clearLegacyInstallRestriction(context)
         CurfewConfig.setDnsRestorePending(context, false)
+        CurfewConfig.setLastAppliedEffectiveSignature(
+            context,
+            if (overallSuccess) effectiveProfile.signature else ""
+        )
 
         val failedDetails = if (failedApps.isNotEmpty()) ", failedPkgs=${failedApps.joinToString()}" else ""
         BlackBoxRecorder.recordCurfew(
             context,
             "CURFEW_ACTIVATED",
             isSuccess = overallSuccess,
-            details = "targets=${targets.size}, suspended=${newlySuspendedApps.size}, tracked=${activeTrackedApps.size}, failed=${failedApps.size}$failedDetails, vpnEnabled=$vpnEnabled, instantKill=$instantKill, nap=${NapController.isNapActive(context)}"
+            details = "targets=${targets.size}, suspended=${newlySuspendedApps.size}, tracked=${activeTrackedApps.size}, failed=${failedApps.size}$failedDetails, vpnEnabled=$vpnEnabled, instantKill=$instantKill, fortress=${effectiveProfile.activeFortress?.fortressId ?: "none"}"
         )
         overallSuccess
-        }
     }
 
-    fun enforceRelease(context: Context): Boolean {
-        return com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.runInternalTransition {
-            var overallSuccess = true
+    fun enforceRelease(context: Context): Boolean = ProtectionTransitionGuard.runInternalTransition {
+        var overallSuccess = true
         val instantKill = CurfewConfig.isInstantInternetKillEnabled(context)
         val requiredMode = CurfewBlackholeVpnService.evaluateRequiredMode(context)
         val alwaysOnPkg = SafeDpmGateway.getAlwaysOnVpnPackageBlocking(context).getOrNull()
@@ -158,13 +153,12 @@ internal object CurfewLifecycleHandler {
             if (vpnChanged) syncNotificationSafely(context, "enforceRelease InstantKill")
         }
 
-        val isVpnTeardownNeeded = isVpnReconcileNeeded(instantKill, requiredMode)
-        val isAlwaysOnConfigured = isAlwaysOnUpdateNeeded(context, instantKill, requiredMode, alwaysOnPkg, isLockdown)
-
+        val isVpnTeardownNeeded = CurfewLifecycleSupport.isVpnReconcileNeeded(instantKill, requiredMode)
+        val isAlwaysOnConfigured = CurfewLifecycleSupport.isAlwaysOnUpdateNeeded(context, instantKill, requiredMode, alwaysOnPkg, isLockdown)
         val wasBlockEnforced = CurfewConfig.isLastBlockEnforced(context)
         val recordedCurfewPackages = CurfewConfig.getTrackedSuspendedPackages(context)
 
-        val policyState = loadPolicyAndApprovalsFailSecure(context, "curfew release")
+        val policyState = CurfewLifecycleSupport.loadPolicyAndApprovalsFailSecure(context, "curfew release")
         if (policyState.failed) {
             if (CurfewEnforcer.isVpnTeardownAllowedOnReleaseFailSecure(
                     fetchPolicyFailed = policyState.policyFailed,
@@ -175,14 +169,14 @@ internal object CurfewLifecycleHandler {
             ) {
                 CurfewVpnDnsBridge.reconcileNonBlackholeVpnAndDns(context, requiredMode, alwaysOnPkg, isLockdown)
             }
-            Log.w(TAG, "Fail-secure active: preserving suspended packages because approvals or policy could not be verified")
-            return false
+            Timber.tag(TAG).w("Fail-secure active: preserving suspended packages because approvals or policy could not be verified")
+            return@runInternalTransition false
         }
 
         val pm = context.packageManager
         val immunePackages = CurfewAppResolver.resolveImmunePackages(context)
         val storesAndSearch = CurfewConfig.OEM_APP_STORES + CurfewConfig.CURFEW_SEARCH_APPS
-        val installedStoresAndSearch = filterEligibleStores(context, pm, storesAndSearch, policyState)
+        val installedStoresAndSearch = CurfewLifecycleSupport.filterEligibleStores(context, pm, storesAndSearch, policyState)
         val installedStoresSet = installedStoresAndSearch.toSet()
 
         val curfewTargets = if (wasBlockEnforced || recordedCurfewPackages.isNotEmpty()) {
@@ -192,7 +186,7 @@ internal object CurfewLifecycleHandler {
         }
         val eligibleAppCandidates = (recordedCurfewPackages + immunePackages + policyState.approvedPackages + curfewTargets)
             .filterNot { installedStoresSet.contains(it) }
-            .filter { isPackageEligibleForDaytimeRelease(context, pm, it, policyState, immunePackages) }
+            .filter { CurfewLifecycleSupport.isPackageEligibleForDaytimeRelease(context, pm, it, policyState, immunePackages) }
 
         val currentlySuspendedInstalled = (installedStoresAndSearch + eligibleAppCandidates).toSet()
             .filterTo(mutableSetOf()) { pkg ->
@@ -209,10 +203,12 @@ internal object CurfewLifecycleHandler {
                 hasLingeringSuspendedPackages = currentlySuspendedInstalled.isNotEmpty()
             )
         ) {
-            return true
+            CurfewConfig.setLastAppliedEffectiveSignature(context, "")
+            syncNotificationSafely(context, "enforceRelease idle")
+            return@runInternalTransition true
         }
 
-        Log.i(TAG, "Enforcing Curfew OFF: Releasing daytime apps and stores")
+        Timber.tag(TAG).i("Enforcing block OFF: Releasing daytime apps and stores")
         var dnsRestoreSuccess = true
         if (!instantKill) {
             if (!CurfewVpnDnsBridge.reconcileNonBlackholeVpnAndDns(context, requiredMode, alwaysOnPkg, isLockdown)) {
@@ -222,8 +218,8 @@ internal object CurfewLifecycleHandler {
         }
         CurfewConfig.setDnsRestorePending(context, !dnsRestoreSuccess)
 
-        unhideLegacyStores(context, pm, storesAndSearch)
-        clearLegacyInstallRestriction(context)
+        CurfewLifecycleSupport.unhideLegacyStores(context, pm, storesAndSearch)
+        CurfewLifecycleSupport.clearLegacyInstallRestriction(context)
 
         val (storesOk, failedStores) = suspendPackagesChecked(context, storesBatchToUnsuspend, suspend = false, label = "store/search release")
         val (appsOk, failedApps) = suspendPackagesChecked(context, appsBatchToUnsuspend, suspend = false, label = "curfew app release")
@@ -236,6 +232,7 @@ internal object CurfewLifecycleHandler {
         }
         val stillHasPendingRelease = failedStores.isNotEmpty() || packagesToKeepTracked.isNotEmpty()
         CurfewConfig.setLastBlockEnforced(context, stillHasPendingRelease)
+        CurfewConfig.setLastAppliedEffectiveSignature(context, "")
 
         BlackBoxRecorder.recordCurfew(
             context,
@@ -245,25 +242,20 @@ internal object CurfewLifecycleHandler {
         )
         syncNotificationSafely(context, "enforceRelease")
         overallSuccess
-        }
     }
 
     fun handlePackageAdded(context: Context, packageName: String) {
         val appContext = context.applicationContext ?: context
-        if (!CurfewEnforcer.isEffectiveBlockActive(appContext)) {
-            Log.d(TAG, "Package $packageName installed while curfew is inactive; will be evaluated at next curfew cycle")
-            return
-        }
+        if (!CurfewEnforcer.isEffectiveBlockActive(appContext)) return
 
         val immune = CurfewAppResolver.resolveImmunePackages(appContext)
         if (immune.contains(packageName) ||
             packageName == CurfewConfig.GOOGLE_PLAY_STORE_PACKAGE ||
             packageName == CurfewConfig.GOOGLE_SEARCH_PACKAGE
         ) {
-            Log.i(TAG, "Newly installed package $packageName is immune, Play Store, or Google Search IPC; skipping suspension")
+            Timber.tag(TAG).i("Newly installed package %s is immune/Play/Search; skipping suspension", packageName)
             return
         }
-
         if (!SafeDpmGateway.isDeviceOwner(appContext)) return
 
         try {
@@ -271,26 +263,22 @@ internal object CurfewLifecycleHandler {
             val failed = res.getOrNull()?.toSet() ?: emptySet()
             if (res.isSuccess && !failed.contains(packageName)) {
                 CurfewConfig.addTrackedSuspendedPackages(appContext, listOf(packageName))
-                Log.i(TAG, "Newly installed package $packageName immediately suspended and recorded via SafeDpmGateway")
+                Timber.tag(TAG).i("Newly installed package %s immediately suspended", packageName)
             } else {
-                Log.w(TAG, "Failed suspending newly installed package $packageName during curfew (isSuccess=${res.isSuccess})")
+                Timber.tag(TAG).w("Failed suspending newly installed package %s (isSuccess=%b)", packageName, res.isSuccess)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error suspending newly installed package $packageName", e)
+            Timber.tag(TAG).e(e, "Error suspending newly installed package %s", packageName)
         }
     }
 
     fun repairStuckSuspendedApps(context: Context): Int {
         val appContext = context.applicationContext ?: context
         if (!SafeDpmGateway.isDeviceOwner(appContext)) return 0
-
         val pm = appContext.packageManager ?: return 0
         val isCurfewRunning = CurfewEnforcer.isEffectiveBlockActive(appContext)
-        val policyState = loadPolicyAndApprovalsFailSecure(appContext, "stuck app repair")
-        if (policyState.failed) {
-            Log.w(TAG, "Fail-secure active: Aborting repairStuckSuspendedApps to protect device")
-            return 0
-        }
+        val policyState = CurfewLifecycleSupport.loadPolicyAndApprovalsFailSecure(appContext, "stuck app repair")
+        if (policyState.failed) return 0
 
         val immunePackages = CurfewAppResolver.resolveImmunePackages(appContext)
         val installed = try {
@@ -301,43 +289,36 @@ internal object CurfewLifecycleHandler {
                 pm.getInstalledApplications(0)
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed querying installed applications during stuck app repair", e)
+            Timber.tag(TAG).w(e, "Failed querying installed applications during stuck app repair")
             emptyList()
         }
 
-        val stuckToUnsuspend = mutableListOf<String>()
-        for (app in installed) {
+        val stuckToUnsuspend = installed.mapNotNull { app ->
             val pkg = app.packageName
-            if (pkg == appContext.packageName) continue
-            if (isCurfewRunning && !immunePackages.contains(pkg)) continue
-            if (!isAppSafeToUnsuspend(appContext, app, policyState, immunePackages)) continue
-
-            val isSuspended = SafeDpmGateway.isPackageSuspendedBlocking(appContext, pkg).getOrNull() == true
-            if (isSuspended) {
-                stuckToUnsuspend.add(pkg)
-            }
+            if (pkg == appContext.packageName) return@mapNotNull null
+            if (isCurfewRunning && !immunePackages.contains(pkg)) return@mapNotNull null
+            if (!CurfewLifecycleSupport.isAppSafeToUnsuspend(appContext, app, policyState, immunePackages)) return@mapNotNull null
+            if (SafeDpmGateway.isPackageSuspendedBlocking(appContext, pkg).getOrNull() == true) pkg else null
         }
-
         if (stuckToUnsuspend.isEmpty()) return 0
 
         val (ok, failed) = suspendPackagesChecked(appContext, stuckToUnsuspend, suspend = false, label = "stuck app repair")
         val repairedCount = stuckToUnsuspend.count { it !in failed }
-        if (!ok) {
-            Log.w(TAG, "[REPAIR] Stuck app repair completed with failures: repaired=$repairedCount, failed=$failed")
-        } else {
-            Log.i(TAG, "[REPAIR] Successfully unsuspended $repairedCount stuck apps")
-        }
+        if (!ok) Timber.tag(TAG).w("[REPAIR] Completed with failures: repaired=$repairedCount, failed=$failed")
+        else Timber.tag(TAG).i("[REPAIR] Successfully unsuspended $repairedCount stuck apps")
         return repairedCount
     }
 
-    private fun ensureSafeImmuneUnsuspended(context: Context, pm: PackageManager): Boolean {
-        val policyState = loadPolicyAndApprovalsFailSecure(context, "curfew activation")
-        val immunePackages = CurfewAppResolver.resolveImmunePackages(context)
+    private fun ensureSafeImmuneUnsuspended(
+        context: Context,
+        pm: PackageManager,
+        effectiveProfile: EffectiveRestrictionProfile
+    ): Boolean {
+        val policyState = CurfewLifecycleSupport.loadPolicyAndApprovalsFailSecure(context, "curfew activation")
+        val immunePackages = CurfewAppResolver.resolveImmunePackages(context, effectiveProfile)
         val immuneToUnsuspend = if (policyState.failed) {
-            Log.w(TAG, "Fail-secure active: preserving suspended immune packages except core critical packages")
             CurfewAppResolver.resolveCoreSystemCriticalPackages(context).filter { pkg ->
-                isPackageInstalled(pm, pkg) &&
-                    SafeDpmGateway.isPackageSuspendedBlocking(context, pkg).getOrNull() == true
+                isPackageInstalled(pm, pkg) && SafeDpmGateway.isPackageSuspendedBlocking(context, pkg).getOrNull() == true
             }
         } else {
             immunePackages.filter { pkg ->
@@ -362,167 +343,17 @@ internal object CurfewLifecycleHandler {
         return try {
             val res = SafeDpmGateway.setPackagesSuspendedBlocking(context, packages.toTypedArray(), suspend)
             if (!res.isSuccess) {
-                Log.e(TAG, "DPM batch ($label, suspend=$suspend) failed to execute for ${packages.size} packages")
+                Timber.tag(TAG).e("DPM batch (%s, suspend=%b) failed for %d packages", label, suspend, packages.size)
                 false to packages.toSet()
             } else {
                 val failed = res.getOrNull()?.toSet() ?: emptySet()
                 val ok = failed.isEmpty()
-                if (!ok) {
-                    Log.w(TAG, "DPM batch ($label, suspend=$suspend) partial failure: failed=$failed")
-                } else {
-                    Log.i(TAG, "DPM batch ($label, suspend=$suspend) succeeded for ${packages.size} packages")
-                }
+                if (!ok) Timber.tag(TAG).w("DPM batch (%s, suspend=%b) partial failure: %s", label, suspend, failed)
                 ok to failed
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error executing DPM batch ($label, suspend=$suspend)", e)
+            Timber.tag(TAG).e(e, "Error executing DPM batch (%s, suspend=%b)", label, suspend)
             false to packages.toSet()
-        }
-    }
-
-    private fun clearLegacyInstallRestriction(context: Context) {
-        try {
-            if (SafeDpmGateway.hasUserRestriction(context, UserManager.DISALLOW_INSTALL_APPS)) {
-                SafeDpmGateway.clearUserRestrictionBlocking(context, UserManager.DISALLOW_INSTALL_APPS)
-                Log.d(TAG, "Cleared UserManager.DISALLOW_INSTALL_APPS to preserve ADB workflow")
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not ensure DISALLOW_INSTALL_APPS restriction is cleared", e)
-        }
-    }
-
-    private fun unhideLegacyStores(context: Context, pm: PackageManager, storesAndSearch: Set<String>) {
-        for (pkg in storesAndSearch) {
-            try {
-                if (isPackageInstalled(pm, pkg, includeHidden = true) &&
-                    SafeDpmGateway.isApplicationHiddenBlocking(context, pkg).getOrNull() == true
-                ) {
-                    SafeDpmGateway.setApplicationHiddenBlocking(context, pkg, false)
-                    Log.i(TAG, "Legacy cleanup: Unhid store/search package: $pkg")
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Could not unhide package $pkg", e)
-            }
-        }
-    }
-
-    private fun filterEligibleStores(
-        context: Context,
-        pm: PackageManager,
-        storesAndSearch: Set<String>,
-        policyState: PolicyApprovalSnapshot
-    ): List<String> = storesAndSearch.filter { pkg ->
-        when {
-            !isPackageInstalled(pm, pkg) -> false
-            isHighRiskOrBlacklistedForRelease(pkg, policyState.approvedPackages, policyState.customBlacklist) -> {
-                Log.i(TAG, "Preserving suspension of $pkg on curfew release as it is custom-blacklisted")
-                false
-            }
-            else -> !policyState.unapprovedPackages.contains(pkg) &&
-                !WaqfaCooldownStore.isPackageInCooldown(context, pkg) &&
-                !com.drmohammed.antiporn.pageshield.engine.PageShieldFreezeStore.isFrozen(context, pkg)
-        }
-    }
-
-    private fun isPackageEligibleForDaytimeRelease(
-        context: Context,
-        pm: PackageManager,
-        pkg: String,
-        policyState: PolicyApprovalSnapshot,
-        immunePackages: Set<String>
-    ): Boolean {
-        if (!isPackageInstalled(pm, pkg)) return false
-        if (isHighRiskOrBlacklistedForRelease(pkg, policyState.approvedPackages, policyState.customBlacklist)) return false
-        if (policyState.unapprovedPackages.contains(pkg)) return false
-        if (WaqfaCooldownStore.isPackageInCooldown(context, pkg)) return false
-        if (com.drmohammed.antiporn.pageshield.engine.PageShieldFreezeStore.isFrozen(context, pkg)) return false
-        if (!policyState.isZeroTrustActive) return true
-
-        val isApproved = policyState.approvedPackages.contains(pkg)
-        val isImmuneOrStore = CurfewAppResolver.isSystemCriticalOrImmune(context, pkg) ||
-            immunePackages.contains(pkg) ||
-            pkg == CurfewConfig.GOOGLE_PLAY_STORE_PACKAGE ||
-            pkg == CurfewConfig.GOOGLE_SEARCH_PACKAGE ||
-            CurfewConfig.KNOWN_APP_STORES.contains(pkg)
-        val isSystemOrUpdatedApp = try {
-            val ai = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                pm.getApplicationInfo(pkg, PackageManager.ApplicationInfoFlags.of(0))
-            } else {
-                @Suppress("DEPRECATION")
-                pm.getApplicationInfo(pkg, 0)
-            }
-            (ai.flags and ApplicationInfo.FLAG_SYSTEM != 0) ||
-                (ai.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP != 0)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed reading ApplicationInfo for $pkg during daytime release", e)
-            false
-        }
-        return isApproved || isImmuneOrStore || isSystemOrUpdatedApp
-    }
-
-    private fun isAppSafeToUnsuspend(
-        context: Context,
-        app: ApplicationInfo,
-        policyState: PolicyApprovalSnapshot,
-        immunePackages: Set<String>
-    ): Boolean {
-        val pkg = app.packageName
-        if (isHighRiskOrBlacklistedForRelease(pkg, policyState.approvedPackages, policyState.customBlacklist)) return false
-        if (policyState.unapprovedPackages.contains(pkg)) return false
-        if (WaqfaCooldownStore.isPackageInCooldown(context, pkg)) return false
-        if (com.drmohammed.antiporn.pageshield.engine.PageShieldFreezeStore.isFrozen(context, pkg)) return false
-        if (!policyState.isZeroTrustActive) return true
-
-        val isImmune = immunePackages.contains(pkg) ||
-            pkg == CurfewConfig.GOOGLE_PLAY_STORE_PACKAGE ||
-            pkg == CurfewConfig.GOOGLE_SEARCH_PACKAGE ||
-            CurfewConfig.KNOWN_APP_STORES.contains(pkg)
-        val isSystem = (app.flags and ApplicationInfo.FLAG_SYSTEM != 0) ||
-            (app.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP != 0)
-        return policyState.approvedPackages.contains(pkg) || isImmune || isSystem
-    }
-
-    @Suppress("UNUSED_PARAMETER")
-    internal fun isApprovalEligibleForRelease(
-        packageName: String,
-        isApproved: Boolean,
-        decidedBy: String?
-    ): Boolean {
-        return isApproved
-    }
-
-    @Suppress("UNUSED_PARAMETER")
-    internal fun isHighRiskOrBlacklistedForRelease(
-        pkg: String,
-        approvedPackages: Set<String>,
-        customBlacklist: Set<String>
-    ): Boolean = customBlacklist.contains(pkg)
-
-    private fun isVpnReconcileNeeded(
-        instantKill: Boolean,
-        requiredMode: CurfewBlackholeVpnService.VpnMode
-    ): Boolean = when {
-        instantKill -> false
-        requiredMode == CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY ->
-            !CurfewBlackholeVpnService.isServiceOrTunnelActive() ||
-                CurfewBlackholeVpnService.currentMode != CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY
-        else -> CurfewBlackholeVpnService.isServiceOrTunnelActive()
-    }
-
-    private fun isAlwaysOnUpdateNeeded(
-        context: Context,
-        instantKill: Boolean,
-        requiredMode: CurfewBlackholeVpnService.VpnMode,
-        alwaysOnPkg: String?,
-        isLockdown: Boolean
-    ): Boolean {
-        if (instantKill) return false
-        val targetPkg = CurfewVpnDnsBridge.resolveTargetAlwaysOnPackage(context, requiredMode)
-        return when (requiredMode) {
-            CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY ->
-                alwaysOnPkg != targetPkg || isLockdown
-            else ->
-                alwaysOnPkg == context.packageName || (alwaysOnPkg == null && isLockdown)
         }
     }
 
@@ -530,49 +361,21 @@ internal object CurfewLifecycleHandler {
         try {
             ProtectionNotificationCoordinator.syncProtectionNotification(context)
         } catch (e: Exception) {
-            Log.e(TAG, "Error synchronizing protection notification in $caller", e)
+            Timber.tag(TAG).e(e, "Error synchronizing protection notification in %s", caller)
         }
     }
 
-    private data class PolicyApprovalSnapshot(
-        val policyFailed: Boolean,
-        val approvalsFailed: Boolean,
-        val customBlacklist: Set<String>,
-        val isZeroTrustActive: Boolean,
-        val approvedPackages: Set<String>,
-        val unapprovedPackages: Set<String>
-    ) {
-        val failed: Boolean get() = policyFailed || approvalsFailed
-    }
+    @Suppress("UNUSED_PARAMETER")
+    internal fun isApprovalEligibleForRelease(
+        packageName: String,
+        isApproved: Boolean,
+        decidedBy: String?
+    ): Boolean = isApproved
 
-    private fun loadPolicyAndApprovalsFailSecure(context: Context, caller: String): PolicyApprovalSnapshot {
-        var policyFailed = false
-        val currentPolicy = try {
-            PolicyRepository.getInstance(context).getCurrentPolicy()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error fetching policy during $caller - failing secure", e)
-            policyFailed = true
-            null
-        }
-        var approvalsFailed = false
-        val localApprovals = try {
-            ApprovalRepository.getInstance(context).getLocalPendingApprovals()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error fetching pending approvals during $caller - failing secure", e)
-            approvalsFailed = true
-            emptyList()
-        }
-        val approvedPackages = localApprovals.filter {
-            isApprovalEligibleForRelease(it.packageName, it.isApproved, it.decidedBy)
-        }.map { it.packageName }.toSet()
-        val unapprovedPackages = localApprovals.filter { !it.isApproved }.map { it.packageName }.toSet()
-        return PolicyApprovalSnapshot(
-            policyFailed = policyFailed,
-            approvalsFailed = approvalsFailed,
-            customBlacklist = currentPolicy?.customBlacklistPackages ?: emptySet(),
-            isZeroTrustActive = currentPolicy?.lockNewInstallsUntilApproved ?: false,
-            approvedPackages = approvedPackages,
-            unapprovedPackages = unapprovedPackages
-        )
-    }
+    @Suppress("UNUSED_PARAMETER")
+    internal fun isHighRiskOrBlacklistedForRelease(
+        pkg: String,
+        approvedPackages: Set<String>,
+        customBlacklist: Set<String>
+    ): Boolean = customBlacklist.contains(pkg)
 }

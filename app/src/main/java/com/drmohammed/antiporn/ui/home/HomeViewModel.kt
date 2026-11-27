@@ -2,7 +2,6 @@ package com.drmohammed.antiporn.ui.home
 
 import android.app.Application
 import android.content.Context
-import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.drmohammed.antiporn.R
@@ -13,8 +12,10 @@ import com.drmohammed.antiporn.curfew.CurfewEnforcer
 import com.drmohammed.antiporn.curfew.CurfewForegroundWatcher
 import com.drmohammed.antiporn.curfew.CurfewScheduler
 import com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge
-import com.drmohammed.antiporn.curfew.NapController
 import com.drmohammed.antiporn.data.repository.PolicyRepository
+import com.drmohammed.antiporn.fortress.engine.EffectiveRestrictionResolver
+import com.drmohammed.antiporn.fortress.engine.FortressSessionController
+import com.drmohammed.antiporn.fortress.model.FortressProfile
 import com.drmohammed.antiporn.ui.ProtectionUiState
 import com.drmohammed.antiporn.ui.shields.ActiveShieldsEvaluator
 import java.util.concurrent.atomic.AtomicLong
@@ -27,10 +28,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import timber.log.Timber
 
 /**
- * ViewModel for HomeFragment hero shield dashboard and 1-hour nap orchestration.
+ * ViewModel for HomeFragment hero shield dashboard and Fortresses orchestration.
  * Emits immutable [HomeUiState] flows and observes system policy updates.
  */
 class HomeViewModel(
@@ -50,9 +54,11 @@ class HomeViewModel(
     private var isEnforcementOperationActive = false
     private val pendingToggleCallbacks = mutableListOf<(Boolean, String?) -> Unit>()
     private val refreshGeneration = AtomicLong(0L)
+    private val fortressMutationMutex = Mutex()
 
     init {
         observePolicy()
+        observeActiveFortressSession()
         tickNap()
         refreshProtectionState(isEnforcing = false)
     }
@@ -63,6 +69,7 @@ class HomeViewModel(
             policyRepository.currentPolicyFlow.collect { policy ->
                 val isPolicyChanged = lastObservedPolicy != null && lastObservedPolicy != policy
                 lastObservedPolicy = policy
+                _uiState.update { it.copy(fortressesConfig = policy.fortressesConfig) }
                 tickNap()
                 if (isPolicyChanged) {
                     refreshProtectionStateInternal(isEnforcing = false, force = true)
@@ -73,12 +80,20 @@ class HomeViewModel(
         }
     }
 
+    private fun observeActiveFortressSession() {
+        viewModelScope.launch {
+            FortressSessionController.activeSessionFlow.collect {
+                tickNap()
+            }
+        }
+    }
+
     private fun startNapTicker() {
         napTickerJob?.cancel()
         napTickerJob = viewModelScope.launch {
             while (isActive) {
                 tickNap()
-                val remaining = NapController.remainingMs(getApplication())
+                val remaining = FortressSessionController.remainingMs(getApplication())
                 if (remaining <= 0L) {
                     stopNapTicker()
                     break
@@ -94,29 +109,42 @@ class HomeViewModel(
     }
 
     /**
-     * Ticks nap countdown and updates night curfew / usage status.
-     * Automatically engages or terminates the 1-second countdown job based on nap activity.
+     * Ticks fortress countdown and updates night curfew / usage status.
+     * Automatically engages or terminates the 1-second countdown job based on fortress activity.
      */
     fun tickNap() {
         val app = getApplication<Application>()
-        val remaining = NapController.remainingMs(app)
-        val isNap = remaining > 0L
-        val isCurfew = isEnforcedCurfewActive(app)
-        val hasUsage = CurfewForegroundWatcher.hasUsageStatsPermission(app)
-
-        _uiState.update { current ->
-            current.copy(
-                napRemainingMs = remaining,
-                isNapActive = isNap,
-                isCurfewActive = isCurfew,
-                hasUsageAccess = hasUsage
+        viewModelScope.launch(Dispatchers.IO) {
+            val policy = policyRepository.getCurrentPolicy()
+            val snapshot = EffectiveRestrictionResolver.getActiveModesSnapshot(
+                context = app,
+                policy = policy
             )
-        }
+            val activeSession = snapshot.activeFortress
+            val remaining = activeSession?.remainingMs ?: 0L
+            val isActive = activeSession != null && remaining > 0L
+            val isCurfew = isEnforcedCurfewActive(app)
+            val hasUsage = CurfewForegroundWatcher.hasUsageStatsPermission(app)
 
-        if (isNap && napTickerJob == null) {
-            startNapTicker()
-        } else if (!isNap && napTickerJob != null) {
-            stopNapTicker()
+            _uiState.update { current ->
+                current.copy(
+                    fortressesConfig = policy.fortressesConfig,
+                    activeFortress = activeSession,
+                    napRemainingMs = remaining,
+                    isNapActive = isActive,
+                    isCurfewActive = isCurfew,
+                    isCurfewWindowNow = snapshot.isNightCurfewWindowActiveNow,
+                    hasUsageAccess = hasUsage
+                )
+            }
+
+            withContext(Dispatchers.Main) {
+                if (isActive && napTickerJob == null) {
+                    startNapTicker()
+                } else if (!isActive && napTickerJob != null) {
+                    stopNapTicker()
+                }
+            }
         }
     }
 
@@ -169,7 +197,7 @@ class HomeViewModel(
                         context = app,
                         precomputedStatuses = shields
                     )
-                    Log.d(TAG, "Evaluated ${activeShields.size} active shields (isDo=$isDo)")
+                    Timber.tag(TAG).d("Evaluated %d active shields (isDo=%b)", activeShields.size, isDo)
 
                     if (refreshGeneration.get() != requestGen) {
                         return@launch
@@ -195,7 +223,7 @@ class HomeViewModel(
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed refreshing protection state", e)
+                    Timber.tag(TAG).e(e, "Failed refreshing protection state")
                     if (refreshGeneration.get() == requestGen) {
                         val enforcingActive = synchronized(refreshLock) { isEnforcementOperationActive }
                         _uiState.update { current ->
@@ -218,7 +246,7 @@ class HomeViewModel(
     fun toggleProtection(onResult: ((Boolean, String?) -> Unit)? = null) {
         synchronized(refreshLock) {
             if (_uiState.value.isApplying || isEnforcementOperationActive) {
-                Log.d(TAG, "toggleProtection: protection enforcement already in progress, attaching callback to active run.")
+                Timber.tag(TAG).d("toggleProtection: protection enforcement already in progress, attaching callback to active run.")
                 onResult?.let { pendingToggleCallbacks.add(it) }
                 return
             }
@@ -270,68 +298,49 @@ class HomeViewModel(
     }
 
     /**
-     * Starts a 1-Hour Nap mode if Device Owner is active and nighttime curfew is not active.
+     * Starts a Fortress session (allowed even during Night Curfew) if Device Owner is active
+     * and no other Fortress is currently running.
      */
-    fun startNap(onComplete: ((Boolean) -> Unit)? = null) {
-        val app = getApplication<Application>()
-        viewModelScope.launch(Dispatchers.IO) {
-            if (!ProtectionEngine.isDeviceOwner(app) || isEnforcedCurfewActive(app)) {
-                withContext(Dispatchers.Main) {
-                    onComplete?.invoke(false)
-                }
-                return@launch
-            }
-
-            val endElapsed = NapController.startNap(app)
-            if (endElapsed <= 0L) {
-                withContext(Dispatchers.Main) {
-                    onComplete?.invoke(false)
-                }
-                return@launch
-            }
-            CurfewScheduler.scheduleNapEndAlarm(app, NapController.getEndWall(app))
-            CurfewEnforcer.syncBlockStateAsync(app) { synced ->
-                tickNap()
-                onComplete?.invoke(synced)
-            }
-        }
-    }
+    fun startFortress(profile: FortressProfile, onComplete: ((Boolean) -> Unit)? = null) =
+        runFortressMutation(
+            precondition = { app -> !FortressSessionController.isFortressActive(app) },
+            mutation = { app -> FortressSessionController.startFortress(app, profile) },
+            onComplete = onComplete
+        )
 
     /**
-     * Extends an active nap mode by an additional hour if Device Owner is active.
+     * Extends the currently active Fortress session by its own configured duration.
      */
-    fun extendNap(onComplete: ((Boolean) -> Unit)? = null) {
+    fun extendActiveFortress(onComplete: ((Boolean) -> Unit)? = null) =
+        runFortressMutation(
+            precondition = { app -> FortressSessionController.isFortressActive(app) },
+            mutation = { app -> FortressSessionController.extendActiveFortress(app) },
+            onComplete = onComplete
+        )
+
+    private fun runFortressMutation(
+        precondition: (Application) -> Boolean,
+        mutation: (Application) -> Long,
+        onComplete: ((Boolean) -> Unit)?
+    ) {
         val app = getApplication<Application>()
         viewModelScope.launch(Dispatchers.IO) {
-            if (!ProtectionEngine.isDeviceOwner(app) || !NapController.isNapActive(app)) {
-                withContext(Dispatchers.Main) {
-                    onComplete?.invoke(false)
+            fortressMutationMutex.withLock {
+                if (!ProtectionEngine.isDeviceOwner(app) || !precondition(app)) {
+                    withContext(Dispatchers.Main) { onComplete?.invoke(false) }
+                    return@launch
                 }
-                return@launch
-            }
-
-            val endElapsed = NapController.extendNap(app)
-            if (endElapsed <= 0L) {
-                withContext(Dispatchers.Main) {
-                    onComplete?.invoke(false)
+                if (mutation(app) <= 0L) {
+                    withContext(Dispatchers.Main) { onComplete?.invoke(false) }
+                    return@launch
                 }
-                return@launch
-            }
-            CurfewScheduler.scheduleNapEndAlarm(app, NapController.getEndWall(app))
-            CurfewEnforcer.syncBlockStateAsync(app) { synced ->
+                CurfewScheduler.scheduleFortressEndAlarm(app, FortressSessionController.getEndWall(app))
+                CurfewScheduler.scheduleNextAlarms(app)
+                CurfewEnforcer.syncBlockState(app)
                 tickNap()
-                onComplete?.invoke(synced)
+                withContext(Dispatchers.Main) { onComplete?.invoke(true) }
             }
         }
-    }
-
-    /**
-     * Cancel nap operation.
-     * Note: NapController enforces a strict fail-closed security invariant (no public cancel API).
-     */
-    fun cancelNap() {
-        Log.i(TAG, "cancelNap requested: Nap is tamper-proof and expires automatically.")
-        tickNap()
     }
 
     override fun onCleared() {

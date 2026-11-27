@@ -11,6 +11,7 @@ import com.drmohammed.antiporn.core.engine.SecondaryProfileDetector
 import com.drmohammed.antiporn.core.model.ShieldResult
 import com.drmohammed.antiporn.core.network.PhysicalNetworkResolver
 import com.drmohammed.antiporn.core.network.dns.DnsResilienceManager
+import com.drmohammed.antiporn.fortress.engine.EffectiveRestrictionResolver
 import com.drmohammed.antiporn.shields.DnsShield
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import com.drmohammed.antiporn.telemetry.SafeDpmGateway
@@ -26,6 +27,10 @@ internal object AlwaysOnVpnPolicyBridge {
 
     @Volatile
     private var lastAppliedBypassedPackages: Set<String>? = null
+
+    internal fun updateCachedBypassedPackages(bypassedPackages: Set<String>?) {
+        lastAppliedBypassedPackages = bypassedPackages
+    }
 
     fun restoreDnsShieldOnCurfewRelease(context: Context): Boolean {
         if (!SafeDpmGateway.isDeviceOwner(context)) return true
@@ -47,10 +52,10 @@ internal object AlwaysOnVpnPolicyBridge {
 
     @RequiresApi(Build.VERSION_CODES.Q)
     fun ensureOpportunisticDnsForLocalVpnInternal(context: Context): Boolean {
-        ProtectionTransitionGuard.markInternalDnsMutation()
         var dpmOk = true
         val dpmMode = PrivateDnsSettingsBridge.readDpmPrivateDnsMode(context)
         if (dpmMode != DevicePolicyManager.PRIVATE_DNS_MODE_OPPORTUNISTIC) {
+            ProtectionTransitionGuard.markInternalDnsMutation()
             val dpmRes = SafeDpmGateway.setGlobalPrivateDnsOpportunisticBlocking(context, BlackBoxRecorder.TAG_SHIELD)
             if (PrivateDnsSettingsBridge.isUnaffiliatedUsersException(dpmRes)) {
                 PrivateDnsSettingsBridge.updatePrivateDnsBlockedByUnaffiliatedUsers(context, true)
@@ -65,6 +70,7 @@ internal object AlwaysOnVpnPolicyBridge {
         }
         val globalMode = PrivateDnsSettingsBridge.readGlobalSetting(context, "private_dns_mode")
         if (!dpmOk || globalMode == "hostname") {
+            ProtectionTransitionGuard.markInternalDnsMutation()
             try {
                 if (PrivateDnsSettingsBridge.writePrivateDnsAtomic(context, "opportunistic", "")) {
                     PrivateDnsSettingsBridge.directGlobalWriteDenied = false
@@ -91,7 +97,7 @@ internal object AlwaysOnVpnPolicyBridge {
         var changed = false
         var dpmOk = true
         try {
-            val bypassedPackages = CurfewConfig.getVpnBypassedPackages(context)
+            val bypassedPackages = EffectiveRestrictionResolver.resolve(context).effectiveVpnBypassPackages
             val bypassChanged = lastAppliedBypassedPackages != bypassedPackages
             if (alwaysOnPkg != context.packageName || !isLockdown || bypassChanged) {
                 val res = SafeDpmGateway.setAlwaysOnVpnPackageBlocking(context, context.packageName, true, bypassedPackages)
@@ -143,9 +149,16 @@ internal object AlwaysOnVpnPolicyBridge {
     ): ShieldResult {
         if (!AlwaysOnVpnConsentHelper.isVpnConsentGranted(context) && SafeDpmGateway.isDeviceOwner(context)) {
             val lockdown = requiredMode == CurfewBlackholeVpnService.VpnMode.CURFEW_BLACKHOLE
-            val bypassed = if (lockdown) CurfewConfig.getVpnBypassedPackages(context) else null
+            val bypassed = if (lockdown) EffectiveRestrictionResolver.resolve(context).effectiveVpnBypassPackages else null
             AlwaysOnVpnConsentHelper.resolveTargetAlwaysOnPackage(context, requiredMode)?.let { targetPkg ->
-                SafeDpmGateway.setAlwaysOnVpnPackageBlocking(context, targetPkg, lockdown, bypassed)
+                val currentPkg = SafeDpmGateway.getAlwaysOnVpnPackageBlocking(context, recordSuccess = false).getOrNull()
+                val currentLockdown = SafeDpmGateway.isAlwaysOnVpnLockdownEnabledBlocking(context, recordSuccess = false).getOrNull() == true
+                if (currentPkg != targetPkg || currentLockdown != lockdown || (lockdown && lastAppliedBypassedPackages != bypassed)) {
+                    val res = SafeDpmGateway.setAlwaysOnVpnPackageBlocking(context, targetPkg, lockdown, bypassed)
+                    if (res.isSuccess) {
+                        updateCachedBypassedPackages(if (lockdown) bypassed else null)
+                    }
+                }
             }
         }
         if (!AlwaysOnVpnConsentHelper.isVpnConsentGranted(context)) {
@@ -205,9 +218,10 @@ internal object AlwaysOnVpnPolicyBridge {
         val unaffiliatedBlocked = PrivateDnsSettingsBridge.isPrivateDnsBlockedByUnaffiliatedUsers(context)
         val blockingHost = PrivateDnsSettingsBridge.getBlockingNonFamilyPrivateDnsHost(context)
         if (unaffiliatedBlocked && blockingHost != null) {
+            val effectiveProfile = EffectiveRestrictionResolver.resolve(context)
             if (requiredMode == CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY &&
-                !CurfewConfig.isInstantInternetKillEnabled(context) &&
-                !CurfewEnforcer.isEffectiveBlockActive(context)
+                !effectiveProfile.isInstantInternetKillActive &&
+                !effectiveProfile.isBlockActive
             ) {
                 if (CurfewBlackholeVpnService.isServiceOrTunnelActive() &&
                     CurfewBlackholeVpnService.currentMode == CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY
@@ -262,6 +276,7 @@ internal object AlwaysOnVpnPolicyBridge {
                         CurfewBlackholeVpnService.forceReleaseVpnAndAwait(context, 1500L)
                         if (alwaysOnPkg == context.packageName || targetAlwaysOnPkg == context.packageName) {
                             SafeDpmGateway.setAlwaysOnVpnPackageBlocking(context, null, false)
+                            lastAppliedBypassedPackages = null
                         }
                     }
                 }
@@ -272,6 +287,7 @@ internal object AlwaysOnVpnPolicyBridge {
                         Timber.tag(TAG).e("Failed clearing Always-on Blackhole VPN via SafeDpmGateway")
                         allOk = false
                     } else {
+                        lastAppliedBypassedPackages = null
                         Timber.tag(TAG).i("Always-on Blackhole VPN released via SafeDpmGateway")
                     }
                 }
@@ -280,38 +296,15 @@ internal object AlwaysOnVpnPolicyBridge {
                     CurfewBlackholeVpnService.forceReleaseVpnAndAwait(context, 2000L)
                     vpnWasTornDown = true
                 }
-                val isMainThread = try {
-                    Looper.myLooper() == Looper.getMainLooper()
-                } catch (_: RuntimeException) {
-                    false
-                }
-                if (vpnWasTornDown && !isMainThread) {
-                    try {
-                        Thread.sleep(450L)
-                    } catch (_: InterruptedException) {
-                        Thread.currentThread().interrupt()
-                    }
-                }
                 if (vpnWasTornDown || !DnsShieldPolicyEvaluator.isStandaloneDnsShieldActive(context)) {
                     var restored = restoreDnsShieldOnCurfewRelease(context)
                     if (!restored) {
-                        if (!PhysicalNetworkResolver.isDevicePhysicallyOffline(context) && !isMainThread) {
-                            try {
-                                Thread.sleep(600L)
-                            } catch (_: InterruptedException) {
-                                Thread.currentThread().interrupt()
-                            }
-                            restored = restoreDnsShieldOnCurfewRelease(context)
-                        } else if (!PhysicalNetworkResolver.isDevicePhysicallyOffline(context)) {
-                            restored = restoreDnsShieldOnCurfewRelease(context)
-                        }
-                        if (!restored) {
-                            val targetHost = DnsShield.getEffectiveDnsHost(context)
-                            val preArmed = StandaloneDotEnforcer.preArmStandaloneDotFailClosed(context, targetHost)
-                            if (preArmed) {
-                                Timber.tag(TAG).i("Post-curfew DPM DNS deferred (Doze/transient); fail-closed Settings.Global pre-armed to $targetHost")
-                                restored = true
-                            }
+                        val targetHost = DnsShield.getEffectiveDnsHost(context)
+                        val preArmed = StandaloneDotEnforcer.preArmStandaloneDotFailClosed(context, targetHost)
+                        if (preArmed) {
+                            Timber.tag(TAG).i("Post-curfew DPM DNS deferred; fail-closed Settings.Global pre-armed to $targetHost")
+                            CurfewConfig.setDnsRestorePending(context, true)
+                            restored = true
                         }
                     }
                     if (!restored) {

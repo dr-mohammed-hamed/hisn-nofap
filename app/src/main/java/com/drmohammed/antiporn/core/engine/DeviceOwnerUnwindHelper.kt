@@ -21,10 +21,11 @@ import com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService
 import com.drmohammed.antiporn.curfew.CurfewConfig
 import com.drmohammed.antiporn.curfew.CurfewEnforcer
 import com.drmohammed.antiporn.curfew.CurfewScheduler
-import com.drmohammed.antiporn.curfew.NapController
 import com.drmohammed.antiporn.curfew.ZeroTrustForegroundWatcher
 import com.drmohammed.antiporn.data.local.db.HisnRoomDatabase
 import com.drmohammed.antiporn.data.repository.PolicyRepository
+import com.drmohammed.antiporn.fortress.engine.CurfewWindowOverrideStore
+import com.drmohammed.antiporn.fortress.engine.FortressSessionController
 import com.drmohammed.antiporn.pageshield.engine.PageShieldReactionExecutor
 import com.drmohammed.antiporn.shields.SystemTamperShield
 import com.drmohammed.antiporn.waqfa.data.WaqfaRepository
@@ -90,12 +91,15 @@ internal object DeviceOwnerUnwindHelper {
             appContext.stopService(Intent(appContext, ScreenAiProjectionService::class.java))
             ScreenBlurOverlayManager.dismissAllOverlaysForBanking()
         }
-        runStepSafely("cancelCurfewAndNapAndResilience") {
+        runStepSafely("cancelCurfewAndFortressAndResilience") {
             CurfewScheduler.cancelCurfewAlarms(appContext)
             CurfewScheduler.cancelCurfewSnoozeAlarm(appContext)
-            CurfewScheduler.cancelNapEndAlarm(appContext)
+            CurfewScheduler.cancelFortressEndAlarm(appContext)
             CurfewEnforcer.clearSnooze(appContext)
-            NapController.clearNapForTeardown(appContext)
+            FortressSessionController.clearForTeardown(appContext)
+            appContext.getSharedPreferences("antiporn_nap_prefs", Context.MODE_PRIVATE)
+                .edit().clear().commit()
+            CurfewWindowOverrideStore.clearOverride(appContext)
             CurfewConfig.clearTransientFlagsForTeardown(appContext)
             DnsResilienceManager.resetStateSync(appContext)
         }

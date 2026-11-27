@@ -149,6 +149,7 @@
             <intent-filter>
                 <action android:name="com.drmohammed.antiporn.ACTION_CURFEW_START" />
                 <action android:name="com.drmohammed.antiporn.ACTION_CURFEW_END" />
+                <action android:name="com.drmohammed.antiporn.ACTION_FORTRESS_END" />
                 <action android:name="com.drmohammed.antiporn.ACTION_NAP_END" />
             </intent-filter>
         </receiver>
@@ -184,10 +185,10 @@
         </receiver>
 
         <receiver
-            android:name=".curfew.notification.NapNotificationReceiver"
+            android:name=".fortress.notification.FortressNotificationReceiver"
             android:exported="false">
             <intent-filter>
-                <action android:name="com.drmohammed.antiporn.curfew.ACTION_EXTEND_NAP" />
+                <action android:name="com.drmohammed.antiporn.fortress.ACTION_EXTEND_FORTRESS" />
             </intent-filter>
         </receiver>
 
@@ -261,6 +262,15 @@
             android:name=".ui.control.curfew.CurfewSettingsActivity"
             android:exported="false"
             android:launchMode="singleTop" />
+        <activity
+            android:name=".fortress.ui.FortressesListActivity"
+            android:exported="false"
+            android:launchMode="singleTop" />
+        <activity
+            android:name=".fortress.ui.FortressEditorActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:windowSoftInputMode="adjustResize" />
         <activity
             android:name=".ui.control.web.WebFilterSettingsActivity"
             android:exported="false"

@@ -181,35 +181,6 @@ object PackageChangeHandler {
                             CurfewEnforcer.handlePackageAdded(appContext, packageName)
                         }
 
-                        // Auto-whitelist Islamic/Quran, productive, or essential applications in curfew policy
-                        // Strictly prevent rogue app/browser/store curfew bypasses and respect Zero-Trust locking
-                        val isZeroTrustBlocked = shouldFreeze
-                        val isBypassTarget = AppPolicyRegistry.isRestrictedBrowser(packageName) ||
-                            CurfewConfig.KNOWN_APP_STORES.contains(packageName) ||
-                            CurfewConfig.CURFEW_SEARCH_APPS.contains(packageName) ||
-                            policy.customBlacklistPackages.contains(packageName)
-
-                        if (!isZeroTrustBlocked && !isBypassTarget) {
-                            try {
-                                val isExplicitlyExempt = AppPolicyRegistry.isExemptFromCurfew(packageName)
-                                val pm = appContext.packageManager
-                                val appInfo = getApplicationInfoCompat(pm, packageName)
-
-                                val isEligible = isExplicitlyExempt || (appInfo != null && (
-                                    CurfewAppResolver.isIslamicOrQuranApp(pm, appInfo) ||
-                                        CurfewAppResolver.isAudiobookOrPodcastApp(pm, appInfo) ||
-                                        CurfewAppResolver.isMedicalOrStudyApp(pm, appInfo) ||
-                                        CurfewAppResolver.isMediaOrAlternativePlayerApp(pm, appInfo)
-                                    ))
-
-                                if (isEligible) {
-                                    PolicyRepository.getInstance(appContext).addAppToCurfewWhitelist(packageName)
-                                }
-                            } catch (e: Exception) {
-                                Timber.tag(TAG).w(e, "Error checking auto-whitelist eligibility for $packageName")
-                            }
-                        }
-
                         if (AppPolicyRegistry.isRestrictedBrowser(packageName)) {
                             try {
                                 val currentPolicy = PolicyRepository.getInstance(appContext).getCurrentPolicy()
@@ -250,20 +221,17 @@ object PackageChangeHandler {
         }
     }
 
-    private fun getApplicationInfoCompat(
-        pm: android.content.pm.PackageManager?,
-        packageName: String
-    ): android.content.pm.ApplicationInfo? {
+    private fun getApplicationInfoCompat(pm: android.content.pm.PackageManager?, pkg: String): android.content.pm.ApplicationInfo? {
         if (pm == null) return null
         return try {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                pm.getApplicationInfo(packageName, android.content.pm.PackageManager.ApplicationInfoFlags.of(0))
+                pm.getApplicationInfo(pkg, android.content.pm.PackageManager.ApplicationInfoFlags.of(0))
             } else {
                 @Suppress("DEPRECATION")
-                pm.getApplicationInfo(packageName, 0)
+                pm.getApplicationInfo(pkg, 0)
             }
         } catch (e: Exception) {
-            Timber.tag(TAG).w(e, "Failed reading ApplicationInfo for $packageName")
+            Timber.tag(TAG).w(e, "Failed reading ApplicationInfo for $pkg")
             null
         }
     }
@@ -374,7 +342,9 @@ class PackageChangeReceiver : BroadcastReceiver() {
                     Timber.tag(TAG).e(e, "Exception invoking handlePackageAdded")
                     try {
                         pendingResult.finish()
-                    } catch (_: Exception) {}
+                    } catch (finishEx: Exception) {
+                        Timber.tag(TAG).w(finishEx, "Error finishing pendingResult after launch failure")
+                    }
                 }
             }
 
@@ -404,7 +374,9 @@ class PackageChangeReceiver : BroadcastReceiver() {
                     Timber.tag(TAG).e(e, "Exception invoking handlePackageRemoved")
                     try {
                         pendingResult.finish()
-                    } catch (_: Exception) {}
+                    } catch (finishEx: Exception) {
+                        Timber.tag(TAG).w(finishEx, "Error finishing pendingResult after launch failure")
+                    }
                 }
             }
 

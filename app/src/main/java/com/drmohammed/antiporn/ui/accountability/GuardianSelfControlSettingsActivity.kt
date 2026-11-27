@@ -13,8 +13,10 @@ import androidx.lifecycle.lifecycleScope
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
+import com.drmohammed.antiporn.data.repository.AccountabilityRepository
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.databinding.ActivityGuardianSelfControlSettingsBinding
+import com.drmohammed.antiporn.fortress.ui.FortressesListActivity
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -108,6 +110,8 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
         binding.switchPermWaqfa.isChecked = policy.selfControlWaqfaAllowed
         binding.switchPermPageShield.isChecked = policy.selfControlPageShieldAllowed
         binding.switchPermNewApps.isChecked = policy.selfControlNewAppsAllowed
+        binding.switchPermFortresses.isChecked = policy.selfControlFortressesAllowed
+        binding.switchPermFortressUnlock.isChecked = policy.selfControlFortressUnlockAllowed
 
         updateGranularContainerState(policy.isSelfControlAllowed)
         isBinding = false
@@ -121,6 +125,8 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
         binding.switchPermWaqfa.isEnabled = isMasterAllowed
         binding.switchPermPageShield.isEnabled = isMasterAllowed
         binding.switchPermNewApps.isEnabled = isMasterAllowed
+        binding.switchPermFortresses.isEnabled = isMasterAllowed
+        binding.switchPermFortressUnlock.isEnabled = isMasterAllowed
 
         binding.cardPermCurfew.isEnabled = isMasterAllowed
         binding.cardPermWeb.isEnabled = isMasterAllowed
@@ -128,6 +134,8 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
         binding.cardPermWaqfa.isEnabled = isMasterAllowed
         binding.cardPermPageShield.isEnabled = isMasterAllowed
         binding.cardPermNewApps.isEnabled = isMasterAllowed
+        binding.cardPermFortresses.isEnabled = isMasterAllowed
+        binding.cardPermFortressUnlock.isEnabled = isMasterAllowed
     }
 
     private fun setControlsEnabled(enabled: Boolean) {
@@ -142,6 +150,8 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
             binding.switchPermWaqfa.isEnabled = false
             binding.switchPermPageShield.isEnabled = false
             binding.switchPermNewApps.isEnabled = false
+            binding.switchPermFortresses.isEnabled = false
+            binding.switchPermFortressUnlock.isEnabled = false
 
             binding.cardPermCurfew.isEnabled = false
             binding.cardPermWeb.isEnabled = false
@@ -149,6 +159,8 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
             binding.cardPermWaqfa.isEnabled = false
             binding.cardPermPageShield.isEnabled = false
             binding.cardPermNewApps.isEnabled = false
+            binding.cardPermFortresses.isEnabled = false
+            binding.cardPermFortressUnlock.isEnabled = false
         }
         binding.btnResetWardQrLock.isEnabled = enabled
     }
@@ -180,6 +192,14 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
 
         binding.cardPermNewApps.setOnClickListener {
             if (!isPushing && binding.switchPermNewApps.isEnabled) binding.switchPermNewApps.performClick()
+        }
+
+        binding.cardPermFortresses.setOnClickListener {
+            if (!isPushing && binding.switchPermFortresses.isEnabled) binding.switchPermFortresses.performClick()
+        }
+
+        binding.cardPermFortressUnlock.setOnClickListener {
+            if (!isPushing && binding.switchPermFortressUnlock.isEnabled) binding.switchPermFortressUnlock.performClick()
         }
 
         binding.switchMasterSelfControl.setOnCheckedChangeListener { _, isChecked ->
@@ -218,6 +238,16 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
             pushUpdatedPolicy { it.copy(selfControlNewAppsAllowed = isChecked) }
         }
 
+        binding.switchPermFortresses.setOnCheckedChangeListener { _, isChecked ->
+            if (isBinding) return@setOnCheckedChangeListener
+            pushUpdatedPolicy { it.copy(selfControlFortressesAllowed = isChecked) }
+        }
+
+        binding.switchPermFortressUnlock.setOnCheckedChangeListener { _, isChecked ->
+            if (isBinding) return@setOnCheckedChangeListener
+            pushUpdatedPolicy { it.copy(selfControlFortressUnlockAllowed = isChecked) }
+        }
+
         binding.btnResetWardQrLock.setOnClickListener {
             showResetWardQrConfirmationDialog()
         }
@@ -225,21 +255,30 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
 
     private fun pushUpdatedPolicy(updater: (DevicePolicyBundle) -> DevicePolicyBundle) {
         if (wardId.isBlank() || isPushing) return
-        val updated = updater(currentPolicy).copy(
-            version = currentPolicy.version + 1,
-            updatedAt = TrustedTimeProvider.currentTimeMillis(applicationContext)
-        )
+        val baseline = currentPolicy
 
         isPushing = true
         setControlsEnabled(false)
         lifecycleScope.launch(Dispatchers.IO) {
-            val success = policyRepository.pushPolicyToWard(wardId, updated)
+            val accRepo = AccountabilityRepository.getInstance(applicationContext)
+            val pushed = policyRepository.mergeAndPushRemotePolicyPatch(
+                wardUid = wardId,
+                fallbackPolicy = baseline,
+                guardianUidFallback = accRepo.getCachedUid(),
+                guardianNameFallback = accRepo.getMyDisplayName()
+            ) { latest ->
+                val now = TrustedTimeProvider.currentTimeMillis(applicationContext)
+                updater(latest).copy(
+                    version = latest.version + 1,
+                    updatedAt = now
+                )
+            }
             withContext(Dispatchers.Main) {
                 isPushing = false
                 if (isFinishing || isDestroyed) return@withContext
                 setControlsEnabled(true)
-                if (success) {
-                    currentPolicy = updated
+                if (pushed != null) {
+                    currentPolicy = pushed
                     Toast.makeText(
                         this@GuardianSelfControlSettingsActivity,
                         R.string.toast_guardian_permissions_saved,
@@ -271,23 +310,31 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
 
     private fun executeRemoteQrReset() {
         if (wardId.isBlank() || isPushing) return
+        val baseline = currentPolicy
         isPushing = true
         setControlsEnabled(false)
 
         lifecycleScope.launch(Dispatchers.IO) {
-            val now = TrustedTimeProvider.currentTimeMillis(applicationContext)
-            val updated = currentPolicy.copy(
-                remoteSelfControlResetRequestedAt = now,
-                version = currentPolicy.version + 1,
-                updatedAt = now
-            )
-            val success = policyRepository.pushPolicyToWard(wardId, updated)
+            val accRepo = AccountabilityRepository.getInstance(applicationContext)
+            val pushed = policyRepository.mergeAndPushRemotePolicyPatch(
+                wardUid = wardId,
+                fallbackPolicy = baseline,
+                guardianUidFallback = accRepo.getCachedUid(),
+                guardianNameFallback = accRepo.getMyDisplayName()
+            ) { latest ->
+                val now = TrustedTimeProvider.currentTimeMillis(applicationContext)
+                latest.copy(
+                    remoteSelfControlResetRequestedAt = now,
+                    version = latest.version + 1,
+                    updatedAt = now
+                )
+            }
             withContext(Dispatchers.Main) {
                 isPushing = false
                 if (!isFinishing && !isDestroyed) {
                     setControlsEnabled(true)
-                    if (success) {
-                        currentPolicy = updated
+                    if (pushed != null) {
+                        currentPolicy = pushed
                         Toast.makeText(
                             this@GuardianSelfControlSettingsActivity,
                             R.string.toast_reset_ward_qr_success,
@@ -306,8 +353,10 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
     }
 
     private fun navigateBackWithResult() {
+        val json = currentPolicy.toJson()
         val resultIntent = Intent().apply {
-            putExtra(EXTRA_POLICY_JSON, currentPolicy.toJson())
+            putExtra(EXTRA_POLICY_JSON, json)
+            putExtra(FortressesListActivity.EXTRA_UPDATED_POLICY_JSON, json)
         }
         setResult(Activity.RESULT_OK, resultIntent)
         finish()

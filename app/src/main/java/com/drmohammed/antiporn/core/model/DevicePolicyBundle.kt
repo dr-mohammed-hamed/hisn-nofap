@@ -1,6 +1,7 @@
 package com.drmohammed.antiporn.core.model
 
 import android.util.Log
+import com.drmohammed.antiporn.fortress.model.FortressesConfig
 import com.drmohammed.antiporn.waqfa.model.WaqfaConfig
 import org.json.JSONArray
 import org.json.JSONObject
@@ -72,7 +73,20 @@ data class DevicePolicyBundle(
     val wardCanWriteSecureSettings: Boolean? = null,
     val wardCapabilitiesUpdatedAt: Long = 0L,
     val wardA11yTamperAt: Long = 0L,
-    val wardSdkInt: Int? = null
+    val wardSdkInt: Int? = null,
+    // Fortresses & Remote Mode Unlock policy fields
+    val fortressesConfig: FortressesConfig = FortressesConfig.default(),
+    val selfControlFortressesAllowed: Boolean = true,
+    val selfControlFortressUnlockAllowed: Boolean = false,
+    val remoteModeUnlockTarget: String? = null,
+    val remoteModeUnlockRequestedAt: Long? = null,
+    // Ward active-mode read-only telemetry (NEVER written by Guardian toMap() pushes)
+    val wardActiveFortressId: String? = null,
+    val wardActiveFortressName: String? = null,
+    val wardActiveFortressIsEmergency: Boolean = false,
+    val wardActiveFortressEndsAtWall: Long = 0L,
+    val wardIsCurfewActiveNow: Boolean = false,
+    val wardActiveModesUpdatedAt: Long = 0L
 ) {
 
     fun toMap(): Map<String, Any?> {
@@ -134,7 +148,12 @@ data class DevicePolicyBundle(
             "version" to version,
             "updatedAt" to updatedAt,
             "remoteSelfControlResetRequestedAt" to remoteSelfControlResetRequestedAt,
-            "remoteTeardownRequestedAt" to remoteTeardownRequestedAt
+            "remoteTeardownRequestedAt" to remoteTeardownRequestedAt,
+            "fortressesConfig" to fortressesConfig.toMap(),
+            "selfControlFortressesAllowed" to selfControlFortressesAllowed,
+            "selfControlFortressUnlockAllowed" to selfControlFortressUnlockAllowed,
+            "remoteModeUnlockTarget" to remoteModeUnlockTarget,
+            "remoteModeUnlockRequestedAt" to remoteModeUnlockRequestedAt
         )
         map["guardianUid"] = guardianUid
         map["guardianName"] = guardianName
@@ -223,6 +242,17 @@ data class DevicePolicyBundle(
         json.put("wardCapabilitiesUpdatedAt", wardCapabilitiesUpdatedAt)
         json.put("wardA11yTamperAt", wardA11yTamperAt)
         if (wardSdkInt != null) json.put("wardSdkInt", wardSdkInt)
+        json.put("fortressesConfig", fortressesConfig.toJson())
+        json.put("selfControlFortressesAllowed", selfControlFortressesAllowed)
+        json.put("selfControlFortressUnlockAllowed", selfControlFortressUnlockAllowed)
+        if (remoteModeUnlockTarget != null) json.put("remoteModeUnlockTarget", remoteModeUnlockTarget)
+        if (remoteModeUnlockRequestedAt != null) json.put("remoteModeUnlockRequestedAt", remoteModeUnlockRequestedAt)
+        if (wardActiveFortressId != null) json.put("wardActiveFortressId", wardActiveFortressId)
+        if (wardActiveFortressName != null) json.put("wardActiveFortressName", wardActiveFortressName)
+        json.put("wardActiveFortressIsEmergency", wardActiveFortressIsEmergency)
+        json.put("wardActiveFortressEndsAtWall", wardActiveFortressEndsAtWall)
+        json.put("wardIsCurfewActiveNow", wardIsCurfewActiveNow)
+        json.put("wardActiveModesUpdatedAt", wardActiveModesUpdatedAt)
         return json.toString()
     }
 
@@ -251,6 +281,10 @@ data class DevicePolicyBundle(
         const val DEACTIVATION_STATUS_COMPLETED = "COMPLETED"
         const val DEACTIVATION_DEFAULT_DELAY_MS = 48L * 60L * 60L * 1000L // 48 Hours
         const val DEACTIVATION_QR_DELAY_MS = 24L * 60L * 60L * 1000L // 24 Hours
+
+        const val REMOTE_MODE_UNLOCK_CURFEW = "CURFEW"
+        const val REMOTE_MODE_UNLOCK_FORTRESS = "FORTRESS"
+        const val REMOTE_MODE_UNLOCK_ALL = "ALL"
 
         fun defaultPolicy(): DevicePolicyBundle = DevicePolicyBundle(
             browserFilterMode = BROWSER_FILTER_OFF,
@@ -369,6 +403,18 @@ data class DevicePolicyBundle(
             val wardA11yTamperAt = (map["wardA11yTamperAt"] as? Number)?.toLong() ?: 0L
             val wardSdkInt = (map["wardSdkInt"] as? Number)?.toInt()
 
+            val fortressesConfig = FortressesConfig.fromMap(map["fortressesConfig"])
+            val selfControlFortressesAllowed = (map["selfControlFortressesAllowed"] as? Boolean) ?: true
+            val selfControlFortressUnlockAllowed = (map["selfControlFortressUnlockAllowed"] as? Boolean) ?: false
+            val remoteModeUnlockTarget = (map["remoteModeUnlockTarget"] as? String)?.takeIf { it.isNotBlank() }
+            val remoteModeUnlockRequestedAt = (map["remoteModeUnlockRequestedAt"] as? Number)?.toLong()
+            val wardActiveFortressId = (map["wardActiveFortressId"] as? String)?.takeIf { it.isNotBlank() }
+            val wardActiveFortressName = (map["wardActiveFortressName"] as? String)?.takeIf { it.isNotBlank() }
+            val wardActiveFortressIsEmergency = (map["wardActiveFortressIsEmergency"] as? Boolean) ?: false
+            val wardActiveFortressEndsAtWall = (map["wardActiveFortressEndsAtWall"] as? Number)?.toLong() ?: 0L
+            val wardIsCurfewActiveNow = (map["wardIsCurfewActiveNow"] as? Boolean) ?: false
+            val wardActiveModesUpdatedAt = (map["wardActiveModesUpdatedAt"] as? Number)?.toLong() ?: 0L
+
             return DevicePolicyBundle(
                 curfewStartHour = startHour, curfewStartMinute = startMin,
                 curfewEndHour = endHour, curfewEndMinute = endMin,
@@ -425,7 +471,18 @@ data class DevicePolicyBundle(
                 wardCanWriteSecureSettings = wardCanWriteSecureSettings,
                 wardCapabilitiesUpdatedAt = wardCapabilitiesUpdatedAt,
                 wardA11yTamperAt = wardA11yTamperAt,
-                wardSdkInt = wardSdkInt
+                wardSdkInt = wardSdkInt,
+                fortressesConfig = fortressesConfig,
+                selfControlFortressesAllowed = selfControlFortressesAllowed,
+                selfControlFortressUnlockAllowed = selfControlFortressUnlockAllowed,
+                remoteModeUnlockTarget = remoteModeUnlockTarget,
+                remoteModeUnlockRequestedAt = remoteModeUnlockRequestedAt,
+                wardActiveFortressId = wardActiveFortressId,
+                wardActiveFortressName = wardActiveFortressName,
+                wardActiveFortressIsEmergency = wardActiveFortressIsEmergency,
+                wardActiveFortressEndsAtWall = wardActiveFortressEndsAtWall,
+                wardIsCurfewActiveNow = wardIsCurfewActiveNow,
+                wardActiveModesUpdatedAt = wardActiveModesUpdatedAt
             )
         }
 
@@ -531,6 +588,21 @@ data class DevicePolicyBundle(
                 } else {
                     null
                 }
+                val fortressesConfig = FortressesConfig.fromJson(json.optJSONObject("fortressesConfig"))
+                val selfControlFortressesAllowed = json.optBoolean("selfControlFortressesAllowed", true)
+                val selfControlFortressUnlockAllowed = json.optBoolean("selfControlFortressUnlockAllowed", false)
+                val remoteModeUnlockTarget = json.optNonBlankStringOrNull("remoteModeUnlockTarget")
+                val remoteModeUnlockRequestedAt = if (json.has("remoteModeUnlockRequestedAt") && !json.isNull("remoteModeUnlockRequestedAt")) {
+                    json.optLong("remoteModeUnlockRequestedAt")
+                } else {
+                    null
+                }
+                val wardActiveFortressId = json.optNonBlankStringOrNull("wardActiveFortressId")
+                val wardActiveFortressName = json.optNonBlankStringOrNull("wardActiveFortressName")
+                val wardActiveFortressIsEmergency = json.optBoolean("wardActiveFortressIsEmergency", false)
+                val wardActiveFortressEndsAtWall = json.optLong("wardActiveFortressEndsAtWall", 0L)
+                val wardIsCurfewActiveNow = json.optBoolean("wardIsCurfewActiveNow", false)
+                val wardActiveModesUpdatedAt = json.optLong("wardActiveModesUpdatedAt", 0L)
 
                 DevicePolicyBundle(
                     curfewStartHour = json.optInt("curfewStartHour", com.drmohammed.antiporn.curfew.CurfewConfig.START_HOUR).coerceIn(0, 23),
@@ -594,7 +666,18 @@ data class DevicePolicyBundle(
                     wardCanWriteSecureSettings = wardCanWriteSecureSettings,
                     wardCapabilitiesUpdatedAt = wardCapabilitiesUpdatedAt,
                     wardA11yTamperAt = wardA11yTamperAt,
-                    wardSdkInt = wardSdkInt
+                    wardSdkInt = wardSdkInt,
+                    fortressesConfig = fortressesConfig,
+                    selfControlFortressesAllowed = selfControlFortressesAllowed,
+                    selfControlFortressUnlockAllowed = selfControlFortressUnlockAllowed,
+                    remoteModeUnlockTarget = remoteModeUnlockTarget,
+                    remoteModeUnlockRequestedAt = remoteModeUnlockRequestedAt,
+                    wardActiveFortressId = wardActiveFortressId,
+                    wardActiveFortressName = wardActiveFortressName,
+                    wardActiveFortressIsEmergency = wardActiveFortressIsEmergency,
+                    wardActiveFortressEndsAtWall = wardActiveFortressEndsAtWall,
+                    wardIsCurfewActiveNow = wardIsCurfewActiveNow,
+                    wardActiveModesUpdatedAt = wardActiveModesUpdatedAt
                 )
             } catch (e: Exception) {
                 try {

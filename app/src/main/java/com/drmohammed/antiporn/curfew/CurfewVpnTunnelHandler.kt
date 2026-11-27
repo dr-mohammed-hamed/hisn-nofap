@@ -6,6 +6,7 @@ import android.os.Build
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard
 import com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService.VpnMode
+import com.drmohammed.antiporn.fortress.engine.EffectiveRestrictionResolver
 import com.drmohammed.antiporn.telemetry.SafeDpmGateway
 import timber.log.Timber
 
@@ -54,7 +55,7 @@ internal object CurfewVpnTunnelHandler {
 
         var appliedBypassedPackages: Set<String>? = null
         if (targetMode == VpnMode.CURFEW_BLACKHOLE) {
-            val bypassedPackages = CurfewConfig.getVpnBypassedPackages(appContext)
+            val bypassedPackages = EffectiveRestrictionResolver.resolve(appContext).effectiveVpnBypassPackages
             appliedBypassedPackages = bypassedPackages
             syncAlwaysOnBlackhole(appContext, service.packageName, bypassedPackages, lastBypassedPackages)
             for (pkg in bypassedPackages) {
@@ -168,12 +169,15 @@ internal object CurfewVpnTunnelHandler {
             val alwaysOnPkg = SafeDpmGateway.getAlwaysOnVpnPackageBlocking(appContext, recordSuccess = false).getOrNull()
             val isLockdown = SafeDpmGateway.isAlwaysOnVpnLockdownEnabledBlocking(appContext, recordSuccess = false).getOrNull() == true
             if (alwaysOnPkg != selfPackage || !isLockdown || lastBypassedPackages != bypassedPackages) {
-                SafeDpmGateway.setAlwaysOnVpnPackageBlocking(
+                val res = SafeDpmGateway.setAlwaysOnVpnPackageBlocking(
                     context = appContext,
                     vpnPackage = selfPackage,
                     lockdown = true,
                     bypassedPackages = bypassedPackages
                 )
+                if (res.isSuccess) {
+                    AlwaysOnVpnPolicyBridge.updateCachedBypassedPackages(bypassedPackages)
+                }
             }
         } catch (e: Exception) {
             Timber.tag(TAG).w(e, "Could not update Always-On VPN lockdown bypassed packages")
@@ -187,11 +191,14 @@ internal object CurfewVpnTunnelHandler {
             val isLockdown = SafeDpmGateway.isAlwaysOnVpnLockdownEnabledBlocking(appContext, recordSuccess = false).getOrNull() == true
             val targetAlwaysOnPkg = CurfewVpnDnsBridge.resolveTargetAlwaysOnPackage(appContext, targetMode)
             if (alwaysOnPkg != targetAlwaysOnPkg || isLockdown) {
-                SafeDpmGateway.setAlwaysOnVpnPackageBlocking(
+                val res = SafeDpmGateway.setAlwaysOnVpnPackageBlocking(
                     context = appContext,
                     vpnPackage = targetAlwaysOnPkg,
                     lockdown = false
                 )
+                if (res.isSuccess) {
+                    AlwaysOnVpnPolicyBridge.updateCachedBypassedPackages(null)
+                }
                 Timber.tag(TAG).i("Always-On VPN configured to target=$targetAlwaysOnPkg with lockdown=false for daytime DNS mode")
             }
         } catch (e: Exception) {

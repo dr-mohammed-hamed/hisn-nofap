@@ -265,7 +265,14 @@ class ApprovalRepository(
             Log.i(TAG, "IRON GUARD: App Store $packageName is immune from Zero-Trust freeze.")
             return false
         }
-        val appInfo = try { appContext.packageManager.getApplicationInfo(packageName, 0) } catch (_: Exception) { null }
+        val appInfo = try {
+            appContext.packageManager.getApplicationInfo(packageName, 0)
+        } catch (_: PackageManager.NameNotFoundException) {
+            null
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed reading ApplicationInfo for $packageName", e)
+            null
+        }
         if (appInfo != null && ((appInfo.flags and ApplicationInfo.FLAG_SYSTEM != 0) || (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP != 0))) {
             Log.i(TAG, "IRON GUARD: System package $packageName is immune from Zero-Trust freeze.")
             return false
@@ -396,9 +403,7 @@ class ApprovalRepository(
         val now = currentTimeMillisProvider()
         val targetSynced = if (syncToCloud) 0 else 1
         val isBlockActive = isBlockActiveProvider()
-        val isWhitelisted = CurfewConfig.STATIC_WHITELIST.contains(packageName) ||
-            immunePackagesProvider().contains(packageName) ||
-            policy.customCurfewWhitelistPackages.contains(packageName)
+        val isWhitelisted = immunePackagesProvider().contains(packageName)
 
         var outcome: ApprovalDecisionResult = ApprovalDecisionResult.FAILED_DPM_ERROR
         var notifyDeferred: Boolean? = null

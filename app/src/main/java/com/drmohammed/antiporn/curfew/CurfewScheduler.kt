@@ -7,19 +7,24 @@ import android.content.Intent
 import android.os.Build
 import android.os.SystemClock
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
+import com.drmohammed.antiporn.fortress.engine.FortressSessionController
 import timber.log.Timber
 import java.util.Calendar
 
 /**
- * Schedules exact, Doze-exempt alarms via AlarmManager for curfew start and end times,
+ * Schedules exact, Doze-exempt alarms via AlarmManager for curfew start/end and fortress end times,
  * dynamically supporting distinct weekday and weekend schedules.
  */
 object CurfewScheduler {
 
     private const val TAG = "AntiPorn_CurfewScheduler"
+    const val ACTION_FORTRESS_END = "com.drmohammed.antiporn.ACTION_FORTRESS_END"
+    internal const val LEGACY_ACTION_NAP_END = "com.drmohammed.antiporn.ACTION_NAP_END"
     private const val REQUEST_CODE_PRE_WARNING = 3000
     private const val REQUEST_CODE_START = 3001
     private const val REQUEST_CODE_END = 3002
+    const val REQUEST_CODE_FORTRESS_END_RTC = 3003
+    const val REQUEST_CODE_FORTRESS_END_ELAPSED = 3004
 
     /**
      * Returns the curfew start hour and minute for a specific day of the week,
@@ -239,12 +244,16 @@ object CurfewScheduler {
         }
     }
 
-    private fun buildNapEndPendingIntent(context: Context, requestCode: Int = NapConfig.REQUEST_CODE_NAP_END): PendingIntent {
+    private fun buildFortressEndPendingIntent(
+        context: Context,
+        requestCode: Int = REQUEST_CODE_FORTRESS_END_ELAPSED,
+        action: String = ACTION_FORTRESS_END
+    ): PendingIntent {
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        val napIntent = Intent(context, CurfewAlarmReceiver::class.java).apply {
-            action = NapConfig.ACTION_NAP_END
+        val fortressIntent = Intent(context, CurfewAlarmReceiver::class.java).apply {
+            this.action = action
         }
-        return PendingIntent.getBroadcast(context, requestCode, napIntent, flags)
+        return PendingIntent.getBroadcast(context, requestCode, fortressIntent, flags)
     }
 
     private fun setExactCompat(alarmManager: AlarmManager, type: Int, triggerMs: Long, pi: PendingIntent) {
@@ -265,43 +274,52 @@ object CurfewScheduler {
     }
 
     /**
-     * Schedules the nap-end alarm via ELAPSED_REALTIME_WAKEUP computed from monotonic hardware elapsed time.
+     * Schedules the fortress-end alarm via ELAPSED_REALTIME_WAKEUP computed from monotonic hardware elapsed time.
      */
-    fun scheduleNapEndAlarm(context: Context, triggerWallMs: Long) {
+    fun scheduleFortressEndAlarm(context: Context, triggerWallMs: Long) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: run {
-            Timber.tag(TAG).e("AlarmManager not available for nap end")
+            Timber.tag(TAG).e("AlarmManager not available for fortress end")
             return
         }
         try {
-            val remaining = NapController.remainingMs(context)
+            val remaining = FortressSessionController.remainingMs(context)
             if (remaining <= 0L) {
-                cancelNapEndAlarm(context)
+                cancelFortressEndAlarm(context)
                 return
             }
-            val piElapsed = buildNapEndPendingIntent(context, NapConfig.REQUEST_CODE_NAP_END_ELAPSED)
+            val piElapsed = buildFortressEndPendingIntent(context, REQUEST_CODE_FORTRESS_END_ELAPSED)
             val elapsedTrigger = SystemClock.elapsedRealtime() + remaining
             setExactCompat(alarmManager, AlarmManager.ELAPSED_REALTIME_WAKEUP, elapsedTrigger, piElapsed)
-            Timber.tag(TAG).i("Scheduled nap end alarm via ELAPSED_REALTIME: wall=$triggerWallMs remainingMs=$remaining elapsedTrigger=$elapsedTrigger")
+            Timber.tag(TAG).i("Scheduled fortress end alarm via ELAPSED_REALTIME: wall=%d remainingMs=%d elapsedTrigger=%d", triggerWallMs, remaining, elapsedTrigger)
         } catch (e: Exception) {
-            Timber.tag(TAG).e(e, "Failed to schedule nap end alarms")
+            Timber.tag(TAG).e(e, "Failed to schedule fortress end alarms")
         }
     }
 
     /**
-     * Cancels both nap-end alarms (RTC and ELAPSED).
+     * Cancels fortress-end alarms (both current and legacy in-flight Nap alarm slots).
      */
-    fun cancelNapEndAlarm(context: Context) {
+    fun cancelFortressEndAlarm(context: Context) {
+        if (FortressSessionController.isFortressActive(context)) {
+            Timber.tag(TAG).w("Skipped cancelFortressEndAlarm: an active Fortress session exists")
+            return
+        }
         try {
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
-            val piElapsed = buildNapEndPendingIntent(context, NapConfig.REQUEST_CODE_NAP_END_ELAPSED)
-            val piRtc = buildNapEndPendingIntent(context, NapConfig.REQUEST_CODE_NAP_END_RTC)
-            alarmManager.cancel(piElapsed)
-            alarmManager.cancel(piRtc)
-            piElapsed.cancel()
-            piRtc.cancel()
-            Timber.tag(TAG).i("Cancelled dual nap end alarms")
+            val slots = listOf(
+                REQUEST_CODE_FORTRESS_END_ELAPSED to ACTION_FORTRESS_END,
+                REQUEST_CODE_FORTRESS_END_RTC to ACTION_FORTRESS_END,
+                REQUEST_CODE_FORTRESS_END_ELAPSED to LEGACY_ACTION_NAP_END,
+                REQUEST_CODE_FORTRESS_END_RTC to LEGACY_ACTION_NAP_END
+            )
+            for ((code, act) in slots) {
+                val pi = buildFortressEndPendingIntent(context, code, act)
+                alarmManager.cancel(pi)
+                pi.cancel()
+            }
+            Timber.tag(TAG).i("Cancelled fortress end alarms")
         } catch (e: Exception) {
-            Timber.tag(TAG).e(e, "Failed to cancel nap end alarms")
+            Timber.tag(TAG).e(e, "Failed to cancel fortress end alarms")
         }
     }
 

@@ -4,6 +4,7 @@ import android.content.Intent
 import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 import com.drmohammed.antiporn.R
+import com.drmohammed.antiporn.fortress.ui.FortressesListActivity
 import com.drmohammed.antiporn.pageshield.ui.PageShieldSettingsActivity
 import com.drmohammed.antiporn.ui.control.curfew.CurfewSettingsActivity
 import com.drmohammed.antiporn.ui.control.other.OtherSettingsActivity
@@ -21,6 +22,19 @@ internal class GuardianPolicyTilesViewBinder(
 ) {
 
     fun setupListeners() {
+        activity.findViewById<View>(R.id.tileFortresses)?.setOnClickListener {
+            onLaunchSubScreen {
+                val state = stateProvider()
+                Intent(activity, FortressesListActivity::class.java).apply {
+                    putExtra(FortressesListActivity.EXTRA_IS_REMOTE, true)
+                    putExtra(FortressesListActivity.EXTRA_WARD_ID, state.wardId)
+                    putExtra(FortressesListActivity.EXTRA_POLICY_JSON, state.currentPolicy.toJson())
+                    putExtra(FortressesListActivity.EXTRA_WARD_ACTIVE_FORTRESS_ID, state.wardActiveFortressId)
+                    putExtra(FortressesListActivity.EXTRA_WARD_ACTIVE_FORTRESS_ENDS_AT_WALL, state.wardActiveFortressEndsAtWall)
+                }
+            }
+        }
+
         activity.findViewById<View>(R.id.tileCurfew)?.setOnClickListener {
             onLaunchSubScreen {
                 val state = stateProvider()
@@ -111,6 +125,7 @@ internal class GuardianPolicyTilesViewBinder(
 
     companion object {
         private val POLICY_TILE_IDS = intArrayOf(
+            R.id.tileFortresses,
             R.id.tileCurfew,
             R.id.tileWebFilter,
             R.id.tileAppManager,

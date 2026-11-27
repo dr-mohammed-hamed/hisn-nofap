@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import com.drmohammed.antiporn.core.time.TrustedTimeProvider
 import timber.log.Timber
 
 /**
@@ -40,27 +41,28 @@ object PageShieldAlarmScheduler {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val elapsedTrigger = TrustedTimeProvider.computeElapsedTrigger(triggerEpochMs, appContext)
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 if (alarmManager.canScheduleExactAlarms()) {
-                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerEpochMs, pendingIntent)
-                    Timber.tag(TAG).i("Scheduled exact unfreeze alarm for $packageName at epoch $triggerEpochMs")
+                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, elapsedTrigger, pendingIntent)
+                    Timber.tag(TAG).i("Scheduled exact unfreeze alarm for $packageName at epoch $triggerEpochMs (elapsed=$elapsedTrigger)")
                 } else {
-                    alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerEpochMs, pendingIntent)
-                    Timber.tag(TAG).w("Scheduled inexact unfreeze alarm fallback for $packageName at epoch $triggerEpochMs")
+                    alarmManager.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, elapsedTrigger, pendingIntent)
+                    Timber.tag(TAG).w("Scheduled inexact unfreeze alarm fallback for $packageName at epoch $triggerEpochMs (elapsed=$elapsedTrigger)")
                 }
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerEpochMs, pendingIntent)
-                Timber.tag(TAG).i("Scheduled exact unfreeze alarm for $packageName at epoch $triggerEpochMs")
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, elapsedTrigger, pendingIntent)
+                Timber.tag(TAG).i("Scheduled exact unfreeze alarm for $packageName at epoch $triggerEpochMs (elapsed=$elapsedTrigger)")
             } else {
-                alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerEpochMs, pendingIntent)
-                Timber.tag(TAG).i("Scheduled exact unfreeze alarm (pre-M) for $packageName at epoch $triggerEpochMs")
+                alarmManager.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP, elapsedTrigger, pendingIntent)
+                Timber.tag(TAG).i("Scheduled exact unfreeze alarm (pre-M) for $packageName at epoch $triggerEpochMs (elapsed=$elapsedTrigger)")
             }
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Failed to schedule unfreeze alarm for $packageName, falling back to setAndAllowWhileIdle")
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerEpochMs, pendingIntent)
+                    alarmManager.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, elapsedTrigger, pendingIntent)
                 }
             } catch (ex: Exception) {
                 Timber.tag(TAG).e(ex, "Fatal error scheduling fallback alarm for $packageName")

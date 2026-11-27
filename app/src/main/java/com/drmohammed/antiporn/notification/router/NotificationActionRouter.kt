@@ -7,9 +7,9 @@ import android.util.Log
 import android.widget.Toast
 import com.drmohammed.antiporn.MainActivity
 import com.drmohammed.antiporn.R
+import com.drmohammed.antiporn.curfew.CurfewAppResolver
 import com.drmohammed.antiporn.curfew.CurfewEnforcer
-import com.drmohammed.antiporn.curfew.CurfewConfig
-import com.drmohammed.antiporn.data.repository.PolicyRepository
+import com.drmohammed.antiporn.fortress.engine.EffectiveRestrictionResolver
 import com.drmohammed.antiporn.notification.model.InAppNotification
 import com.drmohammed.antiporn.notification.model.NotificationActionType
 import com.drmohammed.antiporn.ui.accountability.GuardianControlActivity
@@ -111,17 +111,16 @@ object NotificationActionRouter {
             NotificationActionType.LAUNCH_APP -> {
                 val packageName = payload
                 if (!packageName.isNullOrBlank()) {
-                    val isCurfewActive = CurfewEnforcer.isEffectiveBlockActive(context)
-                    val policy = try {
-                        PolicyRepository.getInstance(context).getCurrentPolicy()
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed reading policy during package launch check", e)
-                        null
+                    val isBlockActive = CurfewEnforcer.isEffectiveBlockActive(context)
+                    val isWhitelisted = if (isBlockActive) {
+                        val effectiveAllowed = EffectiveRestrictionResolver.resolve(context).effectiveAllowedUserApps +
+                            CurfewAppResolver.resolveEssentialImmunePackages(context)
+                        effectiveAllowed.contains(packageName)
+                    } else {
+                        true
                     }
-                    val isWhitelisted = CurfewConfig.STATIC_WHITELIST.contains(packageName) ||
-                            policy?.customCurfewWhitelistPackages?.contains(packageName) == true
 
-                    if (isCurfewActive && !isWhitelisted) {
+                    if (isBlockActive && !isWhitelisted) {
                         Toast.makeText(
                             context,
                             R.string.notif_apps_suspended_title,
