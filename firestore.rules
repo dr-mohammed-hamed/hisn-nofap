@@ -36,6 +36,15 @@ service cloud.firestore {
         get(/databases/$(database)/documents/policies/$(wardUid)).data.get('guardianUid', null) == null;
     }
 
+    // Verifies if ward is allowed to decide pending newly-installed app tickets
+    function isSelfNewAppDecisionAllowed(wardUid) {
+      return isUnsupervisedOwner(wardUid) || (
+        exists(/databases/$(database)/documents/policies/$(wardUid)) &&
+        get(/databases/$(database)/documents/policies/$(wardUid)).data.get('isSelfControlAllowed', false) == true &&
+        get(/databases/$(database)/documents/policies/$(wardUid)).data.get('selfControlNewAppsAllowed', false) == true
+      );
+    }
+
     // Verifies if ward is allowed to make self-control app decisions (approve or reject)
     function isSelfAppDecisionAllowed(wardUid) {
       return isUnsupervisedOwner(wardUid) || (
@@ -226,7 +235,25 @@ service cloud.firestore {
         isGuardianOf(wardUid) ||
         (
           isOwner(wardUid) &&
-          resource.data.get('status', '') == 'PENDING' &&
+          (
+            (
+              resource.data.get('status', '') == 'PENDING' &&
+              isSelfNewAppDecisionAllowed(wardUid)
+            ) ||
+            (
+              resource.data.get('status', '') == 'REJECTED' &&
+              request.resource.data.get('status', '') == 'APPROVED' &&
+              (
+                resource.data.get('decidedBy', '') == 'SELF' ||
+                isUnsupervisedOwner(wardUid) ||
+                (
+                  exists(/databases/$(database)/documents/policies/$(wardUid)) &&
+                  get(/databases/$(database)/documents/policies/$(wardUid)).data.get('isSelfControlAllowed', false) == true &&
+                  get(/databases/$(database)/documents/policies/$(wardUid)).data.get('selfControlAppsAllowed', false) == true
+                )
+              )
+            )
+          ) &&
           request.resource.data.get('decidedBy', '') == 'SELF' &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'decidedBy', 'decidedAt']) &&
           (

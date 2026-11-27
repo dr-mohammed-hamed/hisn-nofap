@@ -192,21 +192,21 @@
 
     <string name="default_dns_text">تلقائي</string>
 
-    <string name="card_app_suspension_title">حظر وتجميد التطبيقات غير المقيدة (App Blocker)</string>
+    <string name="card_app_suspension_title">حظر وتجميد التطبيقات المحددة (App Blocker)</string>
 
-    <string name="card_app_suspension_active">تليجرام والمتصفحات غير المقيدة محظورة ومجمدة بالكامل</string>
+    <string name="card_app_suspension_active">درع تجميد التطبيقات المحددة مفعّل ويعمل بشكل طبيعي</string>
 
-    <string name="card_app_suspension_suspended">تم تجميد %1$d من التطبيقات المحظورة وجاري إزالتها</string>
+    <string name="card_app_suspension_suspended">تم تجميد %1$d من التطبيقات المحددة في قائمة الحظر</string>
 
-    <string name="card_app_suspension_pending">توجد %1$d تطبيقات محظورة بحاجة للتجميد والحذف</string>
+    <string name="card_app_suspension_pending">توجد %1$d تطبيقات بحاجة لتطبيق التجميد</string>
 
     <string name="card_app_suspension_inactive">غير مفعلة (يتطلب صلاحية Device Owner)</string>
 
-    <string name="card_app_suspension_subtext">تجميد وحذف فوري لتطبيقات تليجرام ومتصفحات البروكسي (Firefox, Tor, DuckDuckGo)</string>
+    <string name="card_app_suspension_subtext">تجميد التطبيقات المضافة إلى القائمة السوداء أو المعلّقة للموافقة</string>
 
     <string name="shield_app_suspension_none_found">تم الفحص: لا توجد أي تطبيقات محظورة مثبتة على الجهاز</string>
 
-    <string name="shield_app_suspension_blocked_count">تم تجميد وإلغاء تثبيت %1$d من التطبيقات المحظورة بنجاح</string>
+    <string name="shield_app_suspension_blocked_count">تم تجميد %1$d من التطبيقات المحظورة بنجاح</string>
 
     <!-- Night Curfew Strings -->
     <string name="card_curfew_title">حظر النوم الآلي المجدول (Night Curfew)</string>

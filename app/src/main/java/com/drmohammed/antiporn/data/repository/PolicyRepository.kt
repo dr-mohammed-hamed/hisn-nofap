@@ -378,6 +378,7 @@ class PolicyRepository(
         mergeAndSaveSelfPolicyPatch { bundle } != null
 
     suspend fun mergeAndSaveSelfPolicyPatch(
+        awaitCloudSync: Boolean = false,
         transform: (DevicePolicyBundle) -> DevicePolicyBundle
     ): DevicePolicyBundle? = withContext(Dispatchers.IO) {
         try {
@@ -448,7 +449,10 @@ class PolicyRepository(
                 details = "v${updated.version}, curfew=${updated.isCurfewEnabled}(${updated.curfewStartHour}:${updated.curfewStartMinute})"
             )
             val myUid = AccountabilityRepository.getInstance(appContext).getCachedUid()
-            cloudSyncBridge.syncPolicyToCloudAsync(myUid, updated)
+            val syncJob = cloudSyncBridge.syncPolicyToCloudAsync(myUid, updated)
+            if (awaitCloudSync) {
+                syncJob?.join()
+            }
             updated
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -545,7 +549,6 @@ class PolicyRepository(
                 } else if (AppPolicyRegistry.isRestrictedBrowser(packageName) ||
                     CurfewConfig.KNOWN_APP_STORES.contains(packageName) ||
                     CurfewConfig.CURFEW_SEARCH_APPS.contains(packageName) ||
-                    AppPolicyRegistry.isHighRisk(packageName) ||
                     current.customBlacklistPackages.contains(packageName)
                 ) {
                     null

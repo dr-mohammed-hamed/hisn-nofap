@@ -14,7 +14,6 @@ import android.telecom.TelecomManager
 import android.util.Log
 import android.view.inputmethod.InputMethodManager
 import com.drmohammed.antiporn.core.policy.AppPolicyRegistry
-import com.drmohammed.antiporn.shields.AppSuspensionShield
 
 /**
  * Resolves packages to suspend during night curfew while safeguarding essential
@@ -194,10 +193,8 @@ object CurfewAppResolver {
             val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
             imm?.inputMethodList?.forEach { imi ->
                 val pkg = imi.packageName
-                if (!AppSuspensionShield.isBlacklisted(pkg)) {
-                    immune.add(pkg)
-                    Log.d(TAG, "Resolved keyboard IME: $pkg")
-                }
+                immune.add(pkg)
+                Log.d(TAG, "Resolved keyboard IME: $pkg")
             }
         } catch (e: Exception) {
             Log.w(TAG, "Error resolving input methods", e)
@@ -297,8 +294,7 @@ object CurfewAppResolver {
             Log.w(TAG, "Error checking installed packages for curfew exemption", e)
         }
 
-        // Strictly ensure no blacklisted, custom blacklisted, app store, or curfew search loophole package ever gains immunity
-        immune.removeAll { AppSuspensionShield.isBlacklisted(it) }
+        // Strictly ensure no custom blacklisted, app store, or curfew search loophole package ever gains immunity
         immune.removeAll(customBlacklist)
         immune.removeAll(CurfewConfig.KNOWN_APP_STORES)
         immune.removeAll(CurfewConfig.CURFEW_SEARCH_APPS)

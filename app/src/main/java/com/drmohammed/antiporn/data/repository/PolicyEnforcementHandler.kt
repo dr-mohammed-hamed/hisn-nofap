@@ -317,13 +317,11 @@ internal class PolicyEnforcementHandler(
     ) {
         val currentBlacklist = bundle.customBlacklistPackages
         val initialApprovals = queryApprovalsSafely(approvalRepo, "applyPolicyToSystem")
-        val nonBaselineApprovedPackages = nonBaselineApprovedSet(initialApprovals)
         val localPendingSet = initialApprovals.filter { it.isPending }.map { it.packageName }.toSet()
 
         val removedFromBlacklist = (effectivePreviousPolicy.customBlacklistPackages - currentBlacklist).filter { pkg ->
             pkg != appContext.packageName &&
-                !AppPolicyRegistry.isImmune(pkg) &&
-                (!AppPolicyRegistry.isHighRisk(pkg) || nonBaselineApprovedPackages.contains(pkg))
+                !AppPolicyRegistry.isImmune(pkg)
         }
 
         val guardianName = bundle.guardianName ?: "GUARDIAN_POLICY"
@@ -333,10 +331,15 @@ internal class PolicyEnforcementHandler(
                 unsuspendAndApproveSafely(approvalRepo, pkg, guardianName, "removed blacklist package")
             }
         }
-        for (pkg in bundle.customCurfewWhitelistPackages) {
-            if (localPendingSet.contains(pkg) && (!AppPolicyRegistry.isHighRisk(pkg) || nonBaselineApprovedPackages.contains(pkg))) {
-                Log.i(TAG, "Self-healing bridge: auto-approving whitelisted package '$pkg' by supervisor")
-                unsuspendAndApproveSafely(approvalRepo, pkg, guardianName, "whitelisted package")
+        val allowWhitelistAutoApprove = !bundle.isSupervised ||
+            bundle.lastSelfModifiedAt == null ||
+            bundle.selfControlNewAppsAllowed
+        if (allowWhitelistAutoApprove) {
+            for (pkg in bundle.customCurfewWhitelistPackages) {
+                if (localPendingSet.contains(pkg)) {
+                    Log.i(TAG, "Self-healing bridge: auto-approving whitelisted package '$pkg' by supervisor")
+                    unsuspendAndApproveSafely(approvalRepo, pkg, guardianName, "whitelisted package")
+                }
             }
         }
 
@@ -349,8 +352,7 @@ internal class PolicyEnforcementHandler(
             }.map { it.packageName }.toSet()
             val packagesToUnsuspend = removedFromBlacklist.filter { pkg ->
                 (!isBlockActive || immunePackages.contains(pkg)) &&
-                    !blockedByZeroTrust.contains(pkg) &&
-                    (!AppPolicyRegistry.isHighRisk(pkg) || nonBaselineApprovedPackages.contains(pkg))
+                    !blockedByZeroTrust.contains(pkg)
             }.toTypedArray()
             if (packagesToUnsuspend.isNotEmpty()) {
                 try {
@@ -374,13 +376,16 @@ internal class PolicyEnforcementHandler(
         val isZeroTrustActive = bundle.lockNewInstallsUntilApproved
         val updatedApprovals = queryApprovalsSafely(approvalRepo, "curfew whitelist release")
         val zeroTrustApproved = updatedApprovals.filter { it.isApproved }.map { it.packageName }.toSet()
-        val updatedNonBaselineApproved = nonBaselineApprovedSet(updatedApprovals)
+        val zeroTrustRejected = updatedApprovals.filter { it.isRejected }.map { it.packageName }.toSet()
+        val zeroTrustPending = updatedApprovals.filter { it.isPending }.map { it.packageName }.toSet()
         val immunePackages = if (isZeroTrustActive) CurfewAppResolver.resolveImmunePackages(appContext) else emptySet()
         val pm = appContext.packageManager
 
         val whitelistedToUnsuspend = newlyWhitelisted.filter { pkg ->
-            val isHighRisk = AppPolicyRegistry.isHighRisk(pkg)
-            if (bundle.customBlacklistPackages.contains(pkg) || (isHighRisk && !updatedNonBaselineApproved.contains(pkg))) {
+            if (bundle.customBlacklistPackages.contains(pkg) ||
+                zeroTrustRejected.contains(pkg) ||
+                (isZeroTrustActive && zeroTrustPending.contains(pkg))
+            ) {
                 return@filter false
             }
             val isSystemOrUpdatedApp = try {
@@ -399,7 +404,7 @@ internal class PolicyEnforcementHandler(
                 false
             }
             val hasApproval = !isZeroTrustActive ||
-                (if (isHighRisk) updatedNonBaselineApproved.contains(pkg) else zeroTrustApproved.contains(pkg)) ||
+                zeroTrustApproved.contains(pkg) ||
                 immunePackages.contains(pkg) ||
                 isSystemOrUpdatedApp ||
                 pkg == CurfewConfig.GOOGLE_PLAY_STORE_PACKAGE ||
@@ -493,21 +498,18 @@ internal class PolicyEnforcementHandler(
         label: String
     ) {
         try {
-            approvalRepo.unsuspendAndApprove(
+            val result = approvalRepo.unsuspendAndApprove(
                 packageName = pkg,
                 decidedBy = guardianName,
                 syncToCloud = false
             )
+            if (result != ApprovalDecisionResult.APPROVED && result != ApprovalDecisionResult.APPROVED_CURFEW_DEFERRED) {
+                Log.w(TAG, "Auto-approve $label '$pkg' returned non-approved outcome: $result")
+            }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             Log.e(TAG, "Failed auto-approving $label '$pkg'", e)
         }
-    }
-
-    private fun nonBaselineApprovedSet(approvals: List<PendingApprovalEntity>): Set<String> {
-        return approvals.filter {
-            it.isApproved
-        }.map { it.packageName }.toSet()
     }
 
     private fun logPackageSuspensionResult(

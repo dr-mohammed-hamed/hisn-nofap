@@ -82,11 +82,7 @@ class AntiPornFirebaseMessagingService : FirebaseMessagingService() {
                 Log.i(TAG, "Processing APPROVAL_RESPONSE for $packageName with status $status")
 
                 val isApproved = status.equals("APPROVED", ignoreCase = true)
-                val isPermanentlyBlocked = com.drmohammed.antiporn.shields.AppSuspensionShield.isBlacklisted(packageName) ||
-                    PolicyRepository.getInstance(applicationContext).getCurrentPolicy().customBlacklistPackages.contains(packageName)
-                val actuallyApproved = isApproved && !isPermanentlyBlocked
-
-                if (actuallyApproved) {
+                if (isApproved) {
                     ApprovalRepository.getInstance(applicationContext).unsuspendAndApprove(
                         packageName = packageName,
                         decidedBy = decidedBy,

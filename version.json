@@ -1,12 +1,12 @@
 {
-  "versionCode": 35,
-  "versionName": "1.96",
+  "versionCode": 36,
+  "versionName": "1.97",
   "minSupportedVersion": 1,
   "apkFileName": "antiporn-release.apk",
   "downloadUrl": "https://pub-e568dc85c0ec4f2fb3d1b90e310b4310.r2.dev/antiporn-release.apk",
-  "fileSizeBytes": 29030556,
-  "sha256ApkHash": "41233e9ae2bc8eaf9fc979acfeb2028a7354d70fbd0f09cd77d67b59b8b52bb9",
+  "fileSizeBytes": 29145972,
+  "sha256ApkHash": "abdb5e2c203dba338eb05b7ba9eb5d58b5568c32ba74e357d3338edf989d0eac",
   "sha256CertificateChecksum": "Cxi7DKn3ddcJXYIuDNXdlKN84EuKu8Bf0L0SkSPCOMk",
-  "releaseNotes": "إصدار 1.96 (كود البناء 35): توحيد وتحسين مرونة الـ DNS والحظر الفوري (Curfew) مع دعم IPv6 DoH، وتفعيل وضع الإغلاق الآمن للـ VPN، وتحسين ضوابط التطبيقات عالية الخطورة وحماية Samsung Knox.",
-  "releaseDate": "2026-11-24"
+  "releaseNotes": "إصدار 1.97 (كود البناء 36): تحديث ضوابط تجميد التطبيقات المحددة والموافقة على التثبيتات الجديدة، وتحسينات الحظر الفوري (Curfew) وإدارة التطبيقات عن بُعد، مع دعم شاشة الوقف والحماية المصرفية.",
+  "releaseDate": "2026-11-25"
 }

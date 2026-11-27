@@ -311,7 +311,7 @@ object CurfewConfig {
      * Packages explicitly permitted to bypass the curfew blackhole VPN.
      * Guaranteed to always include AntiPorn self-package so background IPC,
      * Firebase FCM push notifications, and Firestore policy synchronization remain active,
-     * while stripping blacklisted, custom-blacklisted, high-risk apps, and restricted browsers.
+     * while stripping custom-blacklisted apps and restricted browsers.
      */
     fun getVpnBypassedPackages(context: Context): Set<String> {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -325,9 +325,7 @@ object CurfewConfig {
             null to emptySet()
         }
         val effectivePackages = (policyPackages ?: custom).filterNot { pkg ->
-            com.drmohammed.antiporn.shields.AppSuspensionShield.isBlacklisted(pkg) ||
-                AppPolicyRegistry.isRestrictedBrowser(pkg) ||
-                AppPolicyRegistry.isHighRisk(pkg) ||
+            AppPolicyRegistry.isRestrictedBrowser(pkg) ||
                 policyBlacklist.contains(pkg)
         }.toSet()
         return effectivePackages + context.packageName

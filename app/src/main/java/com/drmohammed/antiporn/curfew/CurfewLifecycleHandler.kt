@@ -6,11 +6,9 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.UserManager
 import android.util.Log
-import com.drmohammed.antiporn.core.policy.AppPolicyRegistry
 import com.drmohammed.antiporn.curfew.notification.ProtectionNotificationCoordinator
 import com.drmohammed.antiporn.data.repository.ApprovalRepository
 import com.drmohammed.antiporn.data.repository.PolicyRepository
-import com.drmohammed.antiporn.shields.AppSuspensionShield
 import com.drmohammed.antiporn.shields.BrowserShield
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import com.drmohammed.antiporn.telemetry.SafeDpmGateway
@@ -44,10 +42,9 @@ internal object CurfewLifecycleHandler {
                 pkg == CurfewConfig.GOOGLE_PLAY_STORE_PACKAGE ||
                 pkg == CurfewConfig.GOOGLE_SEARCH_PACKAGE ||
                 CurfewConfig.CURFEW_SEARCH_APPS.contains(pkg)
-            val isHighRiskOrBlacklisted = isHighRiskOrBlacklistedForRelease(pkg, emptySet(), customBlacklist)
             val isBrowser = BrowserShield.TARGET_BROWSER_PACKAGES.contains(pkg)
 
-            isSystem && !isStoreOrSearch && !isHighRiskOrBlacklisted && !isBrowser && !customBlacklist.contains(pkg)
+            isSystem && !isStoreOrSearch && !isBrowser && !customBlacklist.contains(pkg)
         } catch (_: Exception) {
             false
         }
@@ -340,15 +337,11 @@ internal object CurfewLifecycleHandler {
             Log.w(TAG, "Fail-secure active: preserving suspended immune packages except core critical packages")
             CurfewAppResolver.resolveCoreSystemCriticalPackages(context).filter { pkg ->
                 isPackageInstalled(pm, pkg) &&
-                    !AppSuspensionShield.isBlacklisted(pkg) &&
-                    !AppPolicyRegistry.isHighRisk(pkg) &&
                     SafeDpmGateway.isPackageSuspendedBlocking(context, pkg).getOrNull() == true
             }
         } else {
             immunePackages.filter { pkg ->
                 isPackageInstalled(pm, pkg) &&
-                    !AppSuspensionShield.isBlacklisted(pkg) &&
-                    !AppPolicyRegistry.isHighRisk(pkg) &&
                     !policyState.customBlacklist.contains(pkg) &&
                     !policyState.unapprovedPackages.contains(pkg) &&
                     SafeDpmGateway.isPackageSuspendedBlocking(context, pkg).getOrNull() == true
@@ -422,7 +415,7 @@ internal object CurfewLifecycleHandler {
         when {
             !isPackageInstalled(pm, pkg) -> false
             isHighRiskOrBlacklistedForRelease(pkg, policyState.approvedPackages, policyState.customBlacklist) -> {
-                Log.i(TAG, "Preserving suspension of $pkg on curfew release as it is blacklisted/unapproved high-risk")
+                Log.i(TAG, "Preserving suspension of $pkg on curfew release as it is custom-blacklisted")
                 false
             }
             else -> !policyState.unapprovedPackages.contains(pkg) &&
@@ -498,13 +491,12 @@ internal object CurfewLifecycleHandler {
         return isApproved
     }
 
+    @Suppress("UNUSED_PARAMETER")
     internal fun isHighRiskOrBlacklistedForRelease(
         pkg: String,
         approvedPackages: Set<String>,
         customBlacklist: Set<String>
-    ): Boolean = AppSuspensionShield.isBlacklisted(pkg) ||
-        (AppPolicyRegistry.isHighRisk(pkg) && !approvedPackages.contains(pkg)) ||
-        customBlacklist.contains(pkg)
+    ): Boolean = customBlacklist.contains(pkg)
 
     private fun isVpnReconcileNeeded(
         instantKill: Boolean,

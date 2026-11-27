@@ -261,11 +261,21 @@ class CurfewHardeningTest {
     }
 
     @Test
-    fun testDaytimeHighRiskRelease_respectsGuardianApprovalAndRejectsAutoDecisions() {
+    fun testDaytimeHighRiskRelease_treatsHighRiskIdenticallyToNormalAppsAndEnforcesCustomBlacklist() {
         val highRiskPkg = "org.telegram.messenger"
 
-        // Guardian-approved high-risk app can be released during daytime unless custom-blacklisted
+        // High-risk apps are treated identically to normal apps during daytime release:
+        // only explicit customBlacklist blocks release in isHighRiskOrBlacklistedForRelease.
         assertTrue(CurfewLifecycleHandler.isApprovalEligibleForRelease(highRiskPkg, isApproved = true, decidedBy = "guardian_uid_123"))
+        assertTrue(CurfewLifecycleHandler.isApprovalEligibleForRelease(highRiskPkg, isApproved = true, decidedBy = "INITIAL_DEVICE_BASELINE"))
+        assertTrue(CurfewLifecycleHandler.isApprovalEligibleForRelease(highRiskPkg, isApproved = true, decidedBy = "AUTO_APPROVED_UNLOCKED"))
+        assertTrue(CurfewLifecycleHandler.isApprovalEligibleForRelease(highRiskPkg, isApproved = true, decidedBy = null))
+        assertFalse(CurfewLifecycleHandler.isApprovalEligibleForRelease(highRiskPkg, isApproved = false, decidedBy = "guardian_uid_123"))
+
+        // Non-high-risk approved apps remain eligible even with null decidedBy
+        assertTrue(CurfewLifecycleHandler.isApprovalEligibleForRelease("com.whatsapp", isApproved = true, decidedBy = null))
+
+        // Not in customBlacklist -> NOT blocked by isHighRiskOrBlacklistedForRelease (even if unapproved)
         assertFalse(
             CurfewLifecycleHandler.isHighRiskOrBlacklistedForRelease(
                 pkg = highRiskPkg,
@@ -273,28 +283,26 @@ class CurfewHardeningTest {
                 customBlacklist = emptySet()
             )
         )
-
-        // Approved high-risk apps (including baseline/auto-approved) are eligible for daytime release unless custom-blacklisted
-        assertTrue(CurfewLifecycleHandler.isApprovalEligibleForRelease(highRiskPkg, isApproved = true, decidedBy = "guardian_uid_123"))
-        assertTrue(CurfewLifecycleHandler.isApprovalEligibleForRelease(highRiskPkg, isApproved = true, decidedBy = "INITIAL_DEVICE_BASELINE"))
-        assertTrue(CurfewLifecycleHandler.isApprovalEligibleForRelease(highRiskPkg, isApproved = true, decidedBy = "AUTO_APPROVED_UNLOCKED"))
-        assertFalse(CurfewLifecycleHandler.isApprovalEligibleForRelease(highRiskPkg, isApproved = false, decidedBy = "guardian_uid_123"))
-
-        // Non-high-risk approved apps remain eligible even with null decidedBy
-        assertTrue(CurfewLifecycleHandler.isApprovalEligibleForRelease("com.whatsapp", isApproved = true, decidedBy = null))
-
-        // Unapproved high-risk app or explicitly custom-blacklisted app stays suspended
-        assertTrue(
+        assertFalse(
             CurfewLifecycleHandler.isHighRiskOrBlacklistedForRelease(
                 pkg = highRiskPkg,
                 approvedPackages = emptySet(),
                 customBlacklist = emptySet()
             )
         )
+
+        // Explicitly custom-blacklisted app stays suspended regardless of approval set
         assertTrue(
             CurfewLifecycleHandler.isHighRiskOrBlacklistedForRelease(
                 pkg = highRiskPkg,
                 approvedPackages = setOf(highRiskPkg),
+                customBlacklist = setOf(highRiskPkg)
+            )
+        )
+        assertTrue(
+            CurfewLifecycleHandler.isHighRiskOrBlacklistedForRelease(
+                pkg = highRiskPkg,
+                approvedPackages = emptySet(),
                 customBlacklist = setOf(highRiskPkg)
             )
         )

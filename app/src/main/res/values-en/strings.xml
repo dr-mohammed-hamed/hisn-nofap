@@ -612,13 +612,13 @@
     <string name="btn_resolve_secondary_profile_now">Manage / Remove Secondary Profile</string>
     <string name="default_dns_text">Default Family DNS</string>
     <string name="card_app_suspension_title">App Suspension Shield</string>
-    <string name="card_app_suspension_active">Blacklisted applications are suspended.</string>
-    <string name="card_app_suspension_suspended">%1$d blacklisted app(s) suspended.</string>
-    <string name="card_app_suspension_pending">%1$d blacklisted app(s) pending suspension &amp; deletion</string>
+    <string name="card_app_suspension_active">App suspension shield is active for selected blocked apps.</string>
+    <string name="card_app_suspension_suspended">%1$d blocked app(s) suspended.</string>
+    <string name="card_app_suspension_pending">%1$d app(s) pending suspension.</string>
     <string name="card_app_suspension_inactive">App suspension is inactive.</string>
-    <string name="card_app_suspension_subtext">Harmful applications are locked.</string>
-    <string name="shield_app_suspension_none_found">No blacklisted apps found on device.</string>
-    <string name="shield_app_suspension_blocked_count">%1$d harmful app(s) suspended.</string>
+    <string name="card_app_suspension_subtext">Freezes applications placed in the blacklist or awaiting approval.</string>
+    <string name="shield_app_suspension_none_found">No blocked apps found on device.</string>
+    <string name="shield_app_suspension_blocked_count">%1$d blocked app(s) suspended.</string>
     <string name="card_curfew_title">Curfew &amp; Focus Shield</string>
     <string name="card_curfew_active_desc">Curfew is currently active. Apps are suspended.</string>
     <string name="card_curfew_active_desc_test">Curfew test mode active.</string>
@@ -1485,12 +1485,12 @@
 
     <!-- Waqf Support (Sadaqah Jariyah) -->
     <string name="waqf_settings_card_title">Waqf Sustainability Share — Support Hisn</string>
-    <string name="waqf_settings_card_subtitle">100% free, ad-free digital Waqf — contribute to sustain it as Sadaqah Jariyah</string>
+    <string name="waqf_settings_card_subtitle" formatted="false">100% free, ad-free digital Waqf — contribute to sustain it as Sadaqah Jariyah</string>
     <string name="waqf_support_title">Waqf Sustainability Share — Support Hisn</string>
     <string name="waqf_hero_badge">100% Free Digital Waqf • Sadaqah Jariyah</string>
     <string name="waqf_hero_hadith">The Messenger of Allah ﷺ said: “Whoever guides someone to goodness will have a reward like one who did it.”</string>
     <string name="waqf_hero_title">Waqf Sustainability Share &amp; System Stewardship</string>
-    <string name="waqf_hero_body">Hisn was engineered over thousands of hours by an individual developer as a 100% free, ad-free digital Waqf — dedicated to preventing fitnah and safeguarding the youth, hearts, honor, and homes of Muslims.\n\nSustaining the cloud update servers and ongoing AI protection research carries continuous operational costs. Contributing is completely optional, and every single pound you give is an open door to Sadaqah Jariyah and an ongoing share in keeping this shield alive.</string>
+    <string name="waqf_hero_body" formatted="false">Hisn was engineered over thousands of hours by an individual developer as a 100% free, ad-free digital Waqf — dedicated to preventing fitnah and safeguarding the youth, hearts, honor, and homes of Muslims.\n\nSustaining the cloud update servers and ongoing AI protection research carries continuous operational costs. Contributing is completely optional, and every single pound you give is an open door to Sadaqah Jariyah and an ongoing share in keeping this shield alive.</string>
     <string name="waqf_offline_banner_title">Offline Mode</string>
     <string name="waqf_offline_banner_desc">Only the primary InstaPay link is shown right now. Connect to the internet and tap Retry to load mobile wallets and additional channels.</string>
     <string name="waqf_btn_retry">Retry</string>
@@ -1505,6 +1505,6 @@
     <string name="waqf_share_card_body">Even if you cannot contribute financially today, sharing Hisn with someone who needs it or spreading the word may protect a heart and strengthen a home — earning you a share of the reward, God willing.</string>
     <string name="waqf_share_btn_label">Share App &amp; Earn Reward</string>
     <string name="waqf_share_chooser_title">Share Hisn via...</string>
-    <string name="waqf_share_message">Hisn — The first Android app to harness Android’s strongest system privilege (Device Owner) to block fitnah and digital addiction, freeing people from modern digital slavery and restoring willpower to those who lost it.\n\n100% free, ad-free digital Waqf for the sake of Allah.\n\nOfficial Website:\nhttps://hisn.uk/\n\nTelegram Channel:\nhttps://t.me/hisn_org</string>
+    <string name="waqf_share_message" formatted="false">Hisn — The first Android app to harness Android’s strongest system privilege (Device Owner) to block fitnah and digital addiction, freeing people from modern digital slavery and restoring willpower to those who lost it.\n\n100% free, ad-free digital Waqf for the sake of Allah.\n\nOfficial Website:\nhttps://hisn.uk/\n\nTelegram Channel:\nhttps://t.me/hisn_org</string>
     <string name="waqf_share_failed">Could not open share dialog</string>
 </resources>

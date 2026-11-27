@@ -18,7 +18,6 @@ import com.drmohammed.antiporn.data.model.InstalledAppDto
 import com.drmohammed.antiporn.data.repository.AppInventoryManager
 import com.drmohammed.antiporn.databinding.BottomSheetCurfewAppPickerBinding
 import com.drmohammed.antiporn.databinding.ItemCurfewAppPickerBinding
-import com.drmohammed.antiporn.shields.AppSuspensionShield
 import com.drmohammed.antiporn.ui.accountability.AppIconResolver
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.google.firebase.firestore.DocumentSnapshot
@@ -224,7 +223,6 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
         if (pkg == selfPackageName) return true
         if (criticalPackages.contains(pkg)) return true
         if (AppPolicyRegistry.isImmune(pkg)) return true
-        if (AppSuspensionShield.isBlacklisted(pkg)) return true
         if (customBlacklist.contains(pkg)) return true
         if (CurfewConfig.KNOWN_APP_STORES.contains(pkg)) return true
         if (CurfewConfig.CURFEW_SEARCH_APPS.contains(pkg)) return true

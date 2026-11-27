@@ -517,14 +517,14 @@ internal class PolicyCloudSyncBridge(
         }
     }
 
-    fun syncPolicyToCloudAsync(uid: String, bundle: DevicePolicyBundle) {
-        if (uid.isBlank()) return
+    fun syncPolicyToCloudAsync(uid: String, bundle: DevicePolicyBundle): kotlinx.coroutines.Job? {
+        if (uid.isBlank()) return null
         if (!isCloudSyncEnabledProvider()) {
             Log.d(TAG, "Cloud sync is disabled; skipping syncPolicyToCloudAsync (offline mode)")
-            return
+            return null
         }
         val maskedUid = AiTelemetryReporter.maskIdentifier(uid)
-        repositoryScope.launch {
+        return repositoryScope.launch {
             firestoreSyncMutex.withLock {
                 try {
                     if (bundle.version >= lastSyncedCloudVersion) {
