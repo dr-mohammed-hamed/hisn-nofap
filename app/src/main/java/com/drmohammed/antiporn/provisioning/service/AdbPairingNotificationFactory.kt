@@ -165,6 +165,39 @@ internal object AdbPairingNotificationFactory {
             .build()
     }
 
+    fun buildAccountsBlockingNotification(
+        context: Context,
+        wizardIntent: Intent,
+        optionsBundle: Bundle?,
+        accountLabels: List<String>
+    ): Notification {
+        val wizardPending = PendingIntent.getActivity(
+            context,
+            NotificationRegistry.REQUEST_CODE_ACCOUNTS_BLOCKING,
+            wizardIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            optionsBundle
+        )
+        val summary = accountLabels
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .takeIf { it.isNotEmpty() }
+            ?.joinToString(", ")
+            ?: context.getString(R.string.provisioning_accounts_fallback_label)
+        val desc = context.getString(R.string.provisioning_accounts_notif_desc, summary)
+        return NotificationCompat.Builder(context, AdbPairingNotificationService.CHANNEL_ID_HEADS_UP)
+            .setSmallIcon(R.drawable.ic_shield_device_owner)
+            .setContentTitle(context.getString(R.string.provisioning_accounts_notif_title))
+            .setContentText(desc)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(desc))
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setVibrate(VIBRATION_PATTERN)
+            .setContentIntent(wizardPending)
+            .setAutoCancel(true)
+            .build()
+    }
+
     fun buildFreezeRecoveryNotification(
         context: Context,
         affectedCount: Int,

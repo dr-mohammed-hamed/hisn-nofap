@@ -152,5 +152,6 @@ object NotificationRegistry {
     const val REQUEST_CODE_PROVISIONING_FAILURE = 9905
     const val REQUEST_CODE_OEM_PERMISSION = 9906
     const val REQUEST_CODE_FREEZE_RECOVERY = 9907
+    const val REQUEST_CODE_ACCOUNTS_BLOCKING = 9908
 
 }

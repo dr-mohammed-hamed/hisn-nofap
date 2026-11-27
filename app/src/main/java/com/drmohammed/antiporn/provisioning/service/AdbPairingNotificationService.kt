@@ -25,8 +25,10 @@ import com.drmohammed.antiporn.provisioning.ui.ProvisioningWizardActivity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.lang.ref.WeakReference
 
@@ -125,8 +127,11 @@ class AdbPairingNotificationService : Service() {
                 AdbPairingOutcomeDispatcher.dispatchResult(dispatchCtx, result)
             } catch (t: Throwable) {
                 if (t is CancellationException) {
+                    val lastKnownConnectPort = connectPort.takeIf { it > 0 } ?: capturedConnectPort
                     promptState.cancelPromotionWithoutStickyOutcome()
-                    notifyRecoveryOnCancellationIfNeeded()
+                    withContext(NonCancellable + Dispatchers.IO) {
+                        notifyRecoveryOnCancellationIfNeeded(lastKnownConnectPort)
+                    }
                     throw t
                 }
                 AdbPairingOutcomeDispatcher.dispatchUnexpectedError(dispatchCtx, t)
@@ -134,7 +139,7 @@ class AdbPairingNotificationService : Service() {
         }
     }
 
-    private fun notifyRecoveryOnCancellationIfNeeded() {
+    private fun notifyRecoveryOnCancellationIfNeeded(connectPortSnapshot: Int) {
         try {
             val stranded = ProvisioningFreezeRecoveryStore.findStillDisabledTrackedPackages(this)
             if (stranded.isEmpty()) return
@@ -148,7 +153,7 @@ class AdbPairingNotificationService : Service() {
             val recoveryIntent = Intent(this, ProvisioningWizardActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
                 putExtra(ProvisioningWizardActivity.EXTRA_SHOW_RECOVERY_DIALOG, true)
-                if (capturedConnectPort > 0) putExtra(ProvisioningWizardActivity.EXTRA_CONNECT_PORT, capturedConnectPort)
+                if (connectPortSnapshot > 0) putExtra(ProvisioningWizardActivity.EXTRA_CONNECT_PORT, connectPortSnapshot)
             }
             val optionsBundle = AdbPairingNotificationFactory.buildBalOptionsBundle()
             val notif = AdbPairingNotificationFactory.buildFreezeRecoveryNotification(
@@ -277,6 +282,12 @@ class AdbPairingNotificationService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    sealed class StickyOutcomePayload {
+        data class BlockingUsers(val usersJson: String, val connectPort: Int) : StickyOutcomePayload()
+        data class OemPermission(val oemTypeName: String, val connectPort: Int) : StickyOutcomePayload()
+        data class AccountsBlocking(val accountsJson: String, val connectPort: Int) : StickyOutcomePayload()
+    }
+
     companion object {
         private const val TAG = "AntiPorn_PairingSvc"
         const val CHANNEL_ID_GUIDE = "provisioning_guide_silent_v1"
@@ -287,6 +298,7 @@ class AdbPairingNotificationService : Service() {
 
         @Volatile var capturedPairingPort: Int = 0
         @Volatile var capturedConnectPort: Int = 0
+        @Volatile var pendingStickyOutcome: StickyOutcomePayload? = null
         @Volatile private var activeInstance: WeakReference<AdbPairingNotificationService>? = null
 
         const val ACTION_START_SERVICE = "com.drmohammed.antiporn.START_PAIRING_SERVICE"
@@ -309,6 +321,7 @@ class AdbPairingNotificationService : Service() {
         }
 
         fun clearStickyOutcome(context: Context, suppressReprompt: Boolean = false) {
+            pendingStickyOutcome = null
             activeInstance?.get()?.let { it.handleClearStickyOutcome(refreshPrompt = !suppressReprompt); return }
             if (!DeviceOwnerPromoter.isPromotionActive) {
                 AdbPairingOutcomeDispatcher.cancelPairingPromptNotification(context)

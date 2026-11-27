@@ -1459,7 +1459,36 @@
     <string name="provisioning_error_connect_port_timeout">Connect port discovery timed out after successful pairing.</string>
     <string name="provisioning_error_post_verify_failed">Device Owner verification failed after activation. Wireless debugging was kept open for safety; please retry.</string>
     <string name="provisioning_error_heal_failed">Could not re-enable stranded apps via Wireless ADB. Please retry or re-enable them manually.</string>
+    <string name="provisioning_error_accounts_blocked_generic">Active accounts on the device are preventing automatic Device Owner activation.</string>
+    <string name="provisioning_error_admin_removing">The system is finishing a previous cleanup. Please retry in a few seconds.</string>
     <string name="provisioning_error_unknown">Unknown error</string>
+
+    <!-- Blocking Accounts Guidance Dialog & Notification -->
+    <string name="provisioning_accounts_dialog_title">Temporarily Remove Accounts to Activate</string>
+    <string name="provisioning_accounts_dialog_intro">Your phone\'s system blocked automatic account bypass (common on Samsung Android 11 and protected OEM builds).\n\nRest assured: removing an account from Settings does NOT delete your photos, files, or chats—it is only a temporary sign-out and you can sign back in right after activation.</string>
+    <string name="provisioning_accounts_dialog_list_header">Detected accounts on this device:</string>
+    <string name="provisioning_accounts_dialog_steps">1. Tap \"Open Account Settings\" below.\n2. Select each listed account (such as Samsung or Google) and tap \"Remove account\".\n3. Press Back and tap \"Retry Now\" without re-entering a pairing code.</string>
+    <string name="provisioning_accounts_btn_open_settings">Open Account Settings</string>
+    <string name="provisioning_accounts_btn_retry_now">Retry Now</string>
+    <string name="provisioning_accounts_notif_title">Action Needed: Temporarily Remove Accounts</string>
+    <string name="provisioning_accounts_notif_desc">Tap here to open Account Settings (%1$s) and retry without re-pairing.</string>
+    <string name="provisioning_accounts_fallback_label">Registered device accounts (such as Google or OEM account)</string>
+    <string name="provisioning_accounts_list_item">• %1$s</string>
+    <string name="provisioning_account_label_google">Google</string>
+    <string name="provisioning_account_label_samsung">Samsung</string>
+    <string name="provisioning_account_label_xiaomi">Xiaomi</string>
+    <string name="provisioning_account_label_oppo_group">OPPO / Realme / OnePlus</string>
+    <string name="provisioning_account_label_huawei">Huawei</string>
+    <string name="provisioning_account_label_honor">Honor</string>
+    <string name="provisioning_account_label_vivo">Vivo</string>
+    <string name="provisioning_account_label_transsion">Transsion / Tecno / Infinix</string>
+    <string name="provisioning_account_label_whatsapp_business">WhatsApp Business</string>
+    <string name="provisioning_account_label_whatsapp">WhatsApp</string>
+    <string name="provisioning_account_label_telegram">Telegram</string>
+    <string name="provisioning_account_label_messenger">Messenger</string>
+    <string name="provisioning_account_label_facebook">Facebook</string>
+    <string name="provisioning_account_label_microsoft">Microsoft / Outlook</string>
+    <string name="provisioning_account_label_viber">Viber</string>
 
     <!-- OEM Permission Guidance Dialog & Notification -->
     <string name="provisioning_oem_dialog_title">Developer Permission Required to Continue</string>

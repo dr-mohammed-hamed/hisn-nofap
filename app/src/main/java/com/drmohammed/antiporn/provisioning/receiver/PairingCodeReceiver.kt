@@ -66,6 +66,7 @@ class PairingCodeReceiver : BroadcastReceiver() {
         const val EXTRA_ERROR_MESSAGE = "extra_error_message"
         const val EXTRA_BLOCKING_USERS_JSON = "extra_blocking_users_json"
         const val EXTRA_OEM_PERMISSION_TYPE = "extra_oem_permission_type"
+        const val EXTRA_BLOCKING_ACCOUNTS_JSON = "extra_blocking_accounts_json"
 
         /**
          * Sanitizes pairing input by stripping non-digits and converting Arabic/Indic numerals to standard ASCII digits.

@@ -162,7 +162,7 @@ class HomeViewModel(
                     val isDo = ProtectionEngine.isDeviceOwner(app)
                     val shields = ProtectionEngine.evaluateSystemStatus(app)
 
-                    val currentDnsHost = com.drmohammed.antiporn.telemetry.SafeDpmGateway.getGlobalPrivateDnsHost(app).getOrNull()
+                    val currentDnsHost = if (isDo) com.drmohammed.antiporn.telemetry.SafeDpmGateway.getGlobalPrivateDnsHost(app).getOrNull() else null
 
                     // Reuse precomputed shield statuses to avoid redundant ProtectionEngine evaluation
                     val activeShields = ActiveShieldsEvaluator.evaluateActiveShields(

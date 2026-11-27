@@ -1737,7 +1737,36 @@
     <string name="provisioning_error_connect_port_timeout">انتهت مهلة اكتشاف منفذ الاتصال بعد نجاح الاقتران.</string>
     <string name="provisioning_error_post_verify_failed">تعذر التحقق من تفعيل صلاحية مالك الجهاز بعد الانتهاء. تم الإبقاء على التصحيح اللاسلكي مفتوحاً للأمان، يرجى إعادة المحاولة.</string>
     <string name="provisioning_error_heal_failed">تعذر إعادة تفعيل التطبيقات المجمّدة عبر التصحيح اللاسلكي. يرجى إعادة المحاولة أو تفعيلها يدوياً.</string>
+    <string name="provisioning_error_accounts_blocked_generic">توجد حسابات نشطة على الهاتف تمنع تفعيل صلاحية مالك الجهاز تلقائياً.</string>
+    <string name="provisioning_error_admin_removing">النظام يُنهي تنظيف محاولة سابقة حالياً. يرجى إعادة المحاولة بعد ثوانٍ قليلة.</string>
     <string name="provisioning_error_unknown">خطأ غير معروف</string>
+
+    <!-- Blocking Accounts Guidance Dialog & Notification -->
+    <string name="provisioning_accounts_dialog_title">مطلوب إزالة الحسابات مؤقتاً لإكمال التفعيل</string>
+    <string name="provisioning_accounts_dialog_intro">رفض نظام الهاتف إخفاء الحسابات تلقائياً (وهو أمر شائع في أجهزة سامسونج أندرويد 11 وبعض الأنظمة المحمية).\n\nاطمئن: إزالة الحساب من إعدادات الهاتف لا تحذف صورك أو ملفاتك أو محادثاتك، وهي مجرد تسجيل خروج مؤقت لمدة دقيقة فقط ويمكنك تسجيل الدخول مجدداً فور التفعيل.</string>
+    <string name="provisioning_accounts_dialog_list_header">الحسابات المرصودة على الجهاز:</string>
+    <string name="provisioning_accounts_dialog_steps">١. اضغط «فتح إعدادات الحسابات» بالأسفل.\n٢. اختر كل حساب ظاهر (مثل حساب سامسونج أو جوجل) واضغط «إزالة الحساب».\n٣. اضغط زر الرجوع ثم اختر «أعد المحاولة الآن» دون الحاجة لإعادة إدخال رمز الاقتران.</string>
+    <string name="provisioning_accounts_btn_open_settings">فتح إعدادات الحسابات</string>
+    <string name="provisioning_accounts_btn_retry_now">أعد المحاولة الآن</string>
+    <string name="provisioning_accounts_notif_title">إجراء مطلوب: أزل الحسابات مؤقتاً لإكمال التفعيل</string>
+    <string name="provisioning_accounts_notif_desc">اضغط هنا لفتح إعدادات الحسابات (%1$s) وإكمال التفعيل دون إعادة اقتران.</string>
+    <string name="provisioning_accounts_fallback_label">حسابات الهاتف المسجلة (مثل جوجل أو حساب الشركة)</string>
+    <string name="provisioning_accounts_list_item">• %1$s</string>
+    <string name="provisioning_account_label_google">جوجل (Google)</string>
+    <string name="provisioning_account_label_samsung">سامسونج (Samsung)</string>
+    <string name="provisioning_account_label_xiaomi">شاومي (Xiaomi)</string>
+    <string name="provisioning_account_label_oppo_group">أوبو / ريلمي / ون بلس</string>
+    <string name="provisioning_account_label_huawei">هواوي (Huawei)</string>
+    <string name="provisioning_account_label_honor">هونر (Honor)</string>
+    <string name="provisioning_account_label_vivo">فيفو (Vivo)</string>
+    <string name="provisioning_account_label_transsion">ترانشن / تكنو / إنفينيكس</string>
+    <string name="provisioning_account_label_whatsapp_business">واتساب للأعمال (WhatsApp Business)</string>
+    <string name="provisioning_account_label_whatsapp">واتساب (WhatsApp)</string>
+    <string name="provisioning_account_label_telegram">تيليجرام (Telegram)</string>
+    <string name="provisioning_account_label_messenger">ماسنجر (Messenger)</string>
+    <string name="provisioning_account_label_facebook">فيسبوك (Facebook)</string>
+    <string name="provisioning_account_label_microsoft">مايكروسوفت / أوتلوك (Microsoft)</string>
+    <string name="provisioning_account_label_viber">فايبر (Viber)</string>
 
     <!-- OEM Permission Guidance Dialog & Notification -->
     <string name="provisioning_oem_dialog_title">مطلوب تفعيل إذن من خيارات المطور للمتابعة</string>

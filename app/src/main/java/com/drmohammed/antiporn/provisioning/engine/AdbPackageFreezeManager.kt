@@ -1,9 +1,10 @@
 package com.drmohammed.antiporn.provisioning.engine
 
-import android.accounts.AccountManager
 import android.content.Context
 import androidx.annotation.VisibleForTesting
 import com.drmohammed.antiporn.provisioning.engine.AdbShellValidation.ADMIN_COMPONENT_REGEX
+import com.drmohammed.antiporn.provisioning.engine.AdbShellValidation.DPM_BEGIN_MARKER
+import com.drmohammed.antiporn.provisioning.engine.AdbShellValidation.DPM_END_MARKER
 import com.drmohammed.antiporn.provisioning.engine.AdbShellValidation.PACKAGE_NAME_REGEX
 import com.drmohammed.antiporn.provisioning.engine.AdbShellValidation.SAFE_PATH_REGEX
 import com.drmohammed.antiporn.provisioning.engine.AdbShellValidation.combinedOutput
@@ -30,11 +31,13 @@ internal object AdbPackageFreezeManager {
     private const val RECONNECT_FINALLY_TIMEOUT_MS = 5_500L
     private const val WATCHDOG_LAUNCH_TIMEOUT_MS = 3_000L
 
-    private val ACCOUNT_TYPE_REGEX = Regex("Account \\{name=.*?, type=(.*?)\\}")
-
     private val CRITICAL_OS_PACKAGES = setOf(
         "android", "com.android.systemui", "com.android.settings", "com.android.phone",
-        "com.android.providers.settings", "com.miui.home", "com.sec.android.app.launcher",
+        "com.android.providers.settings", "com.android.providers.contacts",
+        "com.android.providers.calendar", "com.android.bluetooth", "com.android.nfc",
+        "com.android.cellbroadcastreceiver", "com.samsung.android.knox.containercore",
+        "com.samsung.android.knox.kpecore", "com.sec.android.daemonapp",
+        "com.miui.home", "com.sec.android.app.launcher",
         "com.google.android.apps.nexuslauncher", "com.android.launcher3", "com.oppo.launcher"
     )
 
@@ -43,7 +46,7 @@ internal object AdbPackageFreezeManager {
 
     private fun staleLockGlobForUser(userId: Int): String {
         require(userId >= 0) { "Invalid userId: $userId" }
-        return "/data/local/tmp/antiporn_freeze_${userId}*.lock"
+        return "/data/local/tmp/antiporn_freeze_${userId}_*.lock"
     }
 
     @VisibleForTesting
@@ -89,12 +92,20 @@ internal object AdbPackageFreezeManager {
         require(safePackages.isNotEmpty() && safePackages.all { PACKAGE_NAME_REGEX.matches(it) }) { "Invalid freeze packages" }
         val enableCmds = safePackages.joinToString("; ") { "pm enable --user $userId $it" }
         val disableCmds = safePackages.joinToString("; ") { "pm disable-user --user $userId $it" }
+        val dpmAttemptCmd =
+            "out=\$(dpm set-device-owner --user $userId $adminComponent 2>&1); rc=\$?; " +
+                "case \"\$out\" in *\"unknown option: --user\"*|*\"Unknown option: --user\"*|*\"illegal option\"*|*\"Illegal option\"*) " +
+                "out=\$(dpm set-device-owner $adminComponent 2>&1); rc=\$?;; esac"
         return "sh -c 'touch \"$lockPath\"; restore() { trap - EXIT HUP INT TERM; $enableCmds; rm -f \"$lockPath\"; }; " +
             "trap restore EXIT; trap \"restore; exit 129\" HUP; trap \"restore; exit 130\" INT; trap \"restore; exit 143\" TERM; " +
-            "$disableCmds; sleep 1; " +
-            "out=\$(dpm set-device-owner --user $userId $adminComponent 2>&1); rc=\$?; printf \"%s\\n\" \"\$out\"; " +
-            "case \"\$out\" in *\"unknown option: --user\"*|*\"Unknown option: --user\"*|*\"illegal option\"*|*\"Illegal option\"*) " +
-            "out2=\$(dpm set-device-owner $adminComponent 2>&1); rc=\$?; printf \"%s\\n\" \"\$out2\";; esac; exit \$rc'"
+            "$disableCmds; " +
+            "settle=0; while [ \$settle -lt 3 ]; do sleep 1; settle=\$((settle + 1)); " +
+            "checkin=\$(dumpsys account --checkin 2>/dev/null); case \"\$checkin\" in *\",\"[1-9][0-9]*) ;; *) break;; esac; done; " +
+            "printf \"%s\\n\" \"$DPM_BEGIN_MARKER\"; " +
+            "$dpmAttemptCmd; " +
+            "case \"\$out\" in *\"being removed\"*|*\"Being removed\"*|*\"mRemovingAdmins\"*) sleep 2; $dpmAttemptCmd;; esac; " +
+            "printf \"%s\\n\" \"\$out\"; " +
+            "printf \"%s\\n\" \"$DPM_END_MARKER\"; exit \$rc'"
     }
 
     suspend fun executePackageFreezePromotion(
@@ -105,20 +116,7 @@ internal object AdbPackageFreezeManager {
         reconnectProvider: (suspend () -> AdbClient?)? = null
     ): PromotionResult {
         val appContext = context?.applicationContext ?: context
-        val authenticatorMap = appContext?.let { ctx ->
-            try {
-                AccountManager.get(ctx)?.authenticatorTypes.orEmpty()
-                    .mapNotNull { info ->
-                        val type = info?.type?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                        val pkg = info.packageName?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                        type to pkg
-                    }.toMap()
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                Timber.tag(TAG).w(e, "Failed to retrieve authenticatorTypes from AccountManager")
-                emptyMap()
-            }
-        } ?: emptyMap()
+        val authenticatorMap = AdbAccountInspector.buildLocalAuthenticatorMap(appContext)
 
         val reconnectAndHeal: (suspend (List<String>, Int) -> Set<String>)? = reconnectProvider?.let { provider ->
             { packages, targetUserId ->
@@ -147,7 +145,14 @@ internal object AdbPackageFreezeManager {
         require(ADMIN_COMPONENT_REGEX.matches(adminComponent)) { "Unsafe adminComponent: $adminComponent" }
 
         val appContext = context?.applicationContext ?: context
-        val candidates = collectAccountPackagesToFreeze(shellExecutor, accountAuthenticatorMap)
+        val auditReport = AdbAccountInspector.inspectAccountsWithShell(
+            context = appContext,
+            userId = userId,
+            shellExecutor = shellExecutor,
+            localAuthenticatorMap = accountAuthenticatorMap,
+            recordAudit = appContext != null
+        )
+        val candidates = auditReport.targetPackages
         val alreadyDisabled = try {
             queryDisabledPackages(userId, shellExecutor)
         } catch (e: Exception) {
@@ -159,8 +164,8 @@ internal object AdbPackageFreezeManager {
         val safePackages = filterSafePackagesForFreeze(candidates, alreadyDisabled, appContext?.packageName)
         if (safePackages.isEmpty()) {
             val output = AdbPromotionExecutor.runDpmSetDeviceOwnerWithUserFallback(userId, adminComponent, shellExecutor)
-            Timber.tag(TAG).i("DPM direct execution (no freeze targets) output: $output")
-            return mapDpmOutputToPromotionResult(appContext, output)
+            Timber.tag(TAG).i("DPM direct execution (no freeze targets) output: ${AdbShellValidation.sanitizeUserFacingError(output)}")
+            return mapDpmOutputToPromotionResult(appContext, output, auditReport)
         }
 
         val priorLedgerPackages = appContext?.let { ctx ->
@@ -175,7 +180,7 @@ internal object AdbPackageFreezeManager {
         appContext?.let { ProvisioningFreezeRecoveryStore.recordPendingFreeze(it, userId, priorLedgerPackages + safePackages) }
 
         try {
-            val delaySeconds = (safePackages.size * 2 + 12).coerceIn(18, 35)
+            val delaySeconds = (safePackages.size * 2 + 35).coerceIn(40, 70)
             val watchdogScript = buildWatchdogScript(lockPath, userId, safePackages, delaySeconds)
             try {
                 withTimeoutOrNull(WATCHDOG_LAUNCH_TIMEOUT_MS) { shellExecutor(watchdogScript) }
@@ -185,9 +190,11 @@ internal object AdbPackageFreezeManager {
             }
 
             val atomicScript = buildAtomicFreezeAndDpmScript(lockPath, userId, adminComponent, safePackages)
-            val output = shellExecutor(atomicScript).combinedOutput()
-            Timber.tag(TAG).i("DPM atomic freeze execution output: $output")
-            return mapDpmOutputToPromotionResult(appContext, output)
+            val rawOutput = shellExecutor(atomicScript).combinedOutput()
+            recordPartialDisableFailures(appContext, userId, safePackages.size, rawOutput)
+            val dpmOutput = AdbShellValidation.extractDelimitedDpmOutput(rawOutput)
+            Timber.tag(TAG).i("DPM atomic freeze execution output: ${AdbShellValidation.sanitizeUserFacingError(dpmOutput)}")
+            return mapDpmOutputToPromotionResult(appContext, dpmOutput, auditReport)
         } finally {
             verifyAndRecoverInFinally(
                 appContext, userId, lockPath, safePackages, priorLedgerPackages, shellExecutor, reconnectAndHeal
@@ -195,16 +202,41 @@ internal object AdbPackageFreezeManager {
         }
     }
 
-    private fun mapDpmOutputToPromotionResult(appContext: Context?, output: String): PromotionResult {
+    private fun recordPartialDisableFailures(appContext: Context?, userId: Int, targetCount: Int, rawOutput: String) {
+        if (appContext == null || !rawOutput.contains(DPM_BEGIN_MARKER)) return
+        val preDpmSection = rawOutput.substringBefore(DPM_BEGIN_MARKER)
+        val hasDisableError = preDpmSection.contains("SecurityException", ignoreCase = true) ||
+            preDpmSection.contains("Failure", ignoreCase = true) ||
+            preDpmSection.contains("Exception", ignoreCase = true)
+        if (hasDisableError) {
+            BlackBoxRecorder.recordPairing(
+                appContext,
+                "ADB_FREEZE_DISABLE_PARTIAL",
+                isSuccess = false,
+                details = "userId=$userId, targetCount=$targetCount",
+                error = AdbShellValidation.sanitizeUserFacingError(preDpmSection)
+            )
+        }
+    }
+
+    private fun mapDpmOutputToPromotionResult(
+        appContext: Context?,
+        dpmOutput: String,
+        auditReport: AccountAuditReport
+    ): PromotionResult {
         return when (val outcome = AdbPromotionExecutor.classifySetupBypassOutput(
-            appContext, output, OemProvisioningHelper.isXiaomi(), OemProvisioningHelper.isRealmeOrOppo()
+            appContext, dpmOutput, OemProvisioningHelper.isXiaomi(), OemProvisioningHelper.isRealmeOrOppo()
         )) {
             is SetupBypassOutcome.Success -> PromotionResult.Success
             is SetupBypassOutcome.OemPermissionRequired -> PromotionResult.OemPermissionRequired(outcome.oemType, outcome.message)
             is SetupBypassOutcome.HardStopFailure -> PromotionResult.Failure(outcome.message)
-            is SetupBypassOutcome.SecondaryUsersError,
-            is SetupBypassOutcome.AccountsBlockedFailure ->
-                PromotionResult.Failure(AdbPromotionExecutor.formatFriendlyError(appContext, output))
+            is SetupBypassOutcome.SecondaryUsersError ->
+                PromotionResult.Failure(AdbPromotionExecutor.formatFriendlyError(appContext, dpmOutput))
+            is SetupBypassOutcome.AccountsBlockedFailure -> PromotionResult.AccountsBlocking(
+                accountLabels = AdbAccountInspector.resolveFriendlyAccountLabels(appContext, auditReport.accountTypes),
+                accountTypes = auditReport.accountTypes,
+                message = AdbPromotionExecutor.formatFriendlyError(appContext, dpmOutput)
+            )
         }
     }
 
@@ -290,13 +322,11 @@ internal object AdbPackageFreezeManager {
                 }
             }
             val remainingDisabled = primaryRemaining ?: withTimeoutOrNull(RECONNECT_FINALLY_TIMEOUT_MS) {
-                if (reconnectAndHeal == null) null
-                else try {
-                    reconnectAndHeal(safePackages, userId)
-                } catch (re: Exception) {
-                    if (re is CancellationException) throw re
-                    Timber.tag(TAG).w(re, "Reconnect heal failed")
-                    null
+                reconnectAndHeal?.let { heal ->
+                    try { heal(safePackages, userId) } catch (re: Exception) {
+                        if (re is CancellationException) throw re
+                        Timber.tag(TAG).w(re, "Reconnect heal failed"); null
+                    }
                 }
             }
             val finalRemaining = remainingDisabled ?: safePackages.toSet()
@@ -305,16 +335,10 @@ internal object AdbPackageFreezeManager {
                 if (combinedRemaining.isEmpty()) {
                     ProvisioningFreezeRecoveryStore.clearLedger(appContext)
                     AdbShellValidation.cancelFreezeRecoveryNotification(appContext)
-                    BlackBoxRecorder.recordPairing(
-                        appContext, "ADB_FREEZE_RESTORE_VERIFIED", isSuccess = true,
-                        details = "userId=$userId, count=${safePackages.size}"
-                    )
+                    BlackBoxRecorder.recordPairing(appContext, "ADB_FREEZE_RESTORE_VERIFIED", isSuccess = true, details = "userId=$userId, count=${safePackages.size}")
                 } else {
                     ProvisioningFreezeRecoveryStore.recordPendingFreeze(appContext, userId, combinedRemaining)
-                    BlackBoxRecorder.recordPairing(
-                        appContext, "ADB_FREEZE_RESTORE_INCOMPLETE", isSuccess = false,
-                        error = "userId=$userId, stillDisabled=${combinedRemaining.joinToString(",")}"
-                    )
+                    BlackBoxRecorder.recordPairing(appContext, "ADB_FREEZE_RESTORE_INCOMPLETE", isSuccess = false, error = "userId=$userId, stillDisabled=${combinedRemaining.joinToString(",")}")
                 }
             }
         }
@@ -329,26 +353,19 @@ internal object AdbPackageFreezeManager {
         val disabledBefore = queryDisabledPackages(userId, shellExecutor)
         val needEnable = safePackages.filter { it in disabledBefore }
         for (pkg in needEnable) {
-            try {
-                shellExecutor("pm enable --user $userId $pkg")
-            } catch (e: Exception) {
+            try { shellExecutor("pm enable --user $userId $pkg") } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 Timber.tag(TAG).w(e, "pm enable failed for $pkg during finally recovery")
             }
         }
-        val stillDisabled = if (needEnable.isEmpty()) emptySet()
-        else safePackages.toSet().intersect(queryDisabledPackages(userId, shellExecutor))
+        val stillDisabled = if (needEnable.isEmpty()) emptySet() else safePackages.toSet().intersect(queryDisabledPackages(userId, shellExecutor))
         if (stillDisabled.isEmpty()) {
             if (lockPath != null) {
-                try {
-                    shellExecutor("rm -f \"$lockPath\"")
-                } catch (e: Exception) {
+                try { shellExecutor("rm -f \"$lockPath\"") } catch (e: Exception) {
                     if (e is CancellationException) throw e
                     Timber.tag(TAG).d(e, "Lockfile cleanup skipped")
                 }
-            } else {
-                cleanupUserLockfiles(userId, shellExecutor)
-            }
+            } else cleanupUserLockfiles(userId, shellExecutor)
         }
         return stillDisabled
     }
@@ -374,31 +391,5 @@ internal object AdbPackageFreezeManager {
             .map { it.removePrefix("package:").trim() }
             .filter { PACKAGE_NAME_REGEX.matches(it) }
             .toSet()
-    }
-
-    private suspend fun collectAccountPackagesToFreeze(
-        shellExecutor: suspend (String) -> ShellResult,
-        authenticatorMap: Map<String, String>
-    ): Set<String> {
-        val dumpsys = try {
-            shellExecutor("dumpsys account").stdoutText
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            Timber.tag(TAG).w(e, "Failed dumping accounts before freeze")
-            ""
-        }
-        val accountTypes = dumpsys.lines().mapNotNull { ACCOUNT_TYPE_REGEX.find(it)?.groupValues?.get(1) }.toSet()
-        val packagesToDisable = mutableSetOf("com.google.android.gms")
-        accountTypes.forEach { type ->
-            val mappedPkg = authenticatorMap[type]
-            if (mappedPkg != null) packagesToDisable.add(mappedPkg) else when {
-                type.contains("google", ignoreCase = true) -> packagesToDisable.add("com.google.android.gms")
-                type.contains("whatsapp", ignoreCase = true) -> packagesToDisable.add("com.whatsapp")
-                type.contains("telegram", ignoreCase = true) -> packagesToDisable.add("org.telegram.messenger")
-                type.contains("samsung", ignoreCase = true) -> packagesToDisable.add("com.osp.app.signin")
-                type.contains("xiaomi", ignoreCase = true) -> packagesToDisable.add("com.xiaomi.account")
-            }
-        }
-        return packagesToDisable
     }
 }

@@ -5,7 +5,7 @@ import android.accounts.AccountManager
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
-import android.util.Log
+import timber.log.Timber
 
 /**
  * Pre-flight auditor for active system accounts.
@@ -25,10 +25,10 @@ object AccountAuditor {
      */
     fun getActiveAccounts(context: Context): List<Account> {
         return try {
-            val accountManager = AccountManager.get(context.applicationContext)
-            accountManager.accounts?.toList() ?: emptyList()
+            val appContext = context.applicationContext ?: context
+            AccountManager.get(appContext)?.accounts?.toList() ?: emptyList()
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to retrieve accounts from AccountManager", e)
+            Timber.tag(TAG).e(e, "Failed to retrieve accounts from AccountManager")
             emptyList()
         }
     }
@@ -51,42 +51,41 @@ object AccountAuditor {
     }
 
     /**
-     * Returns a user-friendly human-readable list of account descriptions or names.
+     * Returns localized, PII-free account provider labels for registered accounts.
      */
     fun getAccountSummaryList(context: Context): List<String> {
-        return getActiveAccounts(context).map { account ->
-            val typeLabel = when {
-                account.type.contains("google", ignoreCase = true) -> "Google"
-                account.type.contains("whatsapp", ignoreCase = true) -> "WhatsApp"
-                account.type.contains("telegram", ignoreCase = true) -> "Telegram"
-                account.type.contains("samsung", ignoreCase = true) -> "Samsung Account"
-                account.type.contains("xiaomi", ignoreCase = true) -> "Mi Account"
-                else -> account.type.substringAfterLast('.')
-            }
-            "$typeLabel (${account.name})"
-        }
+        val types = getActiveAccounts(context).mapNotNull { it.type?.takeIf(String::isNotBlank) }
+        return AdbAccountInspector.resolveFriendlyAccountLabels(context, types)
     }
 
     /**
-     * Launches the system's Accounts & Sync settings screen.
+     * Launches the system's Accounts & Sync settings screen, optionally in adjacent
+     * multi-window mode when supported by the caller.
+     *
+     * @return `true` if a settings activity launched, `false` if all fallback actions failed.
      */
-    fun openAccountSettings(context: Context) {
-        val appContext = context.applicationContext
-        try {
-            val intent = Intent(Settings.ACTION_SYNC_SETTINGS).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            }
-            appContext.startActivity(intent)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to open ACTION_SYNC_SETTINGS, falling back to general settings", e)
+    @JvmOverloads
+    fun openAccountSettings(context: Context, launchAdjacent: Boolean = false): Boolean {
+        val appContext = context.applicationContext ?: context
+        val intentFlags = Intent.FLAG_ACTIVITY_NEW_TASK or
+            if (launchAdjacent) Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT else 0
+        val actions = listOf(
+            Settings.ACTION_SYNC_SETTINGS,
+            Settings.ACTION_ADD_ACCOUNT,
+            Settings.ACTION_SETTINGS
+        )
+        for (action in actions) {
             try {
-                val fallbackIntent = Intent(Settings.ACTION_SETTINGS).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                val intent = Intent(action).apply {
+                    flags = intentFlags
                 }
-                appContext.startActivity(fallbackIntent)
-            } catch (ex: Exception) {
-                Log.e(TAG, "Failed to open settings screen", ex)
+                appContext.startActivity(intent)
+                return true
+            } catch (e: Exception) {
+                Timber.tag(TAG).w(e, "Failed to open $action")
             }
         }
+        Timber.tag(TAG).e("Failed to open any account or general settings screen")
+        return false
     }
 }

@@ -34,10 +34,31 @@ internal class FakeProvisioningContext : ContextWrapper(null) {
             R.string.provisioning_error_samsung_secure_folder -> "samsung_secure_folder"
             R.string.provisioning_error_post_verify_failed -> "post_verify_failed"
             R.string.provisioning_error_heal_failed -> "heal_failed"
+            R.string.provisioning_error_accounts_blocked_generic -> "accounts_blocked_generic"
+            R.string.provisioning_error_admin_removing -> "admin_removing"
+            R.string.provisioning_accounts_list_item -> "• %1\$s"
+            R.string.provisioning_account_label_google -> localized("جوجل (Google)", "Google")
+            R.string.provisioning_account_label_samsung -> localized("سامسونج (Samsung)", "Samsung")
+            R.string.provisioning_account_label_xiaomi -> localized("شاومي (Xiaomi)", "Xiaomi")
+            R.string.provisioning_account_label_oppo_group -> localized("أوبو / ريلمي / ون بلس", "OPPO / Realme / OnePlus")
+            R.string.provisioning_account_label_huawei -> localized("هواوي (Huawei)", "Huawei")
+            R.string.provisioning_account_label_honor -> localized("هونر (Honor)", "Honor")
+            R.string.provisioning_account_label_vivo -> localized("فيفو (Vivo)", "Vivo")
+            R.string.provisioning_account_label_transsion -> localized("ترانشن / تكنو / إنفينيكس", "Transsion / Tecno / Infinix")
+            R.string.provisioning_account_label_whatsapp_business -> localized("واتساب للأعمال (WhatsApp Business)", "WhatsApp Business")
+            R.string.provisioning_account_label_whatsapp -> localized("واتساب (WhatsApp)", "WhatsApp")
+            R.string.provisioning_account_label_telegram -> localized("تيليجرام (Telegram)", "Telegram")
+            R.string.provisioning_account_label_messenger -> localized("ماسنجر (Messenger)", "Messenger")
+            R.string.provisioning_account_label_facebook -> localized("فيسبوك (Facebook)", "Facebook")
+            R.string.provisioning_account_label_microsoft -> localized("مايكروسوفت / أوتلوك (Microsoft)", "Microsoft / Outlook")
+            R.string.provisioning_account_label_viber -> localized("فايبر (Viber)", "Viber")
             else -> "res_$resId"
         }
         return if (formatArgs.isEmpty()) template else String.format(template, *formatArgs)
     }
+
+    private fun localized(ar: String, en: String): String =
+        if (java.util.Locale.getDefault().language.equals("ar", ignoreCase = true)) ar else en
 }
 
 internal class FakeSharedPreferences : SharedPreferences {

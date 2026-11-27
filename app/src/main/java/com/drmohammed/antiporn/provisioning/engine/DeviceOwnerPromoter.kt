@@ -32,6 +32,7 @@ sealed class PromotionResult {
     data object Success : PromotionResult()
     data class SecondaryUsersBlocking(val users: List<BlockingSecondaryUser>) : PromotionResult()
     data class OemPermissionRequired(val oemType: OemPermissionType, val message: String) : PromotionResult()
+    data class AccountsBlocking(val accountLabels: List<String>, val accountTypes: List<String>, val message: String) : PromotionResult()
     data class Failure(val message: String, val cause: Throwable? = null) : PromotionResult()
 }
 
@@ -54,7 +55,7 @@ object DeviceOwnerPromoter {
     private const val TAG = "AntiPorn_Promoter"
     private const val LOCALHOST = "127.0.0.1"
     private const val ADB_KEY_FILENAME = "antiporn_adb.key"
-    private const val PROMOTION_TIMEOUT_MS = 45_000L
+    private const val PROMOTION_TIMEOUT_MS = 65_000L
     private const val MAX_DNS_HOST_LENGTH = 253
     private val DNS_LABEL_REGEX = Regex("^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$")
     private val promotionMutex = Mutex()
@@ -159,7 +160,7 @@ object DeviceOwnerPromoter {
                     )
                 }
                 if (outcome.remainingUsers.isNotEmpty()) return@connectWithRetry PromotionResult.SecondaryUsersBlocking(outcome.remainingUsers)
-                delay(400L)
+                delay(1200L)
                 AdbPromotionExecutor.executeZeroAccountPromotion(appContext, client, adminComponent, 0, reconnectProvider)
             }
             recordPromotionOutcome(appContext, finalResult, SystemClock.elapsedRealtime() - startTime, afterCleanup = true)
@@ -364,6 +365,10 @@ object DeviceOwnerPromoter {
             is PromotionResult.OemPermissionRequired -> BlackBoxRecorder.recordPairing(
                 appContext, "PROMOTION_OEM_PERMISSION_REQUIRED", isSuccess = false, executionTimeMs = durationMs,
                 details = "oemType=${result.oemType.name}", error = result.message
+            )
+            is PromotionResult.AccountsBlocking -> BlackBoxRecorder.recordPairing(
+                appContext, "PROMOTION_PAUSED_ACCOUNTS_BLOCKING", isSuccess = false, executionTimeMs = durationMs,
+                details = "count=${result.accountTypes.size}, types=${result.accountTypes.joinToString(",")}"
             )
             is PromotionResult.Failure -> BlackBoxRecorder.recordPairing(
                 appContext, if (afterCleanup) "PROMOTION_FAILURE_AFTER_USER_CLEANUP" else "PROMOTION_FAILURE",

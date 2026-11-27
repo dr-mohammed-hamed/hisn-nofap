@@ -1,6 +1,7 @@
 package com.drmohammed.antiporn.provisioning.engine
 
 import com.drmohammed.antiporn.provisioning.service.AdbPairingPromptState
+import com.drmohammed.antiporn.provisioning.ui.BlockingAccountsPayload
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import io.github.rhythmcache.adb.ShellResult
 import kotlinx.coroutines.delay
@@ -350,6 +351,7 @@ class AdbPromotionExecutorHardeningTest {
         var ledgerAtAtomic: FreezeRecoveryLedger? = null
         var listDisabledCalls = 0
         var gmsReEnabled = false
+        var gsfReEnabled = false
 
         val result = AdbPackageFreezeManager.executePackageFreezeWithShell(
             context = context,
@@ -359,6 +361,7 @@ class AdbPromotionExecutorHardeningTest {
             shellExecutor = { cmd ->
                 executedCommands += cmd
                 when {
+                    cmd == "dumpsys account --checkin" -> shellOk("com.google,1\ncom.whatsapp,1")
                     cmd == "dumpsys account" -> shellOk(
                         """
                         Accounts: 2
@@ -370,8 +373,15 @@ class AdbPromotionExecutorHardeningTest {
                         listDisabledCalls++
                         when (listDisabledCalls) {
                             1 -> shellOk("package:com.whatsapp")
-                            2 -> shellOk("package:com.whatsapp\npackage:com.google.android.gms")
-                            else -> shellOk(if (gmsReEnabled) "package:com.whatsapp" else "package:com.whatsapp\npackage:com.google.android.gms")
+                            2 -> shellOk("package:com.whatsapp\npackage:com.google.android.gms\npackage:com.google.android.gsf")
+                            else -> {
+                                val disabled = buildList {
+                                    add("package:com.whatsapp")
+                                    if (!gmsReEnabled) add("package:com.google.android.gms")
+                                    if (!gsfReEnabled) add("package:com.google.android.gsf")
+                                }
+                                shellOk(disabled.joinToString("\n"))
+                            }
                         }
                     }
                     cmd.startsWith("( trap '' HUP;") -> {
@@ -386,6 +396,10 @@ class AdbPromotionExecutorHardeningTest {
                         gmsReEnabled = true
                         shellOk("Package com.google.android.gms new state: enabled")
                     }
+                    cmd == "pm enable --user 0 com.google.android.gsf" -> {
+                        gsfReEnabled = true
+                        shellOk("Package com.google.android.gsf new state: enabled")
+                    }
                     cmd.startsWith("rm -f ") -> shellOk("")
                     else -> error("Unexpected shell command: $cmd")
                 }
@@ -395,11 +409,12 @@ class AdbPromotionExecutorHardeningTest {
         assertEquals(PromotionResult.Success, result)
         assertNotNull("Ledger must be persisted BEFORE launching watchdog", ledgerAtWatchdog)
         assertNotNull("Ledger must be persisted BEFORE launching atomic freeze", ledgerAtAtomic)
-        assertEquals(listOf("com.google.android.gms"), ledgerAtWatchdog!!.packages)
-        assertEquals(listOf("com.google.android.gms"), ledgerAtAtomic!!.packages)
+        assertEquals(listOf("com.google.android.gms", "com.google.android.gsf"), ledgerAtWatchdog!!.packages)
+        assertEquals(listOf("com.google.android.gms", "com.google.android.gsf"), ledgerAtAtomic!!.packages)
         assertFalse("Already-disabled com.whatsapp must not be frozen or enabled", executedCommands.any { it.contains("com.whatsapp") })
         assertTrue(executedCommands.indexOfFirst { it.startsWith("( trap '' HUP;") } < executedCommands.indexOfFirst { it.startsWith("sh -c '") })
         assertTrue(executedCommands.contains("pm enable --user 0 com.google.android.gms"))
+        assertTrue(executedCommands.contains("pm enable --user 0 com.google.android.gsf"))
         assertNull("Ledger must be cleared after verified restoration", ProvisioningFreezeRecoveryStore.getPendingLedger(context))
     }
 
@@ -434,7 +449,7 @@ class AdbPromotionExecutorHardeningTest {
             },
             reconnectAndHeal = { pkgs, _ ->
                 reconnectInvoked = true
-                assertEquals(listOf("com.google.android.gms"), pkgs)
+                assertEquals(listOf("com.google.android.gms", "com.google.android.gsf"), pkgs)
                 emptySet()
             }
         )
@@ -458,8 +473,9 @@ class AdbPromotionExecutorHardeningTest {
             shellExecutor = { cmd ->
                 executedCommands += cmd
                 when (cmd) {
-                    "dumpsys account" -> shellOk("")
-                    "pm list packages -d --user 0" -> shellOk("package:com.google.android.gms")
+                    "dumpsys account --checkin" -> shellOk("com.google,1")
+                    "dumpsys account" -> shellOk("Accounts: 1\n  Account {name=a@gmail.com, type=com.google}")
+                    "pm list packages -d --user 0" -> shellOk("package:com.google.android.gms\npackage:com.google.android.gsf")
                     "dpm set-device-owner --user 0 com.drmohammed.antiporn/.AdminReceiver" ->
                         shellFail("", "Error: unknown option: --user")
                     "dpm set-device-owner com.drmohammed.antiporn/.AdminReceiver" ->
@@ -487,6 +503,7 @@ class AdbPromotionExecutorHardeningTest {
                 accountAuthenticatorMap = emptyMap(),
                 shellExecutor = { cmd ->
                     when {
+                        cmd == "dumpsys account --checkin" -> shellOk("com.google,1")
                         cmd == "dumpsys account" -> shellOk("Account {name=a@gmail.com, type=com.google}")
                         cmd == "pm list packages -d --user 0" -> {
                             if (!atomicStarted) shellOk("")
@@ -508,7 +525,7 @@ class AdbPromotionExecutorHardeningTest {
         }
 
         assertTrue("Mid-freeze IOException should propagate after finally recovery", outcome.exceptionOrNull() is IOException)
-        assertEquals(listOf("com.google.android.gms") to 0, reconnectCalledWith)
+        assertEquals(listOf("com.google.android.gms", "com.google.android.gsf") to 0, reconnectCalledWith)
         assertNull(
             "Ledger must be cleared when reconnectAndHeal confirms all packages enabled",
             ProvisioningFreezeRecoveryStore.getPendingLedger(context)
@@ -528,6 +545,7 @@ class AdbPromotionExecutorHardeningTest {
                 accountAuthenticatorMap = mapOf("com.whatsapp" to "com.whatsapp"),
                 shellExecutor = { cmd ->
                     when {
+                        cmd == "dumpsys account --checkin" -> shellOk("com.google,1\ncom.whatsapp,1")
                         cmd == "dumpsys account" -> shellOk(
                             "Account {name=a@gmail.com, type=com.google}\nAccount {name=b, type=com.whatsapp}"
                         )
@@ -555,7 +573,7 @@ class AdbPromotionExecutorHardeningTest {
         val ledger = ProvisioningFreezeRecoveryStore.getPendingLedger(context)
         assertNotNull("Stranded packages must remain persisted in ledger on total disconnect", ledger)
         assertEquals(0, ledger!!.userId)
-        assertEquals(listOf("com.google.android.gms", "com.whatsapp"), ledger.packages)
+        assertEquals(listOf("com.google.android.gms", "com.google.android.gsf", "com.whatsapp"), ledger.packages)
     }
 
     @Test
@@ -594,7 +612,7 @@ class AdbPromotionExecutorHardeningTest {
             when (cmd) {
                 "pm enable --user 0 com.whatsapp" -> shellOk("")
                 "pm list packages -d --user 0" -> shellOk("")
-                "rm -f /data/local/tmp/antiporn_freeze_0*.lock" -> shellOk("")
+                "rm -f /data/local/tmp/antiporn_freeze_0_*.lock" -> shellOk("")
                 else -> error("Unexpected command: $cmd")
             }
         }
@@ -632,7 +650,7 @@ class AdbPromotionExecutorHardeningTest {
                         shellOk("")
                     }
                     "pm list packages -d --user 0" -> shellOk(if (gmsDisabled) "package:com.google.android.gms" else "")
-                    "rm -f /data/local/tmp/antiporn_freeze_0*.lock" -> shellOk("")
+                    "rm -f /data/local/tmp/antiporn_freeze_0_*.lock" -> shellOk("")
                     "pm grant com.drmohammed.antiporn android.permission.WRITE_SECURE_SETTINGS" -> {
                         secureSettingsGranted = true
                         shellOk("")
@@ -745,5 +763,349 @@ class AdbPromotionExecutorHardeningTest {
         val snap = state.clearStickyOutcome(isExternalPromotionActive = false, refreshPrompt = false)
         assertTrue(snap.cleared)
         assertFalse("clearStickyOutcome(refreshPrompt=false) must not re-post pairing prompt", snap.shouldRefreshPrompt)
+    }
+
+    @Test
+    fun executeZeroAccountPromotionWithShell_samsungAndroid11RedactedDumpsysWithCheckin_skipsFastPathAndFreezesGoogleGsfAndSamsung() = runBlocking {
+        val executedCommands = mutableListOf<String>()
+        var atomicExecuted = false
+        var verifierDidBypass: Boolean? = null
+
+        val result = AdbPromotionExecutor.executeZeroAccountPromotionWithShell(
+            context = context,
+            adminComponent = "com.drmohammed.antiporn/.AdminReceiver",
+            userId = 0,
+            shellExecutor = { cmd ->
+                executedCommands += cmd
+                when {
+                    cmd.startsWith("pm grant ") || cmd.startsWith("appops set ") || cmd.startsWith("dumpsys deviceidle") -> shellOk("")
+                    cmd.startsWith("settings put global private_dns_") -> shellOk("")
+                    cmd == "settings get global private_dns_specifier" -> shellOk("family.cloudflare-dns.com")
+                    cmd == "settings get global private_dns_mode" -> shellOk("hostname")
+                    cmd == "dumpsys account --checkin" -> shellOk("com.google,1\ncom.osp.app.signin,1\n")
+                    cmd == "dumpsys account" -> shellOk(
+                        """
+                        User UserInfo{0:Owner:c13}:
+                          Accounts: 2
+                        """.trimIndent()
+                    )
+                    cmd == "pm list packages -d --user 0" -> {
+                        if (!atomicExecuted) shellOk("")
+                        else shellOk("")
+                    }
+                    cmd.startsWith("( trap '' HUP;") -> shellOk("")
+                    cmd.startsWith("sh -c '") -> {
+                        atomicExecuted = true
+                        shellOk(
+                            """
+                            ${AdbShellValidation.DPM_BEGIN_MARKER}
+                            Success: Device owner set to package com.drmohammed.antiporn/.AdminReceiver
+                            ${AdbShellValidation.DPM_END_MARKER}
+                            """.trimIndent()
+                        )
+                    }
+                    cmd.startsWith("rm -f ") -> shellOk("")
+                    else -> error("Unexpected shell command: $cmd")
+                }
+            },
+            isDeviceOwnerChecker = { false },
+            canWriteSecureSettingsChecker = { true },
+            blockingUsersInspector = { emptyList() },
+            sdkVersionProvider = { 30 },
+            isXiaomi = false,
+            isRealmeOrOppo = false,
+            postPromotionVerifier = { _, _, didBypass ->
+                verifierDidBypass = didBypass
+                PromotionResult.Success
+            },
+            packageFreezeRunner = { appCtx, comp, uid ->
+                AdbPackageFreezeManager.executePackageFreezeWithShell(
+                    context = appCtx,
+                    userId = uid,
+                    adminComponent = comp,
+                    accountAuthenticatorMap = emptyMap(),
+                    shellExecutor = { cmd ->
+                        executedCommands += cmd
+                        when {
+                            cmd == "dumpsys account --checkin" -> shellOk("com.google,1\ncom.osp.app.signin,1\n")
+                            cmd == "dumpsys account" -> shellOk("User UserInfo{0:Owner:c13}:\n  Accounts: 2")
+                            cmd == "pm list packages -d --user 0" -> shellOk("")
+                            cmd.startsWith("( trap '' HUP;") -> shellOk("")
+                            cmd.startsWith("sh -c '") -> {
+                                atomicExecuted = true
+                                shellOk(
+                                    """
+                                    ${AdbShellValidation.DPM_BEGIN_MARKER}
+                                    Success: Device owner set to package com.drmohammed.antiporn/.AdminReceiver
+                                    ${AdbShellValidation.DPM_END_MARKER}
+                                    """.trimIndent()
+                                )
+                            }
+                            cmd.startsWith("rm -f ") -> shellOk("")
+                            else -> error("Unexpected freeze shell command: $cmd")
+                        }
+                    }
+                )
+            }
+        )
+
+        assertEquals(PromotionResult.Success, result)
+        assertEquals(false, verifierDidBypass)
+        assertFalse(
+            "FAST_PATH_ZERO_ACCOUNT_DPM must NOT fire direct dpm when --checkin detects accounts",
+            executedCommands.any { it.startsWith("dpm set-device-owner") }
+        )
+        val atomicScript = executedCommands.firstOrNull { it.startsWith("sh -c '") }
+        assertNotNull("Atomic freeze script must execute on SDK 30", atomicScript)
+        assertTrue(atomicScript!!.contains("pm disable-user --user 0 com.google.android.gms"))
+        assertTrue(atomicScript.contains("pm disable-user --user 0 com.google.android.gsf"))
+        assertTrue(atomicScript.contains("pm disable-user --user 0 com.osp.app.signin"))
+    }
+
+    @Test
+    fun executePackageFreezeWithShell_protectedPackageDisableFailure_returnsAccountsBlockingWithoutStackTraceLeak() = runBlocking {
+        val result = AdbPackageFreezeManager.executePackageFreezeWithShell(
+            context = context,
+            userId = 0,
+            adminComponent = "com.drmohammed.antiporn/.AdminReceiver",
+            accountAuthenticatorMap = emptyMap(),
+            shellExecutor = { cmd ->
+                when {
+                    cmd == "dumpsys account --checkin" -> shellOk("com.google,1\ncom.osp.app.signin,1\n")
+                    cmd == "dumpsys account" -> shellOk("Accounts: 2")
+                    cmd == "pm list packages -d --user 0" -> shellOk("")
+                    cmd.startsWith("( trap '' HUP;") -> shellOk("")
+                    cmd.startsWith("sh -c '") -> shellFail(
+                        stdout = """
+                            Package com.google.android.gms new state: disabled-user
+                            java.lang.SecurityException: Shell cannot disable protected package com.osp.app.signin
+                            ${AdbShellValidation.DPM_BEGIN_MARKER}
+                            usage: dpm [subcommand] [options]
+                            usage: dpm set-active-admin [ --user <USER_ID> | current ] <COMPONENT>
+                            java.lang.IllegalStateException: Not allowed to set the device owner because there are already some accounts on the device
+                            	at android.os.Parcel.createExceptionOrNull(Parcel.java:2373)
+                            	at android.os.Parcel.createException(Parcel.java:2357)
+                            	... 12 more
+                            ${AdbShellValidation.DPM_END_MARKER}
+                        """.trimIndent(),
+                        exitCode = 1
+                    )
+                    cmd.startsWith("rm -f ") -> shellOk("")
+                    else -> error("Unexpected shell command: $cmd")
+                }
+            }
+        )
+
+        assertTrue("Expected AccountsBlocking, got $result", result is PromotionResult.AccountsBlocking)
+        val blocking = result as PromotionResult.AccountsBlocking
+        assertTrue(blocking.accountTypes.contains("com.google"))
+        assertTrue(blocking.accountTypes.contains("com.osp.app.signin"))
+        assertTrue("accountLabels must be non-empty", blocking.accountLabels.isNotEmpty())
+        assertEquals("accounts_blocked_generic", blocking.message)
+        assertFalse("Stack trace must not leak into user-facing message", blocking.message.contains("at android.os.Parcel"))
+        assertFalse("dpm usage block must not leak into user-facing message", blocking.message.contains("usage: dpm"))
+        assertFalse("pm new state line must not leak into user-facing message", blocking.message.contains("new state:"))
+    }
+
+    @Test
+    fun runDpmSetDeviceOwnerWithUserFallback_retriesOnAdminBeingRemovedAndSucceeds() = runBlocking {
+        var attempts = 0
+        val output = AdbPromotionExecutor.runDpmSetDeviceOwnerWithUserFallback(
+            userId = 0,
+            adminComponent = "com.drmohammed.antiporn/.AdminReceiver",
+            shellExecutor = { cmd ->
+                assertEquals("dpm set-device-owner --user 0 com.drmohammed.antiporn/.AdminReceiver", cmd)
+                attempts++
+                if (attempts == 1) {
+                    shellFail(
+                        stderr = "java.lang.IllegalStateException: Trying to set an admin which is being removed",
+                        exitCode = 1
+                    )
+                } else {
+                    shellOk("Success: Device owner set to package com.drmohammed.antiporn/.AdminReceiver")
+                }
+            }
+        )
+
+        assertEquals(2, attempts)
+        assertTrue(AdbPromotionExecutor.isDpmOwnerSetSuccess(output))
+    }
+
+    @Test
+    fun executeZeroAccountPromotionWithShell_android14SetupHelperFailure_writesReadOnlyDexRestoresSetupAndFallsBackToFreeze() = runBlocking {
+        val executedCommands = mutableListOf<String>()
+        var fallbackFreezeCalled = false
+        var verifierDidBypass: Boolean? = null
+
+        val result = AdbPromotionExecutor.executeZeroAccountPromotionWithShell(
+            context = context,
+            adminComponent = "com.drmohammed.antiporn/.AdminReceiver",
+            userId = 0,
+            shellExecutor = { cmd ->
+                executedCommands += cmd
+                when {
+                    cmd.startsWith("pm grant ") || cmd.startsWith("appops set ") || cmd.startsWith("dumpsys deviceidle") -> shellOk("")
+                    cmd.startsWith("settings put global private_dns_") -> shellOk("")
+                    cmd == "settings get global private_dns_specifier" -> shellOk("family.cloudflare-dns.com")
+                    cmd == "settings get global private_dns_mode" -> shellOk("hostname")
+                    cmd == "dumpsys account --checkin" -> shellOk("com.google,1")
+                    cmd == "dumpsys account" -> shellOk("Accounts: 1\n  Account {name=a@gmail.com, type=com.google}")
+                    cmd.startsWith("echo '") -> shellOk("")
+                    cmd == "settings --user 0 put secure user_setup_complete 0" -> shellOk("")
+                    cmd == "CLASSPATH=/data/local/tmp/antiporn_helper.dex app_process /system/bin SetupStateHelper 0" ->
+                        shellFail("", "ERR_SETUP_HELPER: SecurityException", 1)
+                    cmd == "settings --user 0 put secure user_setup_complete 1" -> shellOk("")
+                    cmd == "rm -f /data/local/tmp/antiporn_helper.dex" -> shellOk("")
+                    else -> error("Unexpected shell command: $cmd")
+                }
+            },
+            isDeviceOwnerChecker = { false },
+            canWriteSecureSettingsChecker = { true },
+            blockingUsersInspector = { emptyList() },
+            sdkVersionProvider = { 34 },
+            isXiaomi = false,
+            isRealmeOrOppo = false,
+            postPromotionVerifier = { _, _, didBypass ->
+                verifierDidBypass = didBypass
+                PromotionResult.Success
+            },
+            packageFreezeRunner = { _, _, _ ->
+                fallbackFreezeCalled = true
+                PromotionResult.Success
+            }
+        )
+
+        assertEquals(PromotionResult.Success, result)
+        assertTrue("Fallback packageFreezeRunner must execute when SetupStateHelper fails", fallbackFreezeCalled)
+        assertEquals(true, verifierDidBypass)
+        val rmBeforeWriteIdx = executedCommands.indexOfFirst { it == "rm -f /data/local/tmp/antiporn_helper.dex" }
+        val dexWriteIdx = executedCommands.indexOfFirst { it.startsWith("echo '") }
+        assertTrue("Stale helper DEX must be removed before writing read-only DEX", rmBeforeWriteIdx in 0 until dexWriteIdx)
+        val dexWriteCmd = executedCommands[dexWriteIdx]
+        assertTrue("Helper DEX write command must enforce W^X chmod 444", dexWriteCmd.contains("chmod 444 /data/local/tmp/antiporn_helper.dex"))
+        assertFalse(
+            "dpm set-device-owner must NOT be called by setup bypass when SETUP_STATE_SUCCESS is absent",
+            executedCommands.any { it.startsWith("dpm set-device-owner") }
+        )
+        assertTrue(
+            "user_setup_complete must be restored to 1 in finally",
+            executedCommands.contains("settings --user 0 put secure user_setup_complete 1")
+        )
+        assertTrue(
+            "Helper DEX must be cleaned up in finally",
+            executedCommands.lastIndexOf("rm -f /data/local/tmp/antiporn_helper.dex") > dexWriteIdx
+        )
+    }
+
+    @Test
+    fun executeZeroAccountPromotionWithShell_android14SetupBypassAndFreezeBlocked_returnsAccountsBlockingEndToEnd() = runBlocking {
+        val result = AdbPromotionExecutor.executeZeroAccountPromotionWithShell(
+            context = context,
+            adminComponent = "com.drmohammed.antiporn/.AdminReceiver",
+            userId = 0,
+            shellExecutor = { cmd ->
+                when {
+                    cmd.startsWith("pm grant ") || cmd.startsWith("appops set ") || cmd.startsWith("dumpsys deviceidle") -> shellOk("")
+                    cmd.startsWith("settings put global private_dns_") -> shellOk("")
+                    cmd == "settings get global private_dns_specifier" -> shellOk("family.cloudflare-dns.com")
+                    cmd == "settings get global private_dns_mode" -> shellOk("hostname")
+                    cmd == "dumpsys account --checkin" -> shellOk("com.google,1\ncom.osp.app.signin,1")
+                    cmd == "dumpsys account" -> shellOk("Accounts: 2")
+                    cmd == "rm -f /data/local/tmp/antiporn_helper.dex" -> shellOk("")
+                    cmd.startsWith("echo '") -> shellOk("")
+                    cmd == "settings --user 0 put secure user_setup_complete 0" -> shellOk("")
+                    cmd == "CLASSPATH=/data/local/tmp/antiporn_helper.dex app_process /system/bin SetupStateHelper 0" ->
+                        shellOk("SETUP_STATE_SUCCESS")
+                    cmd.startsWith("dpm set-device-owner") ->
+                        shellFail("", "java.lang.IllegalStateException: Not allowed to set the device owner because there are already some accounts on the device")
+                    cmd == "settings --user 0 put secure user_setup_complete 1" -> shellOk("")
+                    else -> error("Unexpected shell command: $cmd")
+                }
+            },
+            isDeviceOwnerChecker = { false },
+            canWriteSecureSettingsChecker = { true },
+            blockingUsersInspector = { emptyList() },
+            sdkVersionProvider = { 34 },
+            isXiaomi = false,
+            isRealmeOrOppo = false,
+            postPromotionVerifier = { _, _, _ -> PromotionResult.Success },
+            packageFreezeRunner = { appCtx, comp, uid ->
+                AdbPackageFreezeManager.executePackageFreezeWithShell(
+                    context = appCtx,
+                    userId = uid,
+                    adminComponent = comp,
+                    accountAuthenticatorMap = emptyMap(),
+                    shellExecutor = { cmd ->
+                        when {
+                            cmd == "dumpsys account --checkin" -> shellOk("com.google,1\ncom.osp.app.signin,1")
+                            cmd == "dumpsys account" -> shellOk("Accounts: 2")
+                            cmd == "pm list packages -d --user 0" -> shellOk("")
+                            cmd.startsWith("( trap '' HUP;") -> shellOk("")
+                            cmd.startsWith("sh -c '") -> shellFail(
+                                stdout = "${AdbShellValidation.DPM_BEGIN_MARKER}\njava.lang.IllegalStateException: already some accounts on the device\n${AdbShellValidation.DPM_END_MARKER}",
+                                exitCode = 1
+                            )
+                            cmd.startsWith("rm -f ") -> shellOk("")
+                            else -> error("Unexpected freeze command: $cmd")
+                        }
+                    }
+                )
+            }
+        )
+
+        assertTrue("Expected AccountsBlocking end-to-end, got $result", result is PromotionResult.AccountsBlocking)
+        val blocking = result as PromotionResult.AccountsBlocking
+        assertEquals(listOf("com.google", "com.osp.app.signin"), blocking.accountTypes)
+        assertTrue(blocking.accountLabels.any { it.contains("Google") })
+        assertTrue(blocking.accountLabels.any { it.contains("Samsung") })
+    }
+
+    @Test
+    fun shellValidationAndBlockingAccountsPayload_sanitizeExtractAndJsonRoundTrip() {
+        val rawDpmWithNoise = """
+            Package com.google.android.gms new state: disabled-user
+            ${AdbShellValidation.DPM_BEGIN_MARKER}
+            usage: dpm [subcommand] [options]
+            usage: dpm set-device-owner [ --user <USER_ID> | current ] <COMPONENT>
+            java.lang.IllegalStateException: Not allowed to set the device owner because there are already some accounts on the device
+            	at android.os.Parcel.createExceptionOrNull(Parcel.java:2373)
+            	Caused by: java.lang.RuntimeException: inner cause
+            	... 8 more
+            ${AdbShellValidation.DPM_END_MARKER}
+            Package com.google.android.gms new state: enabled
+        """.trimIndent()
+
+        val extracted = AdbShellValidation.extractDelimitedDpmOutput(rawDpmWithNoise)
+        assertFalse(extracted.contains("new state:"))
+        assertTrue(extracted.contains("Not allowed to set the device owner"))
+        assertEquals("plain error", AdbShellValidation.extractDelimitedDpmOutput("  plain error  "))
+
+        val sanitized = AdbShellValidation.sanitizeUserFacingError(rawDpmWithNoise, maxLength = 300)
+        assertEquals(
+            "java.lang.IllegalStateException: Not allowed to set the device owner because there are already some accounts on the device",
+            sanitized
+        )
+        assertFalse(sanitized.contains("usage: dpm"))
+        assertFalse(sanitized.contains("new state:"))
+        assertFalse(sanitized.contains("at android.os.Parcel"))
+        assertFalse(sanitized.contains("Caused by:"))
+        assertFalse(sanitized.contains("... 8 more"))
+
+        val truncated = AdbShellValidation.sanitizeUserFacingError("A very long error message that must be truncated cleanly", maxLength = 20)
+        assertTrue(truncated.length <= 20)
+        assertTrue(truncated.endsWith("..."))
+        assertEquals("", AdbShellValidation.sanitizeUserFacingError("   ", maxLength = 100))
+
+        val payload = BlockingAccountsPayload(
+            accountLabels = listOf("Google", "Samsung"),
+            accountTypes = listOf("com.google", "com.osp.app.signin"),
+            message = "Active accounts on the device are preventing automatic Device Owner activation."
+        )
+        val roundTripped = BlockingAccountsPayload.fromJson(payload.toJson())
+        assertEquals(payload, roundTripped)
+        assertNull(BlockingAccountsPayload.fromJson(null))
+        assertNull(BlockingAccountsPayload.fromJson("   "))
+        assertNull(BlockingAccountsPayload.fromJson("{}"))
+        assertNull(BlockingAccountsPayload.fromJson("{not-valid-json"))
     }
 }

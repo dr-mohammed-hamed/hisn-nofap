@@ -16,6 +16,7 @@ import io.github.rhythmcache.adb.AdbClient
 import io.github.rhythmcache.adb.ShellResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import timber.log.Timber
@@ -42,14 +43,36 @@ internal object AdbPostPromotionVerifier {
         context: Context,
         client: AdbClient,
         userId: Int,
-        didSetupBypass: Boolean
-    ): PromotionResult = verifyAndFinalizeWithShell(
-        context = context,
-        userId = userId,
-        didSetupBypass = didSetupBypass,
-        shellExecutor = { cmd -> client.shell(cmd) },
-        privateDnsProvisioner = { appCtx -> AdbPromotionExecutor.provisionPrivateDnsViaAdb(appCtx, client) }
-    )
+        didSetupBypass: Boolean,
+        reconnectProvider: (suspend () -> AdbClient?)? = null
+    ): PromotionResult {
+        var activeClient = client
+        val ownedClients = mutableListOf<AdbClient>()
+        val resilientShell: suspend (String) -> ShellResult = { cmd ->
+            try {
+                activeClient.shell(cmd)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                val fresh = reconnectProvider?.invoke() ?: throw e
+                ownedClients.add(fresh)
+                activeClient = fresh
+                fresh.shell(cmd)
+            }
+        }
+        return try {
+            verifyAndFinalizeWithShell(
+                context = context,
+                userId = userId,
+                didSetupBypass = didSetupBypass,
+                shellExecutor = resilientShell,
+                privateDnsProvisioner = { appCtx -> AdbPromotionExecutor.provisionPrivateDnsViaAdbWithShell(appCtx, resilientShell) }
+            )
+        } finally {
+            withContext(NonCancellable) {
+                ownedClients.forEach { runCatching { it.close() } }
+            }
+        }
+    }
 
     @VisibleForTesting
     internal suspend fun verifyAndFinalizeWithShell(
@@ -67,6 +90,18 @@ internal object AdbPostPromotionVerifier {
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
                     Timber.tag(TAG).w(e, "Post-promotion ProtectionEngine.applyAllSync encountered non-fatal error")
+                }
+                try {
+                    com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(appCtx).startFirestoreSync()
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    Timber.tag(TAG).w(e, "Post-promotion PolicyRepository.startFirestoreSync encountered non-fatal error")
+                }
+                try {
+                    com.drmohammed.antiporn.data.repository.ApprovalRepository.getInstance(appCtx).syncZeroTrustBaselineAndReconcileAsync()
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    Timber.tag(TAG).w(e, "Post-promotion syncZeroTrustBaselineAndReconcileAsync encountered non-fatal error")
                 }
                 try {
                     SystemAppsHealingManager.healPreInstalledStoresSafely(appCtx, force = true)
@@ -93,6 +128,15 @@ internal object AdbPostPromotionVerifier {
             val failureMessage = appContext.safeGetString(R.string.provisioning_error_post_verify_failed)
                 ?: "Post-promotion Device Owner verification failed."
             return PromotionResult.Failure(failureMessage)
+        }
+
+        try {
+            com.drmohammed.antiporn.data.repository.ApprovalRepository
+                .getInstance(appContext)
+                .recordDeviceOwnerEnabledTimestamp()
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Timber.tag(TAG).w(e, "Failed recording DO enabled timestamp in post-verify")
         }
 
         // 2. Restore and verify user_setup_complete == "1" if setup bypass ran
@@ -213,7 +257,7 @@ internal object AdbPostPromotionVerifier {
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             Timber.tag(TAG).w(e, "Failed healing stranded packages in post-verify")
-            ProvisioningFreezeRecoveryStore.getPendingLedger(appContext) == null
+            false
         }
     }
 
