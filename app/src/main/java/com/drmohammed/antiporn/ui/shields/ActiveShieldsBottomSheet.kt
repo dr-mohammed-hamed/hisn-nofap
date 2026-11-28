@@ -144,7 +144,12 @@ object ActiveShieldsBottomSheet {
                 itemView.findViewById<TextView>(R.id.tvShieldTitle).text = mode.title
                 itemView.findViewById<TextView>(R.id.tvShieldDescription).text = mode.detail
                 itemView.findViewById<TextView>(R.id.tvShieldBadge).text = context.getString(R.string.active_modes_manage)
-                itemView.setOnClickListener { onUnlockMode(mode.key) }
+                itemView.setOnClickListener {
+                    // The mode list is a one-shot snapshot; close before handing off so a
+                    // second tap cannot re-enter the unlock flow against a stale row.
+                    dismiss()
+                    onUnlockMode(mode.key)
+                }
                 activeModesContainer.addView(itemView)
             }
         }
@@ -171,7 +176,9 @@ object ActiveShieldsBottomSheet {
 
             if (activeShields.isEmpty()) {
                 container.visibility = View.GONE
-                emptyState.visibility = View.VISIBLE
+                // Active Mode rows occupy this list; don't show "no shields" beneath them.
+                emptyState.visibility =
+                    if (activeModes.isNotEmpty() && onUnlockMode != null) View.GONE else View.VISIBLE
             } else {
                 container.visibility = View.VISIBLE
                 emptyState.visibility = View.GONE

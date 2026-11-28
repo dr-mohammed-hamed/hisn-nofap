@@ -29,11 +29,6 @@ internal class GuardianActiveModesViewBinder(
     private val onUnlockModeRequested: (target: String) -> Unit
 ) {
     private val cardBanner: MaterialCardView? = activity.findViewById(R.id.cardWardActiveModesBanner)
-    private val tvFortressStatus: TextView? = activity.findViewById(R.id.tvWardActiveFortressStatus)
-    private val tvCurfewStatus: TextView? = activity.findViewById(R.id.tvWardActiveCurfewStatus)
-    private val btnUnlockFortress: MaterialButton? = activity.findViewById(R.id.btnGuardianUnlockFortress)
-    private val btnUnlockCurfew: MaterialButton? = activity.findViewById(R.id.btnGuardianUnlockCurfew)
-    private val btnUnlockAll: MaterialButton? = activity.findViewById(R.id.btnGuardianUnlockAllModes)
     private val tvWardActiveModesSummary: TextView? = activity.findViewById(R.id.tvWardActiveModesSummary)
     private val btnManageActiveModesGuardian: MaterialButton? = activity.findViewById(R.id.btnManageActiveModesGuardian)
     private val cardCapabilityAlert: MaterialCardView? = activity.findViewById(R.id.cardWardCapabilityAlert)
@@ -43,27 +38,6 @@ internal class GuardianActiveModesViewBinder(
 
     private var confirmDialog: AlertDialog? = null
     private var latestState: GuardianControlUiState = GuardianControlUiState()
-
-    fun setupListeners() {
-        btnUnlockFortress?.setOnClickListener {
-            confirmAndUnlock(
-                target = DevicePolicyBundle.REMOTE_MODE_UNLOCK_FORTRESS,
-                msgRes = R.string.guardian_confirm_unlock_fortress_msg
-            )
-        }
-        btnUnlockCurfew?.setOnClickListener {
-            confirmAndUnlock(
-                target = DevicePolicyBundle.REMOTE_MODE_UNLOCK_CURFEW,
-                msgRes = R.string.guardian_confirm_unlock_curfew_msg
-            )
-        }
-        btnUnlockAll?.setOnClickListener {
-            confirmAndUnlock(
-                target = DevicePolicyBundle.REMOTE_MODE_UNLOCK_ALL,
-                msgRes = R.string.guardian_confirm_unlock_all_msg
-            )
-        }
-    }
 
     fun render(state: GuardianControlUiState) {
         latestState = state
@@ -78,11 +52,6 @@ internal class GuardianActiveModesViewBinder(
         }
 
         cardBanner?.visibility = View.VISIBLE
-        tvFortressStatus?.visibility = View.GONE
-        tvCurfewStatus?.visibility = View.GONE
-        btnUnlockFortress?.visibility = View.GONE
-        btnUnlockCurfew?.visibility = View.GONE
-        btnUnlockAll?.visibility = View.GONE
 
         val summaryParts = mutableListOf<String>()
         val modes = mutableListOf<ActiveModeInfo>()
@@ -113,13 +82,20 @@ internal class GuardianActiveModesViewBinder(
                 )
             )
         }
+        if (isFortressActive && isCurfewActive) {
+            modes.add(
+                ActiveModeInfo(
+                    ActiveShieldsBottomSheet.MODE_ALL,
+                    activity.getString(R.string.guardian_btn_unlock_all_modes),
+                    activity.getString(R.string.guardian_active_modes_banner_title)
+                )
+            )
+        }
         tvWardActiveModesSummary?.isVisible = summaryParts.isNotEmpty()
         tvWardActiveModesSummary?.text = summaryParts.joinToString(activity.getString(R.string.fortress_meta_separator))
 
         val enabled = !state.isSaving && !state.isLoading
-        btnUnlockFortress?.isEnabled = enabled
-        btnUnlockCurfew?.isEnabled = enabled
-        btnUnlockAll?.isEnabled = enabled
+        btnManageActiveModesGuardian?.isEnabled = enabled
 
         btnManageActiveModesGuardian?.setOnClickListener {
             ActiveShieldsBottomSheet.show(
@@ -149,11 +125,11 @@ internal class GuardianActiveModesViewBinder(
         !state.wardActiveFortressId.isNullOrBlank() &&
             state.wardActiveFortressEndsAtWall > com.drmohammed.antiporn.core.time.TrustedTimeProvider.currentTimeMillis(activity.applicationContext)
 
-    fun needsCountdownTick(state: GuardianControlUiState): Boolean =
-        tvFortressStatus?.isVisible == true || hasActiveCountdown(state)
+    fun needsCountdownTick(state: GuardianControlUiState): Boolean = hasActiveCountdown(state)
 
     private fun confirmAndUnlock(target: String, msgRes: Int) {
-        if (activity.isFinishing || activity.isDestroyed || confirmDialog?.isShowing == true) return
+        if (activity.isFinishing || activity.isDestroyed || confirmDialog?.isShowing == true ||
+            latestState.isSaving || latestState.isLoading) return
         val displayName = latestState.wardName.trim().ifBlank {
             activity.getString(R.string.status_ward_badge)
         }

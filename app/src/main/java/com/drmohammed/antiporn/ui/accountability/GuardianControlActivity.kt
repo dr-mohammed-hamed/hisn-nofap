@@ -185,7 +185,6 @@ class GuardianControlActivity : AppCompatActivity() {
     private fun setupListeners() {
         alertsViewBinder.setupListeners()
         policyTilesViewBinder.setupListeners()
-        activeModesViewBinder.setupListeners()
 
         btnEditWardName.setOnClickListener {
             val now = SystemClock.elapsedRealtime()

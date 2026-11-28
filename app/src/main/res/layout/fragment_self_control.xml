@@ -160,65 +160,6 @@
                         android:textSize="13sp"
                         app:cornerRadius="12dp" />
 
-                    <LinearLayout
-                        android:id="@+id/layoutActiveCurfewUnlockRow"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
-                        android:orientation="vertical"
-                        android:visibility="gone">
-
-                        <TextView
-                            android:id="@+id/tvActiveCurfewLabel"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:fontFamily="@font/tajawal"
-                            android:text="@string/self_control_active_curfew_row"
-                            android:textAlignment="viewStart"
-                            android:textColor="?attr/colorOnSurfaceVariant"
-                            android:textSize="13sp" />
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnUnlockCurfew"
-                            style="@style/Widget.Material3.Button.TonalButton"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:minHeight="48dp"
-                            android:layout_marginTop="6dp"
-                            android:text="@string/self_control_btn_unlock_curfew_direct"
-                            android:textSize="13sp"
-                            app:cornerRadius="12dp" />
-                    </LinearLayout>
-
-                    <LinearLayout
-                        android:id="@+id/layoutActiveFortressUnlockRow"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
-                        android:orientation="vertical"
-                        android:visibility="gone">
-
-                        <TextView
-                            android:id="@+id/tvActiveFortressLabel"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:fontFamily="@font/tajawal"
-                            android:textAlignment="viewStart"
-                            android:textColor="?attr/colorOnSurfaceVariant"
-                            android:textSize="13sp"
-                            tools:text="حصن نشط: حصن المذاكرة (المتبقي 42:10)" />
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnUnlockFortress"
-                            style="@style/Widget.Material3.Button.TonalButton"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:minHeight="48dp"
-                            android:layout_marginTop="6dp"
-                            android:text="@string/self_control_btn_unlock_fortress_direct"
-                            android:textSize="13sp"
-                            app:cornerRadius="12dp" />
-                    </LinearLayout>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
