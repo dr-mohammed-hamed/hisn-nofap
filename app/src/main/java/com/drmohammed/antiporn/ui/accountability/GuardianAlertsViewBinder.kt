@@ -10,6 +10,7 @@ import androidx.lifecycle.lifecycleScope
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
+import com.drmohammed.antiporn.fortress.model.FortressesConfig
 import com.drmohammed.antiporn.data.repository.AccountabilityRepository
 import com.drmohammed.antiporn.data.repository.GuardianTeardownAlreadyCompletedException
 import com.drmohammed.antiporn.data.repository.PolicyRepository
@@ -87,7 +88,16 @@ class GuardianAlertsViewBinder(
                             guardianUidFallback = myUid,
                             guardianNameFallback = myName
                         ) { latest ->
+                            val preservedFortresses = if (latest.isSelfControlAllowed && latest.selfControlFortressesAllowed) {
+                                FortressesConfig(
+                                    profiles = listOf(snapshotPolicy.fortressesConfig.getEmergencyFortress()) +
+                                        latest.fortressesConfig.getCustomFortresses()
+                                ).normalized()
+                            } else {
+                                snapshotPolicy.fortressesConfig
+                            }
                             snapshotPolicy.copy(
+                                fortressesConfig = preservedFortresses,
                                 isSelfControlAllowed = isSelfControlAllowedProvider(),
                                 deactivationStatus = latest.deactivationStatus,
                                 deactivationRequestedAt = latest.deactivationRequestedAt,

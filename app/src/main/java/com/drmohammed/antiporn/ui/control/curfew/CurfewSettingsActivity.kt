@@ -16,9 +16,11 @@ import androidx.lifecycle.lifecycleScope
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.engine.ProtectionEngine
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
+import com.drmohammed.antiporn.core.time.TrustedTimeProvider
 import com.drmohammed.antiporn.curfew.CurfewConfig
 import com.drmohammed.antiporn.curfew.CurfewEnforcer
 import com.drmohammed.antiporn.curfew.CurfewScheduler
+import com.drmohammed.antiporn.data.repository.AccountabilityRepository
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.ui.control.gate.SelfControlAccessGateRegistry
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -251,28 +253,39 @@ class CurfewSettingsActivity : AppCompatActivity() {
         isSaving = true
         updateSaveButtonState()
 
-        val updatedPolicy = viewBinder.buildUpdatedPolicy(initialPolicy)
         val app = applicationContext
         val policyRepo = PolicyRepository.getInstance(app)
 
         lifecycleScope.launch {
             try {
-                val success = withContext(Dispatchers.IO + NonCancellable) {
+                val savedPolicy = withContext(Dispatchers.IO + NonCancellable) {
                     if (isRemote) {
-                        policyRepo.pushPolicyToWard(wardId, updatedPolicy)
+                        val accRepo = AccountabilityRepository.getInstance(app)
+                        policyRepo.mergeAndPushRemotePolicyPatch(
+                            wardUid = wardId,
+                            fallbackPolicy = initialPolicy,
+                            guardianUidFallback = accRepo.getCachedUid(),
+                            guardianNameFallback = accRepo.getMyDisplayName()
+                        ) { latest ->
+                            viewBinder.buildUpdatedPolicy(latest).copy(
+                                version = latest.version + 1,
+                                updatedAt = TrustedTimeProvider.currentTimeMillis(app)
+                            )
+                        }
                     } else {
-                        policyRepo.saveAndEnforceSelfPolicy(updatedPolicy)
+                        policyRepo.mergeAndSaveSelfPolicyPatch { latest ->
+                            viewBinder.buildUpdatedPolicy(latest)
+                        }
                     }
                 }
 
                 if (isFinishing || isDestroyed) return@launch
                 isSaving = false
-                if (success) {
-                    val resultPolicy = if (isRemote) updatedPolicy else policyRepo.getCurrentPolicy()
+                if (savedPolicy != null) {
                     val successRes = if (isRemote) R.string.toast_guardian_policy_saved else R.string.toast_self_policy_saved
                     Toast.makeText(applicationContext, successRes, Toast.LENGTH_SHORT).show()
                     val resultIntent = Intent().apply {
-                        putExtra(EXTRA_UPDATED_POLICY_JSON, resultPolicy.toJson())
+                        putExtra(EXTRA_UPDATED_POLICY_JSON, savedPolicy.toJson())
                     }
                     setResult(Activity.RESULT_OK, resultIntent)
                     backPressedCallback.isEnabled = false

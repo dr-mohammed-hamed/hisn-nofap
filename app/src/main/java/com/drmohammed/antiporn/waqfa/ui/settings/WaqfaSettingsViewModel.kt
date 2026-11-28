@@ -10,7 +10,9 @@ import com.drmohammed.antiporn.accessibility.control.AccessibilityPolicyCoordina
 import com.drmohammed.antiporn.accessibility.control.AccessibilityReconcileResult
 import com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
+import com.drmohammed.antiporn.core.time.TrustedTimeProvider
 import com.drmohammed.antiporn.curfew.CurfewForegroundWatcher
+import com.drmohammed.antiporn.data.repository.AccountabilityRepository
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.waqfa.engine.WaqfaSessionManager
 import com.drmohammed.antiporn.waqfa.model.WaqfaConfig
@@ -234,28 +236,41 @@ class WaqfaSettingsViewModel(
 
         viewModelScope.launch {
             try {
+                val app = getApplication<Application>()
                 if (state.isRemote) {
                     val base = initialPolicy ?: policyRepository.getCurrentPolicy()
-                    val updated = base.copy(waqfaConfig = state.config)
                     val ward = state.wardId
-                    val success = if (!ward.isNullOrBlank()) {
-                        policyRepository.pushPolicyToWard(ward, updated)
+                    val pushed = if (!ward.isNullOrBlank()) {
+                        val accRepo = AccountabilityRepository.getInstance(app)
+                        policyRepository.mergeAndPushRemotePolicyPatch(
+                            wardUid = ward,
+                            fallbackPolicy = base,
+                            guardianUidFallback = accRepo.getCachedUid(),
+                            guardianNameFallback = accRepo.getMyDisplayName()
+                        ) { latest ->
+                            latest.copy(
+                                waqfaConfig = state.config,
+                                version = latest.version + 1,
+                                updatedAt = TrustedTimeProvider.currentTimeMillis(app)
+                            )
+                        }
                     } else {
-                        true
+                        base.copy(waqfaConfig = state.config)
                     }
-
+                    val success = pushed != null
                     _uiState.update { it.copy(isLoading = false, isSaved = success) }
-                    onComplete(success, updated, null)
+                    onComplete(success, pushed ?: base.copy(waqfaConfig = state.config), null)
                 } else {
-                    val app = getApplication<Application>()
                     val wasA11yActiveBeforeSave = HisnAccessibilityService.instance != null ||
                         withContext(Dispatchers.IO) {
                             AccessibilitySelfActivator.isServiceEnabledInSettings(app)
                         }
 
-                    val current = policyRepository.getCurrentPolicy()
-                    val updatedPolicy = current.copy(waqfaConfig = state.config)
-                    val success = policyRepository.saveAndEnforceSelfPolicy(updatedPolicy)
+                    val savedPolicy = policyRepository.mergeAndSaveSelfPolicyPatch { latest ->
+                        latest.copy(waqfaConfig = state.config)
+                    }
+                    val success = savedPolicy != null
+                    val updatedPolicy = savedPolicy ?: policyRepository.getCurrentPolicy().copy(waqfaConfig = state.config)
 
                     var reconcileResult: AccessibilityReconcileResult? = null
                     if (success) {

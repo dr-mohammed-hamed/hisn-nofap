@@ -142,14 +142,15 @@ class SelfControlViewModel(
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val success = policyRepository.saveAndEnforceSelfPolicy(policyToSave)
+                val savedPolicy = policyRepository.mergeAndSaveSelfPolicyPatch { policyToSave }
+                val success = savedPolicy != null
 
                 withContext(Dispatchers.Main) {
-                    if (success) {
+                    if (success && savedPolicy != null) {
                         _uiState.update { current ->
                             current.copy(
-                                policy = policyToSave,
-                                initialSnapshot = policyToSave,
+                                policy = savedPolicy,
+                                initialSnapshot = savedPolicy,
                                 isSaving = false,
                                 hasUnsavedChanges = false
                             )

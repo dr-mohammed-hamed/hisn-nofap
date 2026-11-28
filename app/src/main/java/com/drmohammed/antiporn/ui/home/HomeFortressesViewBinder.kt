@@ -34,8 +34,7 @@ internal class HomeFortressesViewBinder(
         val btnStart: MaterialButton,
         val layoutActive: LinearLayout,
         val tvCountdown: TextView,
-        val btnExtend: MaterialButton,
-        val tvBadge: TextView
+        val btnExtend: MaterialButton
     )
 
     private var lastTapMs = 0L
@@ -68,14 +67,11 @@ internal class HomeFortressesViewBinder(
         val hasAnyActive = active != null
 
         b.btnHeroEmergencyFortressStart.apply {
+            val emergencyName = emergency.resolveDisplayName(ctx)
             text = if (isEmergencyActive) {
-                emergency.resolveDisplayName(ctx)
+                ctx.getString(R.string.home_fortress_button_active_format, emergencyName)
             } else {
-                ctx.getString(
-                    R.string.home_btn_start_emergency_fortress,
-                    emergency.resolveDisplayName(ctx),
-                    emergency.durationMinutes
-                )
+                ctx.getString(R.string.home_btn_start_emergency_fortress, emergencyName)
             }
             isEnabled = !hasAnyActive && !isOperationPending
             alpha = if (hasAnyActive && !isEmergencyActive) 0.55f else 1.0f
@@ -113,15 +109,7 @@ internal class HomeFortressesViewBinder(
 
         for (profile in customs) {
             val binding = ItemFortressHomeRowBinding.inflate(LayoutInflater.from(ctx), container, true)
-            binding.ivFortressIcon.setImageResource(R.drawable.ic_shield_time)
-            binding.tvFortressTitle.text = profile.resolveDisplayName(ctx)
-            val netLabel = ctx.getString(
-                if (profile.isInternetCutEnabled) R.string.fortress_internet_cut_on else R.string.fortress_internet_cut_off
-            )
-            binding.tvFortressDescription.text =
-                ctx.getString(R.string.fortress_duration_minutes_format, profile.durationMinutes) +
-                    " ${ctx.getString(R.string.fortress_meta_separator)} " + netLabel
-            binding.btnFortressStart.text = ctx.getString(R.string.home_btn_start_custom_fortress, profile.durationMinutes)
+            binding.btnFortressStart.text = profile.resolveDisplayName(ctx)
             binding.btnFortressStart.setOnClickListener { promptAndStartFortress(profile) }
             binding.btnFortressExtend.setOnClickListener { handleExtendClicked() }
 
@@ -130,8 +118,7 @@ internal class HomeFortressesViewBinder(
                 binding.btnFortressStart,
                 binding.layoutFortressActive,
                 binding.tvFortressCountdown,
-                binding.btnFortressExtend,
-                binding.tvFortressBadge
+                binding.btnFortressExtend
             )
         }
     }
@@ -140,18 +127,17 @@ internal class HomeFortressesViewBinder(
         val hasAnyActive = active != null
         for ((id, row) in customRowMap) {
             val isThisActive = active != null && active.fortressId == id
+            val displayName = row.profile.resolveDisplayName(ctx)
             row.btnStart.isEnabled = !hasAnyActive && !isOperationPending
-            row.btnStart.alpha = if (hasAnyActive && !isThisActive) 0.5f else 1.0f
+            row.btnStart.alpha = if (hasAnyActive && !isThisActive) 0.55f else 1.0f
             row.btnStart.text = if (isThisActive) {
-                ctx.getString(R.string.home_fortress_active_badge)
+                ctx.getString(R.string.home_fortress_button_active_format, displayName)
             } else {
-                ctx.getString(R.string.home_btn_start_custom_fortress, row.profile.durationMinutes)
+                displayName
             }
             row.layoutActive.isVisible = isThisActive
-            row.tvBadge.isVisible = isThisActive
             if (isThisActive) {
                 val session = active ?: continue
-                row.tvBadge.text = ctx.getString(R.string.home_fortress_active_badge)
                 row.tvCountdown.text = ctx.getString(
                     R.string.fortress_countdown_format,
                     formatCountdown(session.remainingMs)

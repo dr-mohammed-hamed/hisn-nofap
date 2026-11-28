@@ -10,6 +10,7 @@ import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
 import com.drmohammed.antiporn.data.local.db.dao.PartnerDao
 import com.drmohammed.antiporn.data.local.db.entity.PartnerEntity
+import com.drmohammed.antiporn.fortress.model.FortressesConfig
 import com.drmohammed.antiporn.telemetry.AiTelemetryReporter
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import com.google.firebase.auth.FirebaseAuth
@@ -229,11 +230,33 @@ internal class PolicyCloudSyncBridge(
 
             val isTransitionToSupervised = !current.isSupervised && candidateCloudPolicy.isSupervised
             val effectiveCloudPolicy = reconcileTransitionRules(current, candidateCloudPolicy, isTransitionToSupervised)
-            val forceOverride = isFromGuardian && (supervisoryChanged || statusChanged || supervisionChanged)
-            val enforcedPolicy = if (forceOverride) {
-                effectiveCloudPolicy.copy(version = maxOf(effectiveCloudPolicy.version, current.version + 1))
+            val shouldPreserveWardCustomFortresses = isFromGuardian &&
+                current.isSelfControlAllowed &&
+                current.selfControlFortressesAllowed &&
+                candidateCloudPolicy.version <= current.version &&
+                effectiveCloudPolicy.fortressesConfig.getCustomFortresses().isEmpty() &&
+                current.fortressesConfig.getCustomFortresses().isNotEmpty()
+            val fortressProtectedCloudPolicy = if (shouldPreserveWardCustomFortresses) {
+                BlackBoxRecorder.recordCloudSync(
+                    appContext,
+                    "FORTRESS_PRESERVED_ON_EQUAL_VERSION_SYNC",
+                    isSuccess = true,
+                    details = "cloudV=${candidateCloudPolicy.version}, localV=${current.version}, preservedCustoms=${current.fortressesConfig.getCustomFortresses().size}"
+                )
+                effectiveCloudPolicy.copy(
+                    fortressesConfig = FortressesConfig(
+                        profiles = listOf(effectiveCloudPolicy.fortressesConfig.getEmergencyFortress()) +
+                            current.fortressesConfig.getCustomFortresses()
+                    ).normalized()
+                )
             } else {
                 effectiveCloudPolicy
+            }
+            val forceOverride = isFromGuardian && (supervisoryChanged || statusChanged || supervisionChanged)
+            val enforcedPolicy = if (forceOverride) {
+                fortressProtectedCloudPolicy.copy(version = maxOf(fortressProtectedCloudPolicy.version, current.version + 1))
+            } else {
+                fortressProtectedCloudPolicy
             }
 
             Timber.tag(TAG).i(
@@ -244,6 +267,14 @@ internal class PolicyCloudSyncBridge(
             )
             val adopted = onApplyCloudPolicy(enforcedPolicy, forceOverride)
             val adoptedPolicy = currentPolicyProvider()
+            if (adopted && enforcedPolicy.fortressesConfig != current.fortressesConfig) {
+                BlackBoxRecorder.recordCloudSync(
+                    appContext,
+                    "FORTRESS_CONFIG_UPDATED_FROM_CLOUD",
+                    isSuccess = true,
+                    details = "cloudV=${candidateCloudPolicy.version}, localV=${current.version}, customCount=${enforcedPolicy.fortressesConfig.getCustomFortresses().size}"
+                )
+            }
             if (adopted &&
                 adoptedPolicy.version == enforcedPolicy.version &&
                 adoptedPolicy.isSupervised &&
@@ -253,7 +284,7 @@ internal class PolicyCloudSyncBridge(
             }
 
             if (adopted && isFromGuardian) {
-                acknowledgeCloudPolicyAsync(uid, maskedUid, candidateCloudPolicy, enforcedPolicy, isTransitionToSupervised, effectiveCloudPolicy != candidateCloudPolicy || preservedOfflineLocalFallback)
+                acknowledgeCloudPolicyAsync(uid, maskedUid, candidateCloudPolicy, enforcedPolicy, isTransitionToSupervised, fortressProtectedCloudPolicy != candidateCloudPolicy || preservedOfflineLocalFallback)
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -309,11 +340,17 @@ internal class PolicyCloudSyncBridge(
             cloudPolicy.selfControlFortressesAllowed != current.selfControlFortressesAllowed ||
             cloudPolicy.selfControlFortressUnlockAllowed != current.selfControlFortressUnlockAllowed ||
             cloudPolicy.selfControlOtherSettingsAllowed != current.selfControlOtherSettingsAllowed ||
-            cloudPolicy.fortressesConfig != current.fortressesConfig ||
+            isFortressSupervisoryDiff(cloudPolicy, current) ||
             cloudPolicy.remoteModeUnlockTarget != current.remoteModeUnlockTarget ||
             cloudPolicy.remoteModeUnlockRequestedAt != current.remoteModeUnlockRequestedAt ||
             cloudPolicy.remoteSelfControlResetRequestedAt != current.remoteSelfControlResetRequestedAt ||
             cloudPolicy.remoteTeardownRequestedAt != current.remoteTeardownRequestedAt
+    }
+
+    private fun isFortressSupervisoryDiff(cloudPolicy: DevicePolicyBundle, current: DevicePolicyBundle): Boolean {
+        if (cloudPolicy.fortressesConfig == current.fortressesConfig) return false
+        val allowWardSelfFortresses = current.isSelfControlAllowed && current.selfControlFortressesAllowed
+        return !(allowWardSelfFortresses && cloudPolicy.version <= current.version)
     }
 
     private fun reconcileTransitionRules(

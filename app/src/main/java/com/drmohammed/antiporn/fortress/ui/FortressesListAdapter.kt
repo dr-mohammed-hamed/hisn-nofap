@@ -20,6 +20,19 @@ internal class FortressesListAdapter(
 ) : RecyclerView.Adapter<FortressesListAdapter.ViewHolder>() {
 
     private val items = mutableListOf<FortressProfile>()
+    private var attachedRecyclerView: RecyclerView? = null
+
+    override fun onAttachedToRecyclerView(recyclerView: RecyclerView) {
+        super.onAttachedToRecyclerView(recyclerView)
+        attachedRecyclerView = recyclerView
+    }
+
+    override fun onDetachedFromRecyclerView(recyclerView: RecyclerView) {
+        if (attachedRecyclerView === recyclerView) {
+            attachedRecyclerView = null
+        }
+        super.onDetachedFromRecyclerView(recyclerView)
+    }
 
     fun submitList(newItems: List<FortressProfile>) {
         val oldItems = items.toList()
@@ -38,7 +51,15 @@ internal class FortressesListAdapter(
     }
 
     fun refreshActiveStates() {
-        if (items.isNotEmpty()) {
+        if (items.isEmpty()) return
+        val rv = attachedRecyclerView
+        if (rv != null && rv.isComputingLayout) {
+            rv.post {
+                if (items.isNotEmpty() && attachedRecyclerView === rv && !rv.isComputingLayout) {
+                    notifyItemRangeChanged(0, items.size)
+                }
+            }
+        } else {
             notifyItemRangeChanged(0, items.size)
         }
     }

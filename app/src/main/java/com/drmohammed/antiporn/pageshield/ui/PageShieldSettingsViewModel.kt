@@ -9,6 +9,8 @@ import com.drmohammed.antiporn.accessibility.control.AccessibilityPolicyCoordina
 import com.drmohammed.antiporn.accessibility.control.AccessibilityReconcileResult
 import com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
+import com.drmohammed.antiporn.core.time.TrustedTimeProvider
+import com.drmohammed.antiporn.data.repository.AccountabilityRepository
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.pageshield.engine.PageShieldAccessibilityHook
 import com.drmohammed.antiporn.pageshield.model.AppPageShieldPolicy
@@ -179,34 +181,47 @@ class PageShieldSettingsViewModel(
 
         viewModelScope.launch {
             try {
+                val app = getApplication<Application>()
                 if (state.isRemote) {
                     val base = initialPolicy ?: policyRepository.getCurrentPolicy()
-                    val updated = base.copy(pageShieldConfig = state.config)
                     val ward = state.wardId
-                    val success = if (!ward.isNullOrBlank()) {
-                        policyRepository.pushPolicyToWard(ward, updated)
+                    val pushed = if (!ward.isNullOrBlank()) {
+                        val accRepo = AccountabilityRepository.getInstance(app)
+                        policyRepository.mergeAndPushRemotePolicyPatch(
+                            wardUid = ward,
+                            fallbackPolicy = base,
+                            guardianUidFallback = accRepo.getCachedUid(),
+                            guardianNameFallback = accRepo.getMyDisplayName()
+                        ) { latest ->
+                            latest.copy(
+                                pageShieldConfig = state.config,
+                                version = latest.version + 1,
+                                updatedAt = TrustedTimeProvider.currentTimeMillis(app)
+                            )
+                        }
                     } else {
-                        true
+                        base.copy(pageShieldConfig = state.config)
                     }
-
+                    val success = pushed != null
                     _uiState.update { it.copy(isLoading = false, isSaved = success) }
-                    onComplete(success, updated, null)
+                    onComplete(success, pushed ?: base.copy(pageShieldConfig = state.config), null)
                 } else {
-                    val app = getApplication<Application>()
                     val wasA11yActiveBeforeSave = HisnAccessibilityService.instance != null ||
                         withContext(Dispatchers.IO) {
                             AccessibilitySelfActivator.isServiceEnabledInSettings(app)
                         }
 
-                    val current = policyRepository.getCurrentPolicy()
-                    val updatedPolicy = current.copy(pageShieldConfig = state.config)
-                    val success = policyRepository.saveAndEnforceSelfPolicy(updatedPolicy)
+                    val savedPolicy = policyRepository.mergeAndSaveSelfPolicyPatch { latest ->
+                        latest.copy(pageShieldConfig = state.config)
+                    }
+                    val success = savedPolicy != null
+                    val effectivePolicy = savedPolicy ?: policyRepository.getCurrentPolicy().copy(pageShieldConfig = state.config)
 
                     var reconcileResult: AccessibilityReconcileResult? = null
                     if (success) {
                         PageShieldAccessibilityHook.getInstance().updateConfig(state.config)
                         val rawReconcile = withContext(Dispatchers.IO) {
-                            AccessibilityPolicyCoordinator.reconcile(app, updatedPolicy)
+                            AccessibilityPolicyCoordinator.reconcile(app, effectivePolicy)
                         }
                         reconcileResult = if (!wasA11yActiveBeforeSave && rawReconcile is AccessibilityReconcileResult.AlreadyActive) {
                             AccessibilityReconcileResult.EnabledSilently
@@ -225,7 +240,7 @@ class PageShieldSettingsViewModel(
                         val failedMsg = app.getString(R.string.page_shield_save_failed_toast)
                         _uiState.update { it.copy(isLoading = false, errorMessage = failedMsg) }
                     }
-                    onComplete(success, updatedPolicy, reconcileResult)
+                    onComplete(success, effectivePolicy, reconcileResult)
                 }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e

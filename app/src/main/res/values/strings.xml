@@ -1877,10 +1877,9 @@
     <string name="fortress_error_duration_range">يرجى إدخال مدة صحيحة بين 1 و 720 دقيقة</string>
 
     <!-- Home Fortresses -->
-    <string name="home_fortresses_section_title">الحصون السريعة</string>
-    <string name="home_emergency_fortress_desc">عزل فوري للإنترنت وتجميد التطبيقات المشتتة لاستعادة التركيز</string>
-    <string name="home_btn_start_emergency_fortress">تشغيل %1$s (%2$d د)</string>
-    <string name="home_btn_start_custom_fortress">تشغيل (%1$d د)</string>
+    <string name="home_emergency_fortress_desc">حوّل هاتفك لهاتف مكالمات فقط بدون إنترنت أو تطبيقات</string>
+    <string name="home_btn_start_emergency_fortress">تشغيل %1$s</string>
+    <string name="home_fortress_button_active_format">%1$s (نشط)</string>
     <string name="home_fortress_active_badge">نشط</string>
     <string name="home_fortress_another_active_hint">حصن آخر نشط حالياً</string>
     <string name="home_btn_extend_fortress_minutes">+%1$d د تمديد</string>

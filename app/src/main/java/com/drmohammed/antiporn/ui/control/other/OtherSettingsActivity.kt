@@ -372,13 +372,6 @@ class OtherSettingsActivity : AppCompatActivity() {
         updateSaveButtonState()
         refreshDangerZoneUi?.invoke()
 
-        val updatedPolicy = initialPolicy.copy(
-            isDateTimeLocked = isDateTimeLocked,
-            isClearAppDataAllowed = isClearAppDataAllowed,
-            timeZoneId = selectedTimeZoneId,
-            isInstantInternetKillEnabled = isTotalInternetKillEnabled
-        )
-
         val app = applicationContext
         val policyRepo = PolicyRepository.getInstance(app)
 
@@ -407,7 +400,14 @@ class OtherSettingsActivity : AppCompatActivity() {
                         }
                     }
                 } else {
-                    if (policyRepo.saveAndEnforceSelfPolicy(updatedPolicy)) updatedPolicy else null
+                    policyRepo.mergeAndSaveSelfPolicyPatch { latest ->
+                        latest.copy(
+                            isDateTimeLocked = isDateTimeLocked,
+                            isClearAppDataAllowed = isClearAppDataAllowed,
+                            timeZoneId = selectedTimeZoneId,
+                            isInstantInternetKillEnabled = isTotalInternetKillEnabled
+                        )
+                    }
                 }
 
                 withContext(Dispatchers.Main) {
