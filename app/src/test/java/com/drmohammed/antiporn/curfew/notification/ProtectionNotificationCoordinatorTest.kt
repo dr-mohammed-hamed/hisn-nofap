@@ -4,10 +4,13 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.SharedPreferences
 import android.os.Build
+import android.os.SystemClock
 import com.drmohammed.antiporn.HisnDeviceAdminService
 import com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard
+import com.drmohammed.antiporn.core.time.TrustedTimeProvider
 import com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService
 import com.drmohammed.antiporn.curfew.CurfewVpnStateCoordinator
+import com.drmohammed.antiporn.fortress.engine.FortressSessionController
 import com.drmohammed.antiporn.fortress.notification.FortressNotificationReceiver
 import com.drmohammed.antiporn.notification.registry.NotificationRegistry
 import com.drmohammed.antiporn.waqfa.engine.WaqfaNotificationHelper
@@ -15,9 +18,28 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
 class ProtectionNotificationCoordinatorTest {
+
+    /**
+     * resolveCurrentState() now goes through EffectiveRestrictionResolver, whose default
+     * calendar uses TrustedTimeProvider (backed by SystemClock.elapsedRealtime, which is
+     * not available in local JVM unit tests). Inject the existing test seams with stable
+     * values so no production logic needs to change for the notification coordinator.
+     */
+    @Before
+    fun setUpInjectedClocks() {
+        TrustedTimeProvider.resetForTesting()
+        TrustedTimeProvider.elapsedRealtimeProvider = { FAKE_ELAPSED_MS }
+        TrustedTimeProvider.wallTimeProvider = { FAKE_WALL_MS }
+        TrustedTimeProvider.setAnchorForTesting(FAKE_WALL_MS, FAKE_ELAPSED_MS)
+        FortressSessionController.resetForTesting()
+        FortressSessionController.elapsedProvider = { FAKE_ELAPSED_MS }
+        FortressSessionController.wallProvider = { FAKE_WALL_MS }
+        FortressSessionController.bootCountProvider = { 1 }
+    }
 
     @Test
     fun testConstantsAndIdsConsistency() {
@@ -241,6 +263,15 @@ class ProtectionNotificationCoordinatorTest {
     fun tearDownBoundState() {
         setDeviceAdminBound(false)
         ProtectionTransitionGuard.isTeardownInProgress = false
+        TrustedTimeProvider.resetForTesting()
+        TrustedTimeProvider.elapsedRealtimeProvider = { SystemClock.elapsedRealtime() }
+        TrustedTimeProvider.wallTimeProvider = { System.currentTimeMillis() }
+        FortressSessionController.resetForTesting()
+    }
+
+    private companion object {
+        const val FAKE_ELAPSED_MS = 10_000L
+        const val FAKE_WALL_MS = 1_790_000_000_000L
     }
 
     private fun setDeviceAdminBound(bound: Boolean) {

@@ -10,6 +10,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -229,11 +230,21 @@ class SystemAppsManagerViewModelTest {
         vm.executeFreezeChange(item, targetHidden = true)
         freezeGate.complete(Unit)
 
+        // FreezeSuccess is emitted before the ViewModel's finally block clears the
+        // in-flight package (both run on Dispatchers.IO). Wait for the settled UI
+        // state instead of reading it right after the event to avoid a test-only race.
+        val settledState = withTimeout(5_000L) {
+            vm.uiState.first { state ->
+                state.inFlightPackages.isEmpty() &&
+                    state.masterAppList.firstOrNull()?.isHidden == true &&
+                    state.frozenCount == 1
+            }
+        }
         val event = vm.events.first()
         assertEquals(SystemAppsManagerEvent.FreezeSuccess("Example", true), event)
         assertEquals(1, setCalls)
-        assertTrue(vm.uiState.value.inFlightPackages.isEmpty())
-        assertTrue(vm.uiState.value.masterAppList.first().isHidden)
-        assertEquals(1, vm.uiState.value.frozenCount)
+        assertTrue(settledState.inFlightPackages.isEmpty())
+        assertTrue(settledState.masterAppList.first().isHidden)
+        assertEquals(1, settledState.frozenCount)
     }
 }
