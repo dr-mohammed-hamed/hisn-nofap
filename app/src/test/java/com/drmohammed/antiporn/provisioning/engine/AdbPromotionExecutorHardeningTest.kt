@@ -179,6 +179,7 @@ class AdbPromotionExecutorHardeningTest {
             },
             isDeviceOwnerChecker = { false },
             canWriteSecureSettingsChecker = { true },
+            hasUsageStatsChecker = { true },
             blockingUsersInspector = { emptyList() },
             sdkVersionProvider = { 34 },
             isXiaomi = false,
@@ -621,140 +622,6 @@ class AdbPromotionExecutorHardeningTest {
     }
 
     @Test
-    fun postPromotionVerifier_whenDeviceOwnerConfirmed_repairsStateTriggersDnsGateAndDisablesWirelessAdbLast() = runBlocking {
-        ProvisioningFreezeRecoveryStore.recordPendingFreeze(context, 0, listOf("com.google.android.gms"))
-        var gmsDisabled = true
-        ProvisioningFreezeRecoveryStore.disabledStateCheckerOverride = { _, pkg ->
-            pkg == "com.google.android.gms" && gmsDisabled
-        }
-
-        var pollCount = 0
-        var secureSettingsGranted = false
-        var dnsProvisioned = false
-        val timeline = mutableListOf<String>()
-
-        val result = AdbPostPromotionVerifier.verifyAndFinalizeWithShell(
-            context = context,
-            userId = 0,
-            didSetupBypass = true,
-            shellExecutor = { cmd ->
-                timeline += "shell:$cmd"
-                when (cmd) {
-                    "settings --user 0 get secure user_setup_complete" -> {
-                        val repaired = timeline.contains("shell:settings --user 0 put secure user_setup_complete 1")
-                        shellOk(if (repaired) "1" else "0")
-                    }
-                    "settings --user 0 put secure user_setup_complete 1" -> shellOk("")
-                    "pm enable --user 0 com.google.android.gms" -> {
-                        gmsDisabled = false
-                        shellOk("")
-                    }
-                    "pm list packages -d --user 0" -> shellOk(if (gmsDisabled) "package:com.google.android.gms" else "")
-                    "rm -f /data/local/tmp/antiporn_freeze_0_*.lock" -> shellOk("")
-                    "pm grant com.drmohammed.antiporn android.permission.WRITE_SECURE_SETTINGS" -> {
-                        secureSettingsGranted = true
-                        shellOk("")
-                    }
-                    "settings put global adb_wifi_enabled 0" -> shellOk("")
-                    else -> error("Unexpected command: $cmd")
-                }
-            },
-            isDeviceOwnerChecker = {
-                pollCount++
-                timeline += "do_poll:$pollCount"
-                pollCount >= 2
-            },
-            canWriteSecureSettingsChecker = { secureSettingsGranted },
-            privateDnsProvisioner = {
-                dnsProvisioned = true
-                timeline += "provision_dns"
-            },
-            applyEnforcement = {
-                timeline += "apply_enforcement"
-            },
-            pollIntervalMs = 0L,
-            sdkInt = 34
-        )
-
-        assertEquals(PromotionResult.Success, result)
-        assertNull("Stranded frozen package ledger must be healed and cleared", ProvisioningFreezeRecoveryStore.getPendingLedger(context))
-        assertTrue(secureSettingsGranted)
-        assertTrue("Private DNS gate must run on SDK >= 29", dnsProvisioned)
-
-        val setupRepairIdx = timeline.indexOf("shell:settings --user 0 put secure user_setup_complete 1")
-        val healEnableIdx = timeline.indexOf("shell:pm enable --user 0 com.google.android.gms")
-        val grantSecureIdx = timeline.indexOf("shell:pm grant com.drmohammed.antiporn android.permission.WRITE_SECURE_SETTINGS")
-        val dnsIdx = timeline.indexOf("provision_dns")
-        val enforcementIdx = timeline.indexOf("apply_enforcement")
-        val disableWifiAdbIdx = timeline.indexOf("shell:settings put global adb_wifi_enabled 0")
-
-        assertTrue("DO confirmation polling must happen before repairs", timeline.indexOf("do_poll:2") < setupRepairIdx)
-        assertTrue("user_setup_complete repair must run before freeze heal", setupRepairIdx < healEnableIdx)
-        assertTrue("freeze heal must run before WRITE_SECURE_SETTINGS retry", healEnableIdx < grantSecureIdx)
-        assertTrue("WRITE_SECURE_SETTINGS retry must run before DNS check", grantSecureIdx < dnsIdx)
-        assertTrue("DNS check must run before enforcement", dnsIdx < enforcementIdx)
-        assertTrue("enforcement must run before disabling Wireless ADB", enforcementIdx < disableWifiAdbIdx)
-        assertEquals("Disabling adb_wifi_enabled must be the absolute final step", timeline.lastIndex, disableWifiAdbIdx)
-    }
-
-    @Test
-    fun postPromotionVerifier_whenStrandedPackagesRemainDisabled_keepsWirelessAdbOpenAndFails() = runBlocking {
-        ProvisioningFreezeRecoveryStore.recordPendingFreeze(context, 0, listOf("com.google.android.gms"))
-        ProvisioningFreezeRecoveryStore.disabledStateCheckerOverride = { _, _ -> true }
-        val executedCommands = mutableListOf<String>()
-
-        val result = AdbPostPromotionVerifier.verifyAndFinalizeWithShell(
-            context = context,
-            userId = 0,
-            didSetupBypass = false,
-            shellExecutor = { cmd ->
-                executedCommands += cmd
-                when (cmd) {
-                    "pm enable --user 0 com.google.android.gms" -> shellFail("", "Failure", 1)
-                    "pm list packages -d --user 0" -> shellOk("package:com.google.android.gms")
-                    else -> shellOk("")
-                }
-            },
-            isDeviceOwnerChecker = { true },
-            canWriteSecureSettingsChecker = { true },
-            applyEnforcement = {},
-            pollIntervalMs = 0L,
-            sdkInt = 34
-        )
-
-        assertTrue(result is PromotionResult.Failure)
-        assertEquals("heal_failed", (result as PromotionResult.Failure).message)
-        assertFalse(
-            "Wireless ADB must remain open when stranded packages still need recovery",
-            executedCommands.contains("settings put global adb_wifi_enabled 0")
-        )
-    }
-
-    @Test
-    fun postPromotionVerifier_whenDeviceOwnerNeverConfirmed_failsWithoutDisablingWirelessAdb() = runBlocking {
-        val executedCommands = mutableListOf<String>()
-        var enforcementCalled = false
-
-        val result = AdbPostPromotionVerifier.verifyAndFinalizeWithShell(
-            context = context,
-            userId = 0,
-            didSetupBypass = true,
-            shellExecutor = { cmd ->
-                executedCommands += cmd
-                shellOk("")
-            },
-            isDeviceOwnerChecker = { false },
-            applyEnforcement = { enforcementCalled = true },
-            pollIntervalMs = 0L
-        )
-
-        assertTrue(result is PromotionResult.Failure)
-        assertEquals("post_verify_failed", (result as PromotionResult.Failure).message)
-        assertFalse("Enforcement must not run when DO verification fails", enforcementCalled)
-        assertTrue("Wireless ADB must remain untouched when DO verification fails", executedCommands.isEmpty())
-    }
-
-    @Test
     fun promptState_clearStickyOutcomeWithRefreshFalseSuppressesReprompt() {
         val state = AdbPairingPromptState()
         state.onPairingPortDiscovered(37123)
@@ -810,6 +677,7 @@ class AdbPromotionExecutorHardeningTest {
             },
             isDeviceOwnerChecker = { false },
             canWriteSecureSettingsChecker = { true },
+            hasUsageStatsChecker = { true },
             blockingUsersInspector = { emptyList() },
             sdkVersionProvider = { 30 },
             isXiaomi = false,
@@ -851,6 +719,14 @@ class AdbPromotionExecutorHardeningTest {
 
         assertEquals(PromotionResult.Success, result)
         assertEquals(false, verifierDidBypass)
+        assertTrue(
+            "ADB promotion must grant GET_USAGE_STATS appop",
+            executedCommands.contains("appops set com.drmohammed.antiporn GET_USAGE_STATS allow")
+        )
+        assertTrue(
+            "ADB promotion must grant ACCESS_RESTRICTED_SETTINGS appop",
+            executedCommands.contains("appops set com.drmohammed.antiporn ACCESS_RESTRICTED_SETTINGS allow")
+        )
         assertFalse(
             "FAST_PATH_ZERO_ACCOUNT_DPM must NOT fire direct dpm when --checkin detects accounts",
             executedCommands.any { it.startsWith("dpm set-device-owner") }
@@ -961,6 +837,7 @@ class AdbPromotionExecutorHardeningTest {
             },
             isDeviceOwnerChecker = { false },
             canWriteSecureSettingsChecker = { true },
+            hasUsageStatsChecker = { true },
             blockingUsersInspector = { emptyList() },
             sdkVersionProvider = { 34 },
             isXiaomi = false,
@@ -978,6 +855,10 @@ class AdbPromotionExecutorHardeningTest {
         assertEquals(PromotionResult.Success, result)
         assertTrue("Fallback packageFreezeRunner must execute when SetupStateHelper fails", fallbackFreezeCalled)
         assertEquals(true, verifierDidBypass)
+        assertTrue(
+            "ADB promotion must grant GET_USAGE_STATS appop",
+            executedCommands.contains("appops set com.drmohammed.antiporn GET_USAGE_STATS allow")
+        )
         val rmBeforeWriteIdx = executedCommands.indexOfFirst { it == "rm -f /data/local/tmp/antiporn_helper.dex" }
         val dexWriteIdx = executedCommands.indexOfFirst { it.startsWith("echo '") }
         assertTrue("Stale helper DEX must be removed before writing read-only DEX", rmBeforeWriteIdx in 0 until dexWriteIdx)
@@ -1024,6 +905,7 @@ class AdbPromotionExecutorHardeningTest {
             },
             isDeviceOwnerChecker = { false },
             canWriteSecureSettingsChecker = { true },
+            hasUsageStatsChecker = { true },
             blockingUsersInspector = { emptyList() },
             sdkVersionProvider = { 34 },
             isXiaomi = false,

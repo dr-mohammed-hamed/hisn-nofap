@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.drmohammed.antiporn.accessibility.util.AccessibilityTreeWalker
 import timber.log.Timber
 
 /**
@@ -71,46 +72,53 @@ class ViewIdResourceStrategy(
             null
         } ?: return false
 
+        var matched = false
         try {
             for (id in viewIdResourceNames) {
+                if (matched) break
                 val nodes = try {
                     rootNode.findAccessibilityNodeInfosByViewId(id)
                 } catch (e: Exception) {
-                    Timber.tag(TAG).w("Error querying viewId $id: ${e.message}")
+                    Timber.tag(TAG).w(e, "Error querying viewId $id")
                     emptyList<AccessibilityNodeInfo>()
                 }
 
                 if (!nodes.isNullOrEmpty()) {
                     for (node in nodes) {
+                        if (node == null) continue
                         try {
-                            if (requireVisibleToUser && !node.isVisibleToUser) {
-                                continue
-                            }
-
-                            if (screenWidth > 0 && screenHeight > 0) {
-                                val bounds = Rect()
-                                node.getBoundsInScreen(bounds)
-                                val widthRatio = bounds.width().toFloat() / screenWidth.toFloat()
-                                val heightRatio = bounds.height().toFloat() / screenHeight.toFloat()
-
-                                // Guard against PiP, Mini-players, and homepage shelves
-                                if (widthRatio >= minWidthRatio && heightRatio >= minHeightRatio) {
-                                    return true
+                            if (!matched) {
+                                if (requireVisibleToUser && !node.isVisibleToUser) {
+                                    continue
                                 }
-                            } else {
-                                return true
+
+                                if (screenWidth > 0 && screenHeight > 0) {
+                                    val bounds = Rect()
+                                    node.getBoundsInScreen(bounds)
+                                    val widthRatio = bounds.width().toFloat() / screenWidth.toFloat()
+                                    val heightRatio = bounds.height().toFloat() / screenHeight.toFloat()
+
+                                    // Guard against PiP, Mini-players, and homepage shelves
+                                    if (widthRatio >= minWidthRatio && heightRatio >= minHeightRatio) {
+                                        matched = true
+                                    }
+                                } else {
+                                    // Fail closed: without valid screen bounds we cannot
+                                    // distinguish a full-screen page from a PiP/mini-player.
+                                    continue
+                                }
                             }
                         } finally {
-                            try { node.recycle() } catch (_: Exception) {}
+                            AccessibilityTreeWalker.safeRecycle(node)
                         }
                     }
                 }
             }
         } finally {
-            try { rootNode.recycle() } catch (_: Exception) {}
+            AccessibilityTreeWalker.safeRecycle(rootNode)
         }
 
-        return false
+        return matched
     }
 
     companion object {
@@ -121,13 +129,13 @@ class ViewIdResourceStrategy(
 /**
  * استراتيجية الكشف عبر الدلالات وشجرة الوصول (التبويبات المحددة والأوصاف التوضيحية) مع استبعاد نصوص البحث.
  */
-@Suppress("DEPRECATION")
 class SemanticsAndTreeStrategy(
     private val targetKeywords: Set<String> = emptySet(),
     private val targetContentDescriptions: Set<String> = emptySet(),
     private val excludedKeywords: Set<String> = emptySet(),
     private val requireSelected: Boolean = false,
-    private val maxDepth: Int = 8
+    private val maxDepth: Int = 8,
+    private val maxNodes: Int = 150
 ) : PageDetectorStrategy {
 
     override fun isPageDetected(
@@ -139,19 +147,25 @@ class SemanticsAndTreeStrategy(
         val rootNode = try {
             service.rootInActiveWindow
         } catch (e: Exception) {
+            Timber.tag(TAG).w(e, "Failed to retrieve rootInActiveWindow")
             null
         } ?: return false
 
         try {
-            return traverse(rootNode, 0)
+            return AccessibilityTreeWalker.traverse(
+                root = rootNode,
+                maxDepth = maxDepth,
+                maxNodes = maxNodes,
+                skipSensitiveNodes = true
+            ) { node ->
+                matchesTargetNode(node)
+            }
         } finally {
-            try { rootNode.recycle() } catch (_: Exception) {}
+            AccessibilityTreeWalker.safeRecycle(rootNode)
         }
     }
 
-    private fun traverse(node: AccessibilityNodeInfo, depth: Int): Boolean {
-        if (depth > maxDepth) return false
-
+    private fun matchesTargetNode(node: AccessibilityNodeInfo): Boolean {
         val text = node.text?.toString() ?: ""
         val desc = node.contentDescription?.toString() ?: ""
 
@@ -165,32 +179,13 @@ class SemanticsAndTreeStrategy(
         val matchesText = targetKeywords.any { kw -> text.contains(kw, ignoreCase = true) }
         val matchesDesc = targetContentDescriptions.any { cd -> desc.contains(cd, ignoreCase = true) }
 
-        if (matchesText || matchesDesc) {
-            if (!requireSelected || node.isSelected) {
-                if (node.isVisibleToUser) {
-                    return true
-                }
-            }
-        }
+        return (matchesText || matchesDesc) &&
+            (!requireSelected || node.isSelected) &&
+            node.isVisibleToUser
+    }
 
-        val childCount = node.childCount
-        for (i in 0 until childCount) {
-            val child = try {
-                node.getChild(i)
-            } catch (_: Exception) {
-                null
-            } ?: continue
-
-            try {
-                if (traverse(child, depth + 1)) {
-                    return true
-                }
-            } finally {
-                try { child.recycle() } catch (_: Exception) {}
-            }
-        }
-
-        return false
+    companion object {
+        private const val TAG = "AntiPorn_SemanticsStrat"
     }
 }
 

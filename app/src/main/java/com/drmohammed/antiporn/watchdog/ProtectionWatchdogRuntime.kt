@@ -20,10 +20,11 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import timber.log.Timber
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Thread-safe, idempotent, host-agnostic runtime controller for zero-trust protection watchdog observation.
- * Coordinates [PrivateDnsDriftWatcher], [WatchdogSystemReceivers], and [ProtectionAuditEngine].
+ * Coordinates [PrivateDnsDriftWatcher], [AccessibilityDriftWatcher], [WatchdogSystemReceivers], and [ProtectionAuditEngine].
  */
 object ProtectionWatchdogRuntime {
 
@@ -40,13 +41,7 @@ object ProtectionWatchdogRuntime {
     internal class ExternalDnsDriftTracker(
         private val windowMs: Long = 60_000L,
         private val maxEntries: Int = 16,
-        private val clockMs: () -> Long = {
-            try {
-                SystemClock.elapsedRealtime()
-            } catch (_: RuntimeException) {
-                System.currentTimeMillis()
-            }
-        }
+        private val clockMs: () -> Long = { safeElapsedRealtime() }
     ) {
         private val driftLock = Any()
         private val timestamps = ArrayDeque<Long>()
@@ -69,6 +64,18 @@ object ProtectionWatchdogRuntime {
     }
 
     private val lock = Any()
+    private val clockFallbackLogged = AtomicBoolean(false)
+
+    private fun safeElapsedRealtime(): Long {
+        return try {
+            SystemClock.elapsedRealtime()
+        } catch (e: RuntimeException) {
+            if (clockFallbackLogged.compareAndSet(false, true)) {
+                Timber.tag(TAG).d(e, "SystemClock.elapsedRealtime unavailable; falling back to nanoTime")
+            }
+            System.nanoTime() / 1_000_000L
+        }
+    }
 
     @Volatile
     var isRunning: Boolean = false
@@ -78,6 +85,7 @@ object ProtectionWatchdogRuntime {
     var activeHost: WatchdogHost = WatchdogHost.NONE
         private set
 
+    @Volatile
     private var generationId: Long = 0L
     private var runtimeScope: CoroutineScope? = null
     private var protectionCheckChannel: Channel<Unit>? = null
@@ -97,6 +105,10 @@ object ProtectionWatchdogRuntime {
         }
     )
 
+    private val a11yDriftWatcher = AccessibilityDriftWatcher(
+        isActiveGeneration = { gen -> synchronized(lock) { isRunning && gen == generationId } }
+    )
+
     private val systemReceivers = WatchdogSystemReceivers(
         driftTracker = externalDnsDriftTracker,
         isActiveGeneration = { gen -> synchronized(lock) { isRunning && gen == generationId } },
@@ -113,7 +125,7 @@ object ProtectionWatchdogRuntime {
 
     fun attach(context: Context, host: WatchdogHost) {
         synchronized(lock) {
-            val appCtx = context.applicationContext
+            val appCtx = context.applicationContext ?: context
             if (isRunning) {
                 if (activeHost == host) {
                     Timber.tag(TAG).d("Watchdog runtime already running on host $host; ignoring redundant attach.")
@@ -218,9 +230,10 @@ object ProtectionWatchdogRuntime {
             }
         }
 
-        driftWatcher.register(appContext, currentGen)
-        systemReceivers.registerAll(appContext, scope, heartbeater, currentGen)
         isRunning = true
+        driftWatcher.register(appContext, currentGen)
+        a11yDriftWatcher.register(appContext, currentGen)
+        systemReceivers.registerAll(appContext, scope, heartbeater, currentGen)
 
         channel.trySend(Unit)
         ApprovalRepository.getInstance(appContext).syncZeroTrustBaselineAndReconcileAsync()
@@ -241,6 +254,7 @@ object ProtectionWatchdogRuntime {
         if (appContext != null) {
             systemReceivers.unregisterAll(appContext, heartbeatHandler)
             driftWatcher.unregister(appContext)
+            a11yDriftWatcher.unregister(appContext)
             try {
                 WaqfaForegroundWatcher.getInstance(appContext).stop()
             } catch (e: Exception) {

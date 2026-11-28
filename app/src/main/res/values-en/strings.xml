@@ -1261,6 +1261,7 @@
     <string name="feature_name_page_shield">Page Shield</string>
     <string name="feature_name_waqfa">Waqfa</string>
     <string name="feature_name_vision_ai">Vision Guard AI</string>
+    <string name="feature_name_custom_shield">Custom Shield</string>
     <string name="list_separator">, </string>
     <string name="notif_remote_a11y_required_title">Accessibility Required for Protection</string>
     <string name="notif_remote_a11y_required_msg">Protection settings (%1$s) require Hisn Accessibility Service to be enabled. Tap here to open Settings.</string>
@@ -1283,6 +1284,7 @@
     <string name="a11y_onboarding_reason_page_shield">To block Shorts and Reels instantly inside apps, Hisn needs the Accessibility Service enabled.</string>
     <string name="a11y_onboarding_reason_waqfa">To run Waqfa in Instant Fast Mode (0ms) and intercept apps the moment they open, Hisn needs the Accessibility Service enabled.</string>
     <string name="a11y_onboarding_reason_vision_ai">To run Vision Guard AI automatic screen inspection on this Android version, Hisn needs the Accessibility Service enabled.</string>
+    <string name="a11y_onboarding_reason_custom_shield">To run Custom Shield and enforce your configured rules instantly, Hisn needs the Accessibility Service enabled.</string>
     <string name="a11y_onboarding_reason_guardian">Your guardian enabled a protection shield that requires Hisn Accessibility Service to work properly on your device.</string>
     <string name="a11y_onboarding_reason_general">To run your enabled instant protection shields reliably, Hisn needs the Accessibility Service enabled.</string>
     <string name="a11y_onboarding_step2_desc">Find “Hisn” in Installed Services, switch it ON, and confirm activation.</string>

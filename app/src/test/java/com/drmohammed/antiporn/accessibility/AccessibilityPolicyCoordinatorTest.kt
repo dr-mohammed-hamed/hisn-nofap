@@ -343,6 +343,24 @@ class AccessibilityPolicyCoordinatorTest {
         assertTrue(result is AccessibilityReconcileResult.NotRequiredAlreadyOff)
     }
 
+    @Test
+    fun reconcile_withImplicitPolicyAndIntentionalDisableActive_skipsEnableSilently() {
+        AccessibilityPolicyCoordinator.policyResolverOverride = {
+            DevicePolicyBundle.defaultPolicy().copy(
+                pageShieldConfig = activePageShieldConfig()
+            )
+        }
+        AccessibilitySelfActivator.markIntentionalDisable()
+
+        val result = AccessibilityPolicyCoordinator.reconcile(
+            context = dummyContext,
+            policy = null,
+            forceUncloak = false
+        )
+
+        assertTrue(result is AccessibilityReconcileResult.NotRequiredAlreadyOff)
+    }
+
     // =========================================================================
     // 7. onServiceDisconnected: Supervised Tamper Detection vs Intentional/Cloak
     // =========================================================================

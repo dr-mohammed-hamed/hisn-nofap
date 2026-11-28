@@ -126,8 +126,8 @@ class AntiPornApplication : Application(), Configuration.Provider {
             com.drmohammed.antiporn.accountability.coordinator.GuardianSupervisionCoordinator.getInstance(this).startSupervising()
         }
 
-        // Register Page Shield Accessibility Hook
-        com.drmohammed.antiporn.pageshield.engine.PageShieldAccessibilityHook.getInstance()
+        // Register Accessibility Core modules and seed initial policy
+        com.drmohammed.antiporn.accessibility.core.AccessibilityCoreBootstrap.ensureInitialized(this)
 
         // Synchronize Zero-Trust active foreground watcher state on startup
         ZeroTrustForegroundWatcher.syncWatcherState(this)

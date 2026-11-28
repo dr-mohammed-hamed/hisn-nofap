@@ -1539,6 +1539,7 @@
     <string name="feature_name_page_shield">درع الصفحات</string>
     <string name="feature_name_waqfa">نظام «وَقْفَة»</string>
     <string name="feature_name_vision_ai">حارس غض البصر (الذكاء الاصطناعي)</string>
+    <string name="feature_name_custom_shield">الدرع المخصص</string>
     <string name="list_separator">، </string>
     <string name="notif_remote_a11y_required_title">يلزم تفعيل خدمة الوصول للحماية</string>
     <string name="notif_remote_a11y_required_msg">تتطلب إعدادات الحماية (%1$s) تفعيل خدمة إمكانية الوصول لتطبيق الحصن. اضغط هنا لفتح الإعدادات وتفعيلها.</string>
@@ -1561,6 +1562,7 @@
     <string name="a11y_onboarding_reason_page_shield">لحجب مقاطع Shorts والريلز فور ظهورها داخل التطبيقات، يحتاج تطبيق «الحِصْن» إلى تشغيل خدمة إمكانية الوصول.</string>
     <string name="a11y_onboarding_reason_waqfa">لتشغيل نظام «وَقْفَة» بالوضع الفوري السريع (0ms) واعتراض التطبيقات لحظة فتحها، يحتاج تطبيق «الحِصْن» إلى خدمة إمكانية الوصول.</string>
     <string name="a11y_onboarding_reason_vision_ai">لتشغيل «حارس غض البصر» بالذكاء الاصطناعي وفحص الشاشة تلقائياً على هذا الإصدار من أندرويد، يحتاج تطبيق «الحِصْن» إلى خدمة إمكانية الوصول.</string>
+    <string name="a11y_onboarding_reason_custom_shield">لتشغيل «الدرع المخصص» وحماية القواعد التي تم ضبطها فورياً، يحتاج تطبيق «الحِصْن» إلى تشغيل خدمة إمكانية الوصول.</string>
     <string name="a11y_onboarding_reason_guardian">قام مشرفك بتفعيل درع حماية يتطلب تشغيل خدمة إمكانية الوصول لتطبيق «الحِصْن» ليعمل بشكل كامل على جهازك.</string>
     <string name="a11y_onboarding_reason_general">لتشغيل دروع الحماية الفورية المفعّلة بكفاءة تامة، يحتاج تطبيق «الحِصْن» إلى تشغيل خدمة إمكانية الوصول.</string>
     <string name="a11y_onboarding_step2_desc">ابحث عن «الحِصْن» داخل قائمة الخدمات المثبّتة، ثم قم بتفعيل المفتاح والموافقة على التشغيل.</string>

@@ -21,6 +21,7 @@ internal class FakeProvisioningContext : ContextWrapper(null) {
     override fun getApplicationContext(): Context = this
     override fun getPackageName(): String = "com.drmohammed.antiporn"
     override fun getPackageManager(): PackageManager? = null
+    override fun getSystemService(name: String): Any? = null
     override fun getResources(): Resources = fakeResources
     override fun getSharedPreferences(name: String?, mode: Int): SharedPreferences =
         prefsByName.getOrPut(name ?: "default") { FakeSharedPreferences() }
