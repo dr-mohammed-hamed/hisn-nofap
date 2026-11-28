@@ -74,4 +74,8 @@
     <color name="purple_200">#FF2DD4BF</color>
     <color name="teal_200">#FF38BDF8</color>
     <color name="teal_700">#FF0284C7</color>
+
+    <!-- Night Mode Status Tokens -->
+    <color name="status_success_dark">#FF34D399</color>
+    <color name="status_caution_dark">#FFFBBF24</color>
 </resources>

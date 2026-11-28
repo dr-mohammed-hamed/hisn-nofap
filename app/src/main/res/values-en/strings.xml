@@ -1618,6 +1618,8 @@
     <string name="hub_title_fortresses">Fortresses</string>
     <string name="hub_subtitle_fortresses">Manage Emergency &amp; Custom Fortresses</string>
     <string name="self_control_active_modes_title">Active Protection Modes</string>
+    <string name="active_modes_manage">Manage active modes</string>
+    <string name="active_modes_sheet_title">Active modes</string>
     <string name="self_control_active_curfew_row">Night Curfew is currently active</string>
     <string name="self_control_active_fortress_row">Active Fortress: %1$s (%2$s left)</string>
     <string name="self_control_btn_unlock_curfew_qr">Unlock Curfew via QR</string>

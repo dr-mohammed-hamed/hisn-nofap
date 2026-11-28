@@ -33,6 +33,9 @@ import java.lang.ref.WeakReference
 object ActiveShieldsBottomSheet {
 
     private const val TAG = "ActiveShieldsSheet"
+    const val MODE_CURFEW = "curfew"
+    const val MODE_FORTRESS = "fortress"
+    const val MODE_ALL = "all"
     private val sheetScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var currentDialog: WeakReference<BottomSheetDialog>? = null
     private var activeEvalJob: Job? = null
@@ -51,7 +54,11 @@ object ActiveShieldsBottomSheet {
         currentDialog = null
     }
 
-    fun show(context: Context) {
+    fun show(
+        context: Context,
+        onUnlockMode: ((String) -> Unit)? = null,
+        activeModes: List<ActiveModeInfo> = emptyList()
+    ) {
         val activity = findActivity(context)
         if (activity == null || activity.isFinishing || activity.isDestroyed) {
             return
@@ -66,8 +73,8 @@ object ActiveShieldsBottomSheet {
         dialog.setOnDismissListener {
             activeEvalJob?.cancel()
             activeEvalJob = null
-            if (activity is LifecycleOwner && lifecycleObserver != null) {
-                activity.lifecycle.removeObserver(lifecycleObserver!!)
+            if (activity is LifecycleOwner) {
+                lifecycleObserver?.let { activity.lifecycle.removeObserver(it) }
             }
             if (currentDialog?.get() === dialog) {
                 currentDialog = null
@@ -120,6 +127,26 @@ object ActiveShieldsBottomSheet {
             Log.w(TAG, "Failed showing ActiveShieldsBottomSheet", e)
             currentDialog = null
             return
+        }
+
+        val activeModesHeader = sheetView.findViewById<TextView>(R.id.tvActiveModesHeader)
+        val activeModesContainer = sheetView.findViewById<LinearLayout>(R.id.layoutActiveModesContainer)
+        activeModesHeader.visibility = View.GONE
+        activeModesContainer.visibility = View.GONE
+        if (activeModes.isNotEmpty() && onUnlockMode != null && !activity.isFinishing && !activity.isDestroyed) {
+            activeModesHeader.text = context.getString(R.string.active_modes_sheet_title)
+            activeModesHeader.visibility = View.VISIBLE
+            activeModesContainer.visibility = View.VISIBLE
+            activeModesContainer.removeAllViews()
+            for (mode in activeModes) {
+                val itemView = inflater.inflate(R.layout.item_active_shield, activeModesContainer, false)
+                itemView.findViewById<ImageView>(R.id.ivShieldIcon).setImageResource(R.drawable.ic_shield_time)
+                itemView.findViewById<TextView>(R.id.tvShieldTitle).text = mode.title
+                itemView.findViewById<TextView>(R.id.tvShieldDescription).text = mode.detail
+                itemView.findViewById<TextView>(R.id.tvShieldBadge).text = context.getString(R.string.active_modes_manage)
+                itemView.setOnClickListener { onUnlockMode(mode.key) }
+                activeModesContainer.addView(itemView)
+            }
         }
 
         if (activity is LifecycleOwner) {

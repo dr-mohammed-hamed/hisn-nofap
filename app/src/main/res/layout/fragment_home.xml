@@ -171,11 +171,12 @@
             <!-- Center Screen: Emergency Fortress Hero & Custom Fortresses -->
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/cardHeroFortresses"
+                style="@style/Widget.Hisn.Card"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="28dp"
                 app:cardBackgroundColor="?attr/colorSurfaceContainer"
-                app:cardCornerRadius="24dp"
+                app:cardCornerRadius="@dimen/hisn_hero_radius"
                 app:cardElevation="0dp"
                 app:strokeColor="?attr/colorOutlineVariant"
                 app:strokeWidth="1dp">
@@ -183,43 +184,66 @@
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:gravity="center_horizontal"
                     android:orientation="vertical"
-                    android:padding="20dp">
+                    android:padding="@dimen/hisn_card_padding">
 
-                    <TextView
+                    <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginBottom="10dp"
-                        android:fontFamily="@font/tajawal"
-                        android:text="@string/home_fortresses_section_title"
-                        android:textAlignment="viewStart"
-                        android:textColor="?attr/colorPrimary"
-                        android:textSize="13sp"
-                        android:textStyle="bold" />
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
 
-                    <!-- Emergency Fortress Hero Action Button -->
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnHeroEmergencyFortressStart"
-                        style="@style/Widget.Material3.Button"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:minHeight="60dp"
-                        android:text="@string/fortress_emergency_default_name"
-                        android:textSize="16sp"
-                        android:textStyle="bold"
-                        app:cornerRadius="18dp"
-                        app:icon="@drawable/ic_shield_time"
-                        app:iconGravity="textStart"
-                        app:iconPadding="10dp"
-                        app:iconSize="22dp" />
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginEnd="@dimen/hisn_card_gap"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
 
-                    <!-- Active Emergency Fortress Live Countdown & Extend Controls -->
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:fontFamily="@font/tajawal"
+                                android:text="@string/home_fortresses_section_title"
+                                android:textAlignment="viewStart"
+                                android:textColor="?attr/colorPrimary"
+                                android:textSize="14sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/tvEmergencyFortressSubtitle"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:fontFamily="@font/tajawal"
+                                android:text="@string/home_emergency_fortress_desc"
+                                android:textAlignment="viewStart"
+                                android:textColor="?attr/colorOnSurfaceVariant"
+                                android:textSize="12sp" />
+                        </LinearLayout>
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnHeroEmergencyFortressStart"
+                            style="@style/Widget.Material3.Button"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:minHeight="@dimen/hisn_control_height"
+                            android:text="@string/fortress_emergency_default_name"
+                            android:textAlignment="viewStart"
+                            android:textSize="13sp"
+                            android:textStyle="bold"
+                            app:cornerRadius="12dp"
+                            app:icon="@drawable/ic_shield_time"
+                            app:iconGravity="textStart"
+                            app:iconPadding="8dp"
+                            app:iconSize="20dp" />
+                    </LinearLayout>
+
                     <LinearLayout
                         android:id="@+id/layoutEmergencyFortressActive"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp"
+                        android:layout_marginTop="@dimen/hisn_card_gap"
                         android:gravity="center_vertical"
                         android:orientation="horizontal"
                         android:visibility="gone">
@@ -233,7 +257,7 @@
                             android:gravity="center"
                             android:paddingHorizontal="14dp"
                             android:paddingVertical="8dp"
-                            android:textColor="@color/status_green"
+                            android:textColor="?attr/colorSuccess"
                             android:textSize="14sp"
                             android:textStyle="bold"
                             tools:text="المتبقي: 59:45" />
@@ -244,29 +268,17 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginStart="10dp"
-                            android:minHeight="48dp"
+                            android:minHeight="@dimen/hisn_control_height"
                             android:text="@string/notif_action_extend_fortress"
-                            android:textSize="12sp"
+                            android:textSize="13sp"
                             app:cornerRadius="12dp" />
                     </LinearLayout>
 
-                    <TextView
-                        android:id="@+id/tvEmergencyFortressSubtitle"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
-                        android:fontFamily="@font/tajawal"
-                        android:gravity="center"
-                        android:text="@string/home_emergency_fortress_desc"
-                        android:textColor="?attr/colorOnSurfaceVariant"
-                        android:textSize="12sp" />
-
-                    <!-- Dynamic Custom Fortresses Container -->
                     <LinearLayout
                         android:id="@+id/layoutCustomFortressesContainer"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp"
+                        android:layout_marginTop="@dimen/hisn_card_gap"
                         android:orientation="vertical"
                         android:visibility="gone" />
 
@@ -275,8 +287,8 @@
                         style="@style/Widget.Material3.Button.TextButton"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="4dp"
-                        android:minHeight="48dp"
+                        android:layout_marginTop="@dimen/hisn_card_gap"
+                        android:minHeight="@dimen/hisn_control_height"
                         android:text="@string/btn_grant_usage_access"
                         android:textColor="@color/status_orange"
                         android:textSize="12sp"

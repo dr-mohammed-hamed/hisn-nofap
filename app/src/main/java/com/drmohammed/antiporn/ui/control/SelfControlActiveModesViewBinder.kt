@@ -13,6 +13,8 @@ import com.drmohammed.antiporn.fortress.model.ActiveFortressSession
 import com.drmohammed.antiporn.ui.control.qr.QrScannerBottomSheet
 import com.drmohammed.antiporn.ui.control.qr.SelfControlQrManager
 import com.drmohammed.antiporn.ui.home.HomeFortressesViewBinder
+import com.drmohammed.antiporn.ui.shields.ActiveModeInfo
+import com.drmohammed.antiporn.ui.shields.ActiveShieldsBottomSheet
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 
 /**
@@ -90,6 +92,56 @@ internal class SelfControlActiveModesViewBinder(
         b.cardActiveModesUnlock.visibility = View.VISIBLE
         bindCurfewRow(b, showCurfewRow, isQrEnabled)
         bindFortressRow(ctx, b, showFortressRow, activeFortress, isQrEnabled)
+
+        val fortressSession = activeFortress?.takeIf { showFortressRow }
+        val summaryParts = mutableListOf<String>()
+        val modes = mutableListOf<ActiveModeInfo>()
+        if (showCurfewRow) {
+            val curfewStatus = ctx.getString(R.string.self_control_active_curfew_row)
+            summaryParts.add(curfewStatus)
+            modes.add(
+                ActiveModeInfo(
+                    ActiveShieldsBottomSheet.MODE_CURFEW,
+                    curfewStatus,
+                    ctx.getString(R.string.card_curfew_active_desc)
+                )
+            )
+        }
+        fortressSession?.let { session ->
+            val displayName = session.resolveDisplayName(ctx)
+            val fortressDetail = ctx.getString(
+                R.string.self_control_active_fortress_row,
+                displayName,
+                HomeFortressesViewBinder.formatCountdown(session.remainingMs)
+            )
+            summaryParts.add(fortressDetail)
+            modes.add(ActiveModeInfo(ActiveShieldsBottomSheet.MODE_FORTRESS, displayName, fortressDetail))
+        }
+        b.tvActiveModesSummary.isVisible = summaryParts.isNotEmpty()
+        b.tvActiveModesSummary.text = summaryParts.joinToString(ctx.getString(R.string.fortress_meta_separator))
+
+        b.btnManageActiveModesSelfControl.setOnClickListener {
+            ActiveShieldsBottomSheet.show(
+                ctx,
+                onUnlockMode = { key ->
+                    when (key) {
+                        ActiveShieldsBottomSheet.MODE_CURFEW -> {
+                            if (isQrEnabled) launchQrScanner(TAG_UNLOCK_CURFEW) else showDirectCurfewConfirm()
+                        }
+                        ActiveShieldsBottomSheet.MODE_FORTRESS -> {
+                            if (isQrEnabled) {
+                                launchQrScanner(TAG_UNLOCK_FORTRESS)
+                            } else {
+                                fortressSession?.takeIf { !it.isEmergency }?.let { session ->
+                                    showDirectFortressConfirm(session.resolveDisplayName(ctx))
+                                }
+                            }
+                        }
+                    }
+                },
+                activeModes = modes
+            )
+        }
     }
 
     private fun bindCurfewRow(
@@ -97,7 +149,7 @@ internal class SelfControlActiveModesViewBinder(
         show: Boolean,
         isQrEnabled: Boolean
     ) {
-        b.layoutActiveCurfewUnlockRow.isVisible = show
+        b.layoutActiveCurfewUnlockRow.isVisible = false
         if (!show) return
 
         b.btnUnlockCurfew.setText(
@@ -119,7 +171,7 @@ internal class SelfControlActiveModesViewBinder(
         session: ActiveFortressSession?,
         isQrEnabled: Boolean
     ) {
-        b.layoutActiveFortressUnlockRow.isVisible = show
+        b.layoutActiveFortressUnlockRow.isVisible = false
         if (!show || session == null) return
 
         val displayName = session.resolveDisplayName(ctx)

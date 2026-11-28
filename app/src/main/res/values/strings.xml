@@ -1896,6 +1896,8 @@
     <string name="hub_title_fortresses">الحصون</string>
     <string name="hub_subtitle_fortresses">إدارة حصن الطوارئ والحصون المخصصة</string>
     <string name="self_control_active_modes_title">أوضاع الحماية النشطة الآن</string>
+    <string name="active_modes_manage">إدارة الأوضاع النشطة</string>
+    <string name="active_modes_sheet_title">الأوضاع النشطة</string>
     <string name="self_control_active_curfew_row">الحظر الليلي نشط حالياً</string>
     <string name="self_control_active_fortress_row">حصن نشط: %1$s (المتبقي %2$s)</string>
     <string name="self_control_btn_unlock_curfew_qr">فك الحظر الليلي عبر QR</string>
