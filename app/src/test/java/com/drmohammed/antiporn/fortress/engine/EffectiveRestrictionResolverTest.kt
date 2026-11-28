@@ -207,6 +207,7 @@ class EffectiveRestrictionResolverTest {
             curfewStartMinute = 0,
             curfewEndHour = 7,
             curfewEndMinute = 0,
+            timeZoneId = CurfewConfig.DEFAULT_TIMEZONE_ID,
             isSupervised = false,
             customCurfewWhitelistPackages = setOf("com.whatsapp")
         )

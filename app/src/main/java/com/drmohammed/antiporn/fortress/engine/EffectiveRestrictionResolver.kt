@@ -28,11 +28,12 @@ object EffectiveRestrictionResolver {
 
     fun resolve(
         context: Context,
-        calendar: Calendar = CurfewConfig.getCurfewCalendar(context),
+        calendar: Calendar? = null,
         policy: DevicePolicyBundle? = null
     ): EffectiveRestrictionProfile {
         val resolvedPolicy = policy ?: PolicyRepository.getInstance(context).getCurrentPolicy()
-        val snapshot = getActiveModesSnapshot(context, calendar, resolvedPolicy)
+        val resolvedCalendar = resolveCalendar(context, calendar, resolvedPolicy, hasExplicitPolicy = policy != null)
+        val snapshot = getActiveModesSnapshot(context, resolvedCalendar, resolvedPolicy)
 
         val activeLayers = mutableListOf<RestrictionLayer>()
         if (snapshot.isNightCurfewActive) {
@@ -128,12 +129,13 @@ object EffectiveRestrictionResolver {
 
     fun getActiveModesSnapshot(
         context: Context,
-        calendar: Calendar = CurfewConfig.getCurfewCalendar(context),
+        calendar: Calendar? = null,
         policy: DevicePolicyBundle? = null
     ): ActiveModesSnapshot {
         val resolvedPolicy = policy ?: PolicyRepository.getInstance(context).getCurrentPolicy()
+        val resolvedCalendar = resolveCalendar(context, calendar, resolvedPolicy, hasExplicitPolicy = policy != null)
         val isScheduleWindow = resolvedPolicy.isCurfewEnabled && CurfewEnforcer.isScheduleWindowActive(
-            calendar = calendar,
+            calendar = resolvedCalendar,
             startHour = resolvedPolicy.curfewStartHour,
             startMinute = resolvedPolicy.curfewStartMinute,
             endHour = resolvedPolicy.curfewEndHour,
@@ -150,7 +152,7 @@ object EffectiveRestrictionResolver {
         val nowWallMs = TrustedTimeProvider.currentTimeMillis(context)
         val isOverridden = CurfewWindowOverrideStore.isWindowOverridden(context, nowWallMs)
         val isNightCurfewActive = isWindowActiveNow && !isSnoozed && !isOverridden
-        val windowEndWallMs = if (isScheduleWindow) computeNextCurfewEndWallMs(calendar, resolvedPolicy) else 0L
+        val windowEndWallMs = if (isScheduleWindow) computeNextCurfewEndWallMs(resolvedCalendar, resolvedPolicy) else 0L
         val activeFortress = FortressSessionController.getActiveSession(context)
 
         return ActiveModesSnapshot(
@@ -161,6 +163,22 @@ object EffectiveRestrictionResolver {
             activeFortress = activeFortress,
             isInstantInternetKillEnabled = resolvedPolicy.isInstantInternetKillEnabled
         )
+    }
+
+    private fun resolveCalendar(
+        context: Context,
+        explicitCalendar: Calendar?,
+        resolvedPolicy: DevicePolicyBundle,
+        hasExplicitPolicy: Boolean
+    ): Calendar {
+        if (explicitCalendar != null) return explicitCalendar
+        if (!hasExplicitPolicy || resolvedPolicy.timeZoneId.isBlank()) {
+            return CurfewConfig.getCurfewCalendar(context)
+        }
+        val tz = java.util.TimeZone.getTimeZone(resolvedPolicy.timeZoneId)
+        return Calendar.getInstance(tz).apply {
+            timeInMillis = TrustedTimeProvider.currentTimeMillis(context)
+        }
     }
 
     private fun computeNextCurfewEndWallMs(calendar: Calendar, policy: DevicePolicyBundle): Long {
