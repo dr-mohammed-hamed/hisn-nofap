@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import androidx.annotation.VisibleForTesting
 import androidx.core.view.isVisible
 import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.lifecycleScope
@@ -49,32 +50,20 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
     private val allApps = mutableListOf<CurfewAppItem>()
     private val filteredApps = mutableListOf<CurfewAppItem>()
     private lateinit var adapter: CurfewAppPickerAdapter
-    private var savedRunWhitelist: Set<String>? = null
-    private var savedVpnBypass: Set<String>? = null
+    private var isAppsLoaded = false
+    private var savedRunPackages: Set<String>? = null
+    private var savedNetPackages: Set<String>? = null
     private var savedSearchQuery: String = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (savedInstanceState != null) {
-            savedRunWhitelist = savedInstanceState.getStringArrayList(KEY_SAVED_RUN_WHITELIST)?.toSet()
-            savedVpnBypass = savedInstanceState.getStringArrayList(KEY_SAVED_VPN_BYPASS)?.toSet()
+            if (savedInstanceState.getBoolean(KEY_STATE_LOADED, false)) {
+                savedRunPackages = savedInstanceState.getStringArrayList(KEY_SAVED_RUN)?.toSet() ?: emptySet()
+                savedNetPackages = savedInstanceState.getStringArrayList(KEY_SAVED_NET)?.toSet() ?: emptySet()
+            }
             savedSearchQuery = savedInstanceState.getString(KEY_SEARCH_QUERY, "")
         }
-    }
-
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        if (allApps.isNotEmpty()) {
-            val currentRun = allApps.filter { it.isRunAllowed }.map { it.packageName }
-            val currentNet = allApps.filter { it.isRunAllowed && it.isNetAllowed }.map { it.packageName }
-            outState.putStringArrayList(KEY_SAVED_RUN_WHITELIST, ArrayList(currentRun))
-            outState.putStringArrayList(KEY_SAVED_VPN_BYPASS, ArrayList(currentNet))
-        } else {
-            savedRunWhitelist?.let { outState.putStringArrayList(KEY_SAVED_RUN_WHITELIST, ArrayList(it)) }
-            savedVpnBypass?.let { outState.putStringArrayList(KEY_SAVED_VPN_BYPASS, ArrayList(it)) }
-        }
-        val query = _binding?.etSearchApp?.text?.toString() ?: savedSearchQuery
-        outState.putString(KEY_SEARCH_QUERY, query)
     }
 
     override fun onCreateView(
@@ -145,7 +134,10 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
             filterApps(query)
         }
 
+        isAppsLoaded = false
         binding.btnConfirmSelection.isEnabled = false
+        binding.btnConfirmSelection.alpha = 0.5f
+
         binding.btnConfirmSelection.setOnClickListener {
             confirmSelection()
         }
@@ -157,10 +149,8 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
         val appContext = context?.applicationContext ?: return
         val isRemote = arguments?.getBoolean(ARG_IS_REMOTE) ?: false
         val wardId = arguments?.getString(ARG_WARD_ID).orEmpty()
-        val initialWhitelist = savedRunWhitelist
-            ?: arguments?.getStringArrayList(ARG_INITIAL_WHITELIST)?.toSet() ?: emptySet()
-        val initialVpnBypass = savedVpnBypass
-            ?: arguments?.getStringArrayList(ARG_INITIAL_VPN_BYPASS)?.toSet() ?: emptySet()
+        val initialWhitelist = savedRunPackages ?: (arguments?.getStringArrayList(ARG_INITIAL_WHITELIST)?.toSet() ?: emptySet())
+        val initialVpnBypass = savedNetPackages ?: (arguments?.getStringArrayList(ARG_INITIAL_VPN_BYPASS)?.toSet() ?: emptySet())
         val customBlacklist = arguments?.getStringArrayList(ARG_BLACKLIST)?.toSet() ?: emptySet()
 
         viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
@@ -171,9 +161,11 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
                 if (!isRemote) {
                     // Local Mode
                     val installed = AppInventoryManager.getInstance(appContext).getInstalledApps()
+                    val seenPackages = mutableSetOf<String>()
                     for (app in installed) {
                         val pkg = app.packageName
                         if (isPackageRestricted(pkg, appContext.packageName, criticalPackages, customBlacklist)) continue
+                        seenPackages.add(pkg)
 
                         val isRun = initialWhitelist.contains(pkg)
                         val isNet = isRun && initialVpnBypass.contains(pkg)
@@ -187,6 +179,18 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
                             )
                         )
                     }
+
+                    // Append any previously saved packages not returned by getInstalledApps()
+                    list.addAll(
+                        buildOrphanedItems(
+                            initialWhitelist = initialWhitelist,
+                            initialVpnBypass = initialVpnBypass,
+                            seenPackages = seenPackages,
+                            isRestricted = { pkg ->
+                                isPackageRestricted(pkg, appContext.packageName, criticalPackages, customBlacklist)
+                            }
+                        )
+                    )
                 } else if (wardId.isBlank()) {
                     Timber.tag(TAG).w("Refusing remote curfew app load: blank wardId")
                     withContext(Dispatchers.Main) {
@@ -236,20 +240,16 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
                     }
 
                     // Append any orphaned whitelisted apps not in inventory
-                    val extraPackages = (initialWhitelist + initialVpnBypass) - seenPackages
-                    for (orphan in extraPackages) {
-                        if (isPackageRestricted(orphan, appContext.packageName, criticalPackages, customBlacklist)) continue
-                        val isRun = initialWhitelist.contains(orphan)
-                        val isNet = isRun && initialVpnBypass.contains(orphan)
-                        list.add(
-                            CurfewAppItem(
-                                packageName = orphan,
-                                appName = orphan,
-                                isRunAllowed = isRun,
-                                isNetAllowed = isNet
-                            )
+                    list.addAll(
+                        buildOrphanedItems(
+                            initialWhitelist = initialWhitelist,
+                            initialVpnBypass = initialVpnBypass,
+                            seenPackages = seenPackages,
+                            isRestricted = { pkg ->
+                                isPackageRestricted(pkg, appContext.packageName, criticalPackages, customBlacklist)
+                            }
                         )
-                    }
+                    )
                 }
 
                 list.sortBy { it.appName.lowercase() }
@@ -258,8 +258,10 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
                     if (_binding != null) {
                         allApps.clear()
                         allApps.addAll(list)
-                        filterApps(binding.etSearchApp.text?.toString().orEmpty())
+                        isAppsLoaded = true
                         binding.btnConfirmSelection.isEnabled = true
+                        binding.btnConfirmSelection.alpha = 1.0f
+                        filterApps(binding.etSearchApp.text?.toString().orEmpty())
                         updateConfirmButton()
                     }
                 }
@@ -312,6 +314,7 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
     }
 
     private fun confirmSelection() {
+        if (!isAppsLoaded) return
         val allowNetSelection = arguments?.getBoolean(ARG_ALLOW_NET_SELECTION, true) ?: true
         val newWhitelist = allApps.filter { it.isRunAllowed }.map { it.packageName }.toSet()
         val newVpnBypass = if (allowNetSelection) {
@@ -326,6 +329,27 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
         }
         parentFragmentManager.setFragmentResult(REQUEST_KEY, resultBundle)
         dismiss()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        if (isAppsLoaded) {
+            outState.putBoolean(KEY_STATE_LOADED, true)
+            outState.putStringArrayList(
+                KEY_SAVED_RUN,
+                ArrayList(allApps.filter { it.isRunAllowed }.map { it.packageName })
+            )
+            outState.putStringArrayList(
+                KEY_SAVED_NET,
+                ArrayList(allApps.filter { it.isRunAllowed && it.isNetAllowed }.map { it.packageName })
+            )
+        } else if (savedRunPackages != null) {
+            outState.putBoolean(KEY_STATE_LOADED, true)
+            outState.putStringArrayList(KEY_SAVED_RUN, ArrayList(savedRunPackages.orEmpty()))
+            outState.putStringArrayList(KEY_SAVED_NET, ArrayList(savedNetPackages.orEmpty()))
+        }
+        val query = _binding?.etSearchApp?.text?.toString() ?: savedSearchQuery
+        outState.putString(KEY_SEARCH_QUERY, query)
     }
 
     override fun onDestroyView() {
@@ -344,10 +368,37 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
         private const val ARG_INITIAL_WHITELIST = "arg_initial_whitelist"
         private const val ARG_INITIAL_VPN_BYPASS = "arg_initial_vpn_bypass"
         private const val ARG_BLACKLIST = "arg_blacklist"
-        private const val KEY_SAVED_RUN_WHITELIST = "key_saved_run_whitelist"
-        private const val KEY_SAVED_VPN_BYPASS = "key_saved_vpn_bypass"
         private const val KEY_SEARCH_QUERY = "key_search_query"
         private const val ARG_ALLOW_NET_SELECTION = "arg_allow_net_selection"
+
+        private const val KEY_STATE_LOADED = "state_apps_loaded"
+        private const val KEY_SAVED_RUN = "state_saved_run_packages"
+        private const val KEY_SAVED_NET = "state_saved_net_packages"
+
+        @VisibleForTesting
+        internal fun buildOrphanedItems(
+            initialWhitelist: Set<String>,
+            initialVpnBypass: Set<String>,
+            seenPackages: Set<String>,
+            isRestricted: (String) -> Boolean
+        ): List<CurfewAppItem> {
+            val extraPackages = (initialWhitelist + initialVpnBypass) - seenPackages
+            val result = mutableListOf<CurfewAppItem>()
+            for (orphan in extraPackages) {
+                if (isRestricted(orphan)) continue
+                val isRun = initialWhitelist.contains(orphan)
+                val isNet = isRun && initialVpnBypass.contains(orphan)
+                result.add(
+                    CurfewAppItem(
+                        packageName = orphan,
+                        appName = orphan,
+                        isRunAllowed = isRun,
+                        isNetAllowed = isNet
+                    )
+                )
+            }
+            return result
+        }
 
         fun newInstance(
             isRemote: Boolean,

@@ -228,4 +228,30 @@ class FortressSessionControllerTest {
         assertTrue(FortressSessionController.unlockActiveFortressViaEmergencyBypass(context))
         assertFalse(FortressSessionController.isFortressActive(context))
     }
+
+    @Test
+    fun getActiveSession_doesNotEmitFlowOnReadsDuringActiveSession() {
+        val study = FortressProfile(id = "study", name = "Study", durationMinutes = 60)
+        FortressSessionController.startFortress(context, study)
+        val initialEmitted = FortressSessionController.activeSessionFlow.value
+        assertNotNull(initialEmitted)
+
+        // Advance clock while still active and call getActiveSession repeatedly (like RecyclerView bind)
+        fakeElapsedMs += 5_000L
+        fakeWallMs += 5_000L
+        val read1 = FortressSessionController.getActiveSession(context)
+        assertNotNull(read1)
+        assertEquals(60 * 60_000L - 5_000L, read1?.remainingMs)
+        // activeSessionFlow must keep the exact same reference so collectors don't re-enter layout
+        assertTrue(FortressSessionController.activeSessionFlow.value === initialEmitted)
+
+        // State transitions (extend / unlock) DO update activeSessionFlow
+        FortressSessionController.extendActiveFortress(context)
+        val afterExtend = FortressSessionController.activeSessionFlow.value
+        assertNotNull(afterExtend)
+        assertFalse(afterExtend === initialEmitted)
+
+        assertTrue(FortressSessionController.unlockActiveFortressDirectWhenAllowed(context))
+        assertNull(FortressSessionController.activeSessionFlow.value)
+    }
 }

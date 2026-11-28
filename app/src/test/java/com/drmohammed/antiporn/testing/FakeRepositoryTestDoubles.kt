@@ -25,15 +25,32 @@ internal class FakeTestApplicationContext : Application() {
 
 internal class InMemoryTestSharedPreferences : SharedPreferences {
     private val values = mutableMapOf<String, Any?>()
+
+    @Synchronized
     override fun getAll(): MutableMap<String, *> = values.toMutableMap()
+
+    @Synchronized
     override fun getString(key: String?, defValue: String?): String? = values[key] as? String ?: defValue
+
+    @Synchronized
     override fun getStringSet(key: String?, defValues: MutableSet<String>?): MutableSet<String>? =
         @Suppress("UNCHECKED_CAST") ((values[key] as? Set<String>)?.toMutableSet() ?: defValues)
+
+    @Synchronized
     override fun getInt(key: String?, defValue: Int): Int = values[key] as? Int ?: defValue
+
+    @Synchronized
     override fun getLong(key: String?, defValue: Long): Long = values[key] as? Long ?: defValue
+
+    @Synchronized
     override fun getFloat(key: String?, defValue: Float): Float = values[key] as? Float ?: defValue
+
+    @Synchronized
     override fun getBoolean(key: String?, defValue: Boolean): Boolean = values[key] as? Boolean ?: defValue
+
+    @Synchronized
     override fun contains(key: String?): Boolean = values.containsKey(key)
+
     override fun registerOnSharedPreferenceChangeListener(listener: SharedPreferences.OnSharedPreferenceChangeListener?) {}
     override fun unregisterOnSharedPreferenceChangeListener(listener: SharedPreferences.OnSharedPreferenceChangeListener?) {}
     override fun edit(): SharedPreferences.Editor = object : SharedPreferences.Editor {
@@ -49,14 +66,16 @@ internal class InMemoryTestSharedPreferences : SharedPreferences {
         override fun clear() = apply { clearAll = true }
         override fun commit(): Boolean { apply(); return true }
         override fun apply() {
-            if (clearAll) {
-                values.clear()
-                clearAll = false
+            synchronized(this@InMemoryTestSharedPreferences) {
+                if (clearAll) {
+                    values.clear()
+                    clearAll = false
+                }
+                for ((k, v) in pending) {
+                    if (v == null) values.remove(k) else values[k] = v
+                }
+                pending.clear()
             }
-            for ((k, v) in pending) {
-                if (v == null) values.remove(k) else values[k] = v
-            }
-            pending.clear()
         }
     }
 }

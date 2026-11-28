@@ -14,9 +14,11 @@ import androidx.lifecycle.lifecycleScope
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.engine.ProtectionEngine
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
+import com.drmohammed.antiporn.core.time.TrustedTimeProvider
 import com.drmohammed.antiporn.curfew.CurfewConfig
 import com.drmohammed.antiporn.curfew.CurfewEnforcer
 import com.drmohammed.antiporn.curfew.CurfewScheduler
+import com.drmohammed.antiporn.data.repository.AccountabilityRepository
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.ui.common.ConfirmActionDialogFragment
 import com.drmohammed.antiporn.ui.common.showSafely
@@ -39,6 +41,8 @@ class CurfewSettingsActivity : AppCompatActivity() {
     private lateinit var viewBinder: CurfewSettingsViewBinder
 
     private var isSaving = false
+    private var isLoadingInitialPolicy = false
+    private var isStateCapturedAfterLoad = false
 
     private val backPressedCallback = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() {
@@ -84,8 +88,15 @@ class CurfewSettingsActivity : AppCompatActivity() {
                 return
             }
             initialPolicy = parsed
+            isStateCapturedAfterLoad = true
         } else {
-            initialPolicy = PolicyRepository.getInstance(applicationContext).getCurrentPolicy()
+            val repo = PolicyRepository.getInstance(applicationContext)
+            initialPolicy = repo.getCurrentPolicy()
+            if (!repo.isInitialReconciliationComplete) {
+                isLoadingInitialPolicy = true
+            } else {
+                isStateCapturedAfterLoad = true
+            }
         }
 
         onBackPressedDispatcher.addCallback(this, backPressedCallback)
@@ -117,9 +128,10 @@ class CurfewSettingsActivity : AppCompatActivity() {
             }
         }
 
+        val wasStateCapturedAfterLoad = savedInstanceState?.getBoolean(KEY_STATE_CAPTURED_AFTER_LOAD, false) == true
         viewBinder.bindViews(canGoBack = { !isSaving })
         viewBinder.applyInitialPolicy(initialPolicy)
-        if (savedInstanceState != null) {
+        if (savedInstanceState != null && wasStateCapturedAfterLoad) {
             viewBinder.restoreInstanceState(savedInstanceState)
         }
         viewBinder.setupListeners(
@@ -132,10 +144,40 @@ class CurfewSettingsActivity : AppCompatActivity() {
         viewBinder.updateTimingLabels()
         viewBinder.updateAllowedAppsLabel()
         updateSaveButtonState()
+
+        if (isLoadingInitialPolicy) {
+            val repo = PolicyRepository.getInstance(applicationContext)
+            lifecycleScope.launch {
+                try {
+                    val loaded = withContext(Dispatchers.IO) { repo.awaitInitialPolicy() }
+                    if (isFinishing || isDestroyed) return@launch
+                    initialPolicy = loaded
+                    isStateCapturedAfterLoad = true
+                    if (!wasStateCapturedAfterLoad) {
+                        viewBinder.applyInitialPolicy(loaded)
+                    }
+                    viewBinder.setupListeners(
+                        isRemote = isRemote,
+                        wardId = wardId,
+                        initialBlacklist = loaded.customBlacklistPackages,
+                        onDirtyStateChanged = ::updateSaveButtonState,
+                        onSaveClicked = ::saveChanges
+                    )
+                    viewBinder.updateTimingLabels()
+                    viewBinder.updateAllowedAppsLabel()
+                } finally {
+                    if (!isFinishing && !isDestroyed) {
+                        isLoadingInitialPolicy = false
+                        updateSaveButtonState()
+                    }
+                }
+            }
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
+        outState.putBoolean(KEY_STATE_CAPTURED_AFTER_LOAD, isStateCapturedAfterLoad && !isLoadingInitialPolicy)
         if (::viewBinder.isInitialized) {
             viewBinder.saveInstanceState(outState)
         }
@@ -171,12 +213,13 @@ class CurfewSettingsActivity : AppCompatActivity() {
 
     private fun updateSaveButtonState() {
         val dirty = hasUnsavedChanges()
-        viewBinder.updateSaveButton(dirty = dirty, isSaving = isSaving)
-        backPressedCallback.isEnabled = dirty || isSaving
+        viewBinder.updateSaveButton(dirty = dirty, isSaving = isSaving || isLoadingInitialPolicy)
+        viewBinder.setControlsEnabled(!isSaving && !isLoadingInitialPolicy)
+        backPressedCallback.isEnabled = (dirty && !isLoadingInitialPolicy) || isSaving
     }
 
     private fun saveChanges() {
-        if (isSaving || !hasUnsavedChanges()) return
+        if (isLoadingInitialPolicy || isSaving || !hasUnsavedChanges()) return
 
         if (viewBinder.isCurfewEnabled &&
             viewBinder.selectedStartHour == viewBinder.selectedEndHour &&
@@ -245,7 +288,7 @@ class CurfewSettingsActivity : AppCompatActivity() {
     }
 
     private fun performSaveChanges() {
-        if (isSaving || !hasUnsavedChanges()) return
+        if (isLoadingInitialPolicy || isSaving || !hasUnsavedChanges()) return
         if (isRemote && wardId.isBlank()) {
             Timber.tag(TAG).e("Refusing remote policy push: wardId is blank")
             Toast.makeText(applicationContext, R.string.toast_guardian_policy_save_failed, Toast.LENGTH_LONG).show()
@@ -255,28 +298,39 @@ class CurfewSettingsActivity : AppCompatActivity() {
         isSaving = true
         updateSaveButtonState()
 
-        val updatedPolicy = viewBinder.buildUpdatedPolicy(initialPolicy)
         val app = applicationContext
         val policyRepo = PolicyRepository.getInstance(app)
 
         lifecycleScope.launch {
             try {
-                val success = withContext(Dispatchers.IO + NonCancellable) {
+                val savedPolicy = withContext(Dispatchers.IO + NonCancellable) {
                     if (isRemote) {
-                        policyRepo.pushPolicyToWard(wardId, updatedPolicy)
+                        val accRepo = AccountabilityRepository.getInstance(app)
+                        policyRepo.mergeAndPushRemotePolicyPatch(
+                            wardUid = wardId,
+                            fallbackPolicy = initialPolicy,
+                            guardianUidFallback = accRepo.getCachedUid(),
+                            guardianNameFallback = accRepo.getMyDisplayName()
+                        ) { latest ->
+                            viewBinder.buildMergedPolicy(latest, initialPolicy).copy(
+                                version = latest.version + 1,
+                                updatedAt = TrustedTimeProvider.currentTimeMillis(app)
+                            )
+                        }
                     } else {
-                        policyRepo.saveAndEnforceSelfPolicy(updatedPolicy)
+                        policyRepo.mergeAndSaveSelfPolicyPatch { latest ->
+                            viewBinder.buildMergedPolicy(latest, initialPolicy)
+                        }
                     }
                 }
 
                 if (isFinishing || isDestroyed) return@launch
                 isSaving = false
-                if (success) {
-                    val resultPolicy = if (isRemote) updatedPolicy else policyRepo.getCurrentPolicy()
+                if (savedPolicy != null) {
                     val successRes = if (isRemote) R.string.toast_guardian_policy_saved else R.string.toast_self_policy_saved
                     Toast.makeText(applicationContext, successRes, Toast.LENGTH_SHORT).show()
                     val resultIntent = Intent().apply {
-                        putExtra(EXTRA_UPDATED_POLICY_JSON, resultPolicy.toJson())
+                        putExtra(EXTRA_UPDATED_POLICY_JSON, savedPolicy.toJson())
                     }
                     setResult(Activity.RESULT_OK, resultIntent)
                     backPressedCallback.isEnabled = false
@@ -317,6 +371,7 @@ class CurfewSettingsActivity : AppCompatActivity() {
         private const val TAG_IMMEDIATE_CURFEW_CONFIRM = "tag_curfew_immediate_confirm"
         private const val REQ_DISCARD_CHANGES = "req_curfew_discard_changes"
         private const val TAG_DISCARD_CHANGES = "tag_curfew_discard_changes"
+        private const val KEY_STATE_CAPTURED_AFTER_LOAD = "key_state_captured_after_load"
         const val EXTRA_IS_REMOTE = "extra_is_remote"
         const val EXTRA_WARD_ID = "extra_ward_id"
         const val EXTRA_POLICY_JSON = "extra_policy_json"

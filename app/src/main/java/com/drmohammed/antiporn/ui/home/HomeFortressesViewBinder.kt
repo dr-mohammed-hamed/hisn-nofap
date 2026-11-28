@@ -2,24 +2,20 @@ package com.drmohammed.antiporn.ui.home
 
 import android.content.Context
 import android.os.SystemClock
-import android.view.Gravity
-import android.view.View
-import android.view.ViewGroup
+import android.view.LayoutInflater
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
-import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.engine.ProtectionEngine
 import com.drmohammed.antiporn.databinding.FragmentHomeBinding
+import com.drmohammed.antiporn.databinding.ItemFortressHomeRowBinding
 import com.drmohammed.antiporn.fortress.engine.FortressSessionController
 import com.drmohammed.antiporn.fortress.model.ActiveFortressSession
 import com.drmohammed.antiporn.fortress.model.FortressProfile
 import com.google.android.material.button.MaterialButton
-import com.google.android.material.card.MaterialCardView
-import com.google.android.material.color.MaterialColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import java.util.Locale
 
@@ -50,11 +46,11 @@ internal class HomeFortressesViewBinder(
 
     fun setupListeners() {
         val b = bindingProvider() ?: return
-        b.btnHeroEmergencyFortressStart?.setOnClickListener {
+        b.btnHeroEmergencyFortressStart.setOnClickListener {
             val emergency = currentState.fortressesConfig.getEmergencyFortress()
             promptAndStartFortress(emergency)
         }
-        b.btnEmergencyFortressExtend?.setOnClickListener {
+        b.btnEmergencyFortressExtend.setOnClickListener {
             handleExtendClicked()
         }
     }
@@ -70,157 +66,60 @@ internal class HomeFortressesViewBinder(
         val isEmergencyActive = active != null && (active.isEmergency || active.fortressId == emergency.id)
         val hasAnyActive = active != null
 
-        b.btnHeroEmergencyFortressStart?.apply {
+        b.btnHeroEmergencyFortressStart.apply {
+            val emergencyName = emergency.resolveDisplayName(ctx)
             text = if (isEmergencyActive) {
-                emergency.resolveDisplayName(ctx)
+                ctx.getString(R.string.home_fortress_button_active_format, emergencyName)
             } else {
-                ctx.getString(
-                    R.string.home_btn_start_emergency_fortress,
-                    emergency.resolveDisplayName(ctx),
-                    emergency.durationMinutes
-                )
+                ctx.getString(R.string.home_btn_start_emergency_fortress, emergencyName)
             }
             isEnabled = !hasAnyActive && !isOperationPending
             alpha = if (hasAnyActive && !isEmergencyActive) 0.55f else 1.0f
         }
 
-        b.layoutEmergencyFortressActive?.isVisible = isEmergencyActive
+        b.layoutEmergencyFortressActive.isVisible = isEmergencyActive
         if (isEmergencyActive) {
-            val session = active ?: return
-            b.tvEmergencyFortressCountdown?.text = ctx.getString(
+            val session = active
+            b.tvEmergencyFortressCountdown.text = ctx.getString(
                 R.string.fortress_countdown_format,
                 formatCountdown(session.remainingMs)
             )
-            b.btnEmergencyFortressExtend?.text = ctx.getString(
+            b.btnEmergencyFortressExtend.text = ctx.getString(
                 R.string.home_btn_extend_fortress_minutes,
                 session.durationMinutes
             )
-            b.btnEmergencyFortressExtend?.isEnabled = !isOperationPending
+            b.btnEmergencyFortressExtend.isEnabled = !isOperationPending
         }
 
         if (customs != renderedCustomProfiles) {
             rebuildCustomRows(ctx, b.layoutCustomFortressesContainer, customs)
         }
-        b.layoutCustomFortressesContainer?.isVisible = customs.isNotEmpty()
+        b.layoutCustomFortressesContainer.isVisible = customs.isNotEmpty()
         updateCustomRowsState(ctx, active)
     }
 
     private fun rebuildCustomRows(
         ctx: Context,
-        container: LinearLayout?,
+        container: LinearLayout,
         customs: List<FortressProfile>
     ) {
-        if (container == null) return
         container.removeAllViews()
         customRowMap.clear()
         renderedCustomProfiles = customs
-        val density = ctx.resources.displayMetrics.density
 
         for (profile in customs) {
-            val card = MaterialCardView(ctx).apply {
-                radius = 16f * density
-                cardElevation = 0f
-                setCardBackgroundColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorSurfaceContainerHigh))
-                strokeWidth = (1 * density).toInt()
-                strokeColor = MaterialColors.getColor(this, com.google.android.material.R.attr.colorOutlineVariant)
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    topMargin = (8 * density).toInt()
-                }
-            }
+            val binding = ItemFortressHomeRowBinding.inflate(LayoutInflater.from(ctx), container, true)
+            binding.btnFortressStart.text = profile.resolveDisplayName(ctx)
+            binding.btnFortressStart.setOnClickListener { promptAndStartFortress(profile) }
+            binding.btnFortressExtend.setOnClickListener { handleExtendClicked() }
 
-            val root = LinearLayout(ctx).apply {
-                orientation = LinearLayout.VERTICAL
-                val pad = (12 * density).toInt()
-                setPadding(pad, pad, pad, pad)
-            }
-
-            val topRow = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-
-            val textCol = LinearLayout(ctx).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                    marginEnd = (10 * density).toInt()
-                }
-            }
-
-            val tvName = TextView(ctx).apply {
-                text = profile.resolveDisplayName(ctx)
-                textSize = 14f
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-                setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurface))
-            }
-            val netLabel = ctx.getString(
-                if (profile.isInternetCutEnabled) R.string.fortress_internet_cut_on else R.string.fortress_internet_cut_off
+            customRowMap[profile.id] = CustomRowViews(
+                profile,
+                binding.btnFortressStart,
+                binding.layoutFortressActive,
+                binding.tvFortressCountdown,
+                binding.btnFortressExtend
             )
-            val tvMeta = TextView(ctx).apply {
-                text = ctx.getString(R.string.fortress_duration_minutes_format, profile.durationMinutes) +
-                    " ${ctx.getString(R.string.fortress_meta_separator)} " + netLabel
-                textSize = 12f
-                setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurfaceVariant))
-            }
-            textCol.addView(tvName)
-            textCol.addView(tvMeta)
-
-            val btnStart = MaterialButton(ctx, null, com.google.android.material.R.attr.materialButtonTonalStyle).apply {
-                text = ctx.getString(R.string.home_btn_start_custom_fortress, profile.durationMinutes)
-                textSize = 12f
-                cornerRadius = (12 * density).toInt()
-                minHeight = (48 * density).toInt()
-                setOnClickListener { promptAndStartFortress(profile) }
-            }
-            topRow.addView(textCol)
-            topRow.addView(btnStart)
-
-            val activeRow = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                visibility = View.GONE
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    topMargin = (10 * density).toInt()
-                }
-            }
-
-            val tvCountdown = TextView(ctx).apply {
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                setBackgroundResource(R.drawable.bg_active_shields_pill)
-                gravity = Gravity.CENTER
-                setPadding((10 * density).toInt(), (6 * density).toInt(), (10 * density).toInt(), (6 * density).toInt())
-                setTextColor(ContextCompat.getColor(ctx, R.color.status_green))
-                textSize = 13f
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-            }
-
-            val btnExtend = MaterialButton(ctx, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-                textSize = 12f
-                cornerRadius = (10 * density).toInt()
-                minHeight = (48 * density).toInt()
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    marginStart = (8 * density).toInt()
-                }
-                setOnClickListener { handleExtendClicked() }
-            }
-
-            activeRow.addView(tvCountdown)
-            activeRow.addView(btnExtend)
-
-            root.addView(topRow)
-            root.addView(activeRow)
-            card.addView(root)
-            container.addView(card)
-
-            customRowMap[profile.id] = CustomRowViews(profile, btnStart, activeRow, tvCountdown, btnExtend)
         }
     }
 
@@ -228,16 +127,17 @@ internal class HomeFortressesViewBinder(
         val hasAnyActive = active != null
         for ((id, row) in customRowMap) {
             val isThisActive = active != null && active.fortressId == id
+            val displayName = row.profile.resolveDisplayName(ctx)
             row.btnStart.isEnabled = !hasAnyActive && !isOperationPending
-            row.btnStart.alpha = if (hasAnyActive && !isThisActive) 0.5f else 1.0f
+            row.btnStart.alpha = if (hasAnyActive && !isThisActive) 0.55f else 1.0f
             row.btnStart.text = if (isThisActive) {
-                ctx.getString(R.string.home_fortress_active_badge)
+                ctx.getString(R.string.home_fortress_button_active_format, displayName)
             } else {
-                ctx.getString(R.string.home_btn_start_custom_fortress, row.profile.durationMinutes)
+                displayName
             }
             row.layoutActive.isVisible = isThisActive
             if (isThisActive) {
-                val session = active ?: continue
+                val session = active
                 row.tvCountdown.text = ctx.getString(
                     R.string.fortress_countdown_format,
                     formatCountdown(session.remainingMs)

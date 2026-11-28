@@ -12,3 +12,9 @@ data class ActiveShieldInfo(
     @field:DrawableRes val iconRes: Int,
     val badgeText: String
 )
+
+data class ActiveModeInfo(
+    val key: String,
+    val title: String,
+    val detail: String
+)

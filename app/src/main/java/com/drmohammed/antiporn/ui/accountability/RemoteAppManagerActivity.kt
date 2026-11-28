@@ -1,4 +1,4 @@
-﻿package com.drmohammed.antiporn.ui.accountability
+package com.drmohammed.antiporn.ui.accountability
 
 import android.os.Bundle
 import android.text.Editable
@@ -276,9 +276,10 @@ class RemoteAppManagerActivity : AppCompatActivity() {
 
         val dirty = state.hasUnsavedChanges
         btnSaveAppManagerChanges.isEnabled = state.isSaveEnabled
-        btnSaveAppManagerChanges.alpha = if (dirty) 1.0f else 0.5f
-        backPressedCallback.isEnabled = dirty
+        btnSaveAppManagerChanges.alpha = if (state.isSaveEnabled) 1.0f else 0.5f
+        backPressedCallback.isEnabled = dirty && (state.isLocalMode || !state.isPolicyLoadFailed)
 
+        switchLockNewInstalls.isEnabled = state.isLocalMode || !state.isPolicyLoadFailed
         switchLockNewInstalls.setOnCheckedChangeListener(null)
         switchLockNewInstalls.isChecked = state.lockNewInstallsUntilApproved
         switchLockNewInstalls.setOnCheckedChangeListener { _, isChecked ->

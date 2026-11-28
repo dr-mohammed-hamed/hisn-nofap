@@ -8,6 +8,10 @@ import com.drmohammed.antiporn.fortress.model.FortressesConfig
 import com.drmohammed.antiporn.testing.FakeTestApplicationContext
 import com.drmohammed.antiporn.testing.FakeTestDevicePolicyDao
 import com.drmohammed.antiporn.testing.FakeTestPartnerDao
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -153,5 +157,73 @@ class SupervisedFortressSanitizerTest {
         assertTrue(saved?.isCurfewEnabled ?: false)
         assertEquals(DevicePolicyBundle.REMOTE_MODE_UNLOCK_CURFEW, saved?.remoteModeUnlockTarget)
         assertEquals(1_790_600_000_000L, saved?.remoteModeUnlockRequestedAt)
+    }
+
+    @Test
+    fun processSnapshot_equalVersionCloudSyncPreservesWardCustomFortressesWhileNewerVersionApplies() = runBlocking {
+        val study = FortressProfile(id = "study", name = "حصن المذاكرة", durationMinutes = 60, isInternetCutEnabled = false)
+        var currentPolicy = DevicePolicyBundle.defaultPolicy().copy(
+            isSupervised = true,
+            guardianUid = "guardian-1",
+            guardianName = "Parent",
+            isSelfControlAllowed = true,
+            selfControlFortressesAllowed = true,
+            fortressesConfig = FortressesConfig.default().upsert(study),
+            version = 172L,
+            updatedAt = 1_790_000_000_000L
+        )
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val bridge = PolicyCloudSyncBridge(
+                appContext = context,
+                partnerDao = FakeTestPartnerDao(),
+                repositoryScope = scope,
+                currentPolicyProvider = { currentPolicy },
+                remoteTeardownHandler = RemoteTeardownHandler(
+                    appContext = context,
+                    executeTeardown = { Result.success(Unit) },
+                    onTeardownCompletedNotify = {}
+                ),
+                onApplyCloudPolicy = { policy, _ ->
+                    currentPolicy = policy
+                    true
+                },
+                isCloudSyncEnabledProvider = { true }
+            )
+            val gen = bridge.currentListenerGeneration()
+
+            // Equal version (172 == 172) with newer updatedAt and empty custom fortresses -> MUST preserve "study"
+            val equalVersionCloudMap = DevicePolicyBundle.defaultPolicy().copy(
+                isSupervised = true,
+                guardianUid = "guardian-1",
+                guardianName = "Parent",
+                isSelfControlAllowed = true,
+                selfControlFortressesAllowed = true,
+                fortressesConfig = FortressesConfig.default(),
+                version = 172L,
+                updatedAt = 1_790_000_050_000L
+            ).toMap().filterValues { it != null }.mapValues { it.value!! }
+
+            bridge.processSnapshotForTesting("ward-1", gen, equalVersionCloudMap)
+            assertEquals(1, currentPolicy.fortressesConfig.getCustomFortresses().size)
+            assertEquals("study", currentPolicy.fortressesConfig.getCustomFortresses().first().id)
+
+            // Strictly newer version (173 > 172) from Guardian explicitly removing custom fortress -> MUST apply
+            val newerVersionCloudMap = DevicePolicyBundle.defaultPolicy().copy(
+                isSupervised = true,
+                guardianUid = "guardian-1",
+                guardianName = "Parent",
+                isSelfControlAllowed = true,
+                selfControlFortressesAllowed = true,
+                fortressesConfig = FortressesConfig.default(),
+                version = 173L,
+                updatedAt = 1_790_000_060_000L
+            ).toMap().filterValues { it != null }.mapValues { it.value!! }
+
+            bridge.processSnapshotForTesting("ward-1", gen, newerVersionCloudMap)
+            assertTrue(currentPolicy.fortressesConfig.getCustomFortresses().isEmpty())
+        } finally {
+            scope.cancel()
+        }
     }
 }

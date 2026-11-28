@@ -351,14 +351,15 @@
                     <!-- Alert Banner: Ward Active Fortress / Night Curfew (In-Screen Only) -->
                     <com.google.android.material.card.MaterialCardView
                         android:id="@+id/cardWardActiveModesBanner"
+                        style="@style/Widget.Hisn.StatusRow"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="10dp"
                         android:visibility="gone"
-                        app:cardBackgroundColor="@color/shield_amber_subtle"
-                        app:cardCornerRadius="12dp"
+                        app:cardBackgroundColor="?attr/colorSurfaceContainer"
+                        app:cardCornerRadius="@dimen/hisn_card_radius"
                         app:cardElevation="0dp"
-                        app:strokeColor="@color/shield_amber_calm"
+                        app:strokeColor="?attr/colorOutlineVariant"
                         app:strokeWidth="1dp"
                         tools:visibility="visible">
 
@@ -366,7 +367,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:orientation="vertical"
-                            android:padding="12dp">
+                            android:padding="@dimen/hisn_card_padding">
 
                             <LinearLayout
                                 android:layout_width="match_parent"
@@ -379,92 +380,53 @@
                                     android:layout_height="18dp"
                                     android:contentDescription="@null"
                                     android:src="@drawable/ic_shield_time"
-                                    app:tint="@color/shield_amber_calm" />
+                                    app:tint="?attr/colorPrimary" />
 
                                 <TextView
+                                    android:id="@+id/tvWardActiveModesSummary"
                                     android:layout_width="0dp"
                                     android:layout_height="wrap_content"
                                     android:layout_marginStart="8dp"
                                     android:layout_weight="1"
                                     android:fontFamily="@font/tajawal"
-                                    android:text="@string/guardian_active_modes_banner_title"
                                     android:textAlignment="viewStart"
                                     android:textColor="?attr/colorOnSurface"
                                     android:textSize="13sp"
-                                    android:textStyle="bold" />
+                                    tools:text="حصن نشط: حصن الطوارئ (المتبقي 44:10)" />
                             </LinearLayout>
 
-                            <TextView
-                                android:id="@+id/tvWardActiveFortressStatus"
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnUnlockFortressGuardian"
+                                style="@style/Widget.Material3.Button.TonalButton"
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
-                                android:layout_marginTop="4dp"
+                                android:layout_marginTop="@dimen/hisn_card_gap"
                                 android:fontFamily="@font/tajawal"
-                                android:textAlignment="viewStart"
-                                android:textColor="?attr/colorOnSurface"
-                                android:textSize="12sp"
+                                android:gravity="center"
+                                android:minHeight="@dimen/hisn_control_height"
+                                android:text="@string/guardian_btn_unlock_fortress"
+                                android:textAlignment="center"
+                                android:textSize="13sp"
+                                android:textStyle="bold"
                                 android:visibility="gone"
-                                tools:text="حصن نشط: حصن الطوارئ (المتبقي 44:10)"
-                                tools:visibility="visible" />
+                                app:cornerRadius="12dp" />
 
-                            <TextView
-                                android:id="@+id/tvWardActiveCurfewStatus"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:layout_marginTop="2dp"
-                                android:fontFamily="@font/tajawal"
-                                android:text="@string/guardian_active_curfew_status"
-                                android:textAlignment="viewStart"
-                                android:textColor="?attr/colorOnSurface"
-                                android:textSize="12sp"
-                                android:visibility="gone"
-                                tools:visibility="visible" />
-
-                            <LinearLayout
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnUnlockCurfewGuardian"
+                                style="@style/Widget.Material3.Button.TonalButton"
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
                                 android:layout_marginTop="8dp"
-                                android:orientation="horizontal">
+                                android:fontFamily="@font/tajawal"
+                                android:gravity="center"
+                                android:minHeight="@dimen/hisn_control_height"
+                                android:text="@string/guardian_btn_unlock_curfew"
+                                android:textAlignment="center"
+                                android:textSize="13sp"
+                                android:textStyle="bold"
+                                android:visibility="gone"
+                                app:cornerRadius="12dp" />
 
-                                <com.google.android.material.button.MaterialButton
-                                    android:id="@+id/btnGuardianUnlockFortress"
-                                    style="@style/Widget.Material3.Button.TonalButton"
-                                    android:layout_width="0dp"
-                                    android:layout_height="wrap_content"
-                                    android:minHeight="48dp"
-                                    android:layout_weight="1"
-                                    android:text="@string/guardian_btn_unlock_fortress"
-                                    android:textSize="11sp"
-                                    android:visibility="gone"
-                                    app:cornerRadius="8dp"
-                                    tools:visibility="visible" />
-
-                                <com.google.android.material.button.MaterialButton
-                                    android:id="@+id/btnGuardianUnlockCurfew"
-                                    style="@style/Widget.Material3.Button.TonalButton"
-                                    android:layout_width="0dp"
-                                    android:layout_height="wrap_content"
-                                    android:minHeight="48dp"
-                                    android:layout_marginStart="6dp"
-                                    android:layout_weight="1"
-                                    android:text="@string/guardian_btn_unlock_curfew"
-                                    android:textSize="11sp"
-                                    android:visibility="gone"
-                                    app:cornerRadius="8dp"
-                                    tools:visibility="visible" />
-
-                                <com.google.android.material.button.MaterialButton
-                                    android:id="@+id/btnGuardianUnlockAllModes"
-                                    style="@style/Widget.Material3.Button.OutlinedButton"
-                                    android:layout_width="wrap_content"
-                                    android:layout_height="wrap_content"
-                                    android:minHeight="48dp"
-                                    android:layout_marginStart="6dp"
-                                    android:text="@string/guardian_btn_unlock_all_modes"
-                                    android:textSize="11sp"
-                                    android:visibility="gone"
-                                    app:cornerRadius="8dp" />
-                            </LinearLayout>
                         </LinearLayout>
                     </com.google.android.material.card.MaterialCardView>
 
@@ -513,14 +475,14 @@
             <!-- Tile: Fortresses -->
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/tileFortresses"
-                style="@style/Widget.Material3.CardView.Filled"
+                style="@style/Widget.Hisn.Tile"
                 android:layout_width="match_parent"
-                android:layout_height="64dp"
+                android:layout_height="@dimen/hisn_tile_height"
                 android:layout_marginBottom="10dp"
                 android:clickable="true"
                 android:focusable="true"
                 app:cardBackgroundColor="?attr/colorSurfaceContainer"
-                app:cardCornerRadius="18dp"
+                app:cardCornerRadius="@dimen/hisn_card_radius"
                 app:cardElevation="0dp"
                 app:strokeColor="?attr/colorOutlineVariant"
                 app:strokeWidth="1dp">
@@ -546,6 +508,7 @@
                         android:layout_weight="1"
                         android:fontFamily="@font/tajawal"
                         android:text="@string/hub_title_fortresses"
+                        android:textAlignment="viewStart"
                         android:textColor="?attr/colorOnSurface"
                         android:textSize="16sp"
                         android:textStyle="bold" />

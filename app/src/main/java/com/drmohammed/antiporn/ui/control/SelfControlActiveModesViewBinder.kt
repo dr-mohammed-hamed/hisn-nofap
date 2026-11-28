@@ -9,7 +9,6 @@ import androidx.fragment.app.FragmentManager
 import androidx.lifecycle.LifecycleOwner
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.databinding.FragmentSelfControlBinding
-import com.drmohammed.antiporn.fortress.model.ActiveFortressSession
 import com.drmohammed.antiporn.ui.control.qr.QrScannerBottomSheet
 import com.drmohammed.antiporn.ui.control.qr.SelfControlQrManager
 import com.drmohammed.antiporn.ui.home.HomeFortressesViewBinder
@@ -28,6 +27,7 @@ internal class SelfControlActiveModesViewBinder(
     private val onEmergencyQrBypassTriggered: () -> Unit
 ) {
     private var confirmDialog: AlertDialog? = null
+    private var unlockInFlight = false
 
     fun registerListeners() {
         fragmentManager.setFragmentResultListener(TAG_UNLOCK_CURFEW, lifecycleOwner) { _, bundle ->
@@ -61,6 +61,32 @@ internal class SelfControlActiveModesViewBinder(
                 }
             }
         }
+
+        bindingProvider()?.let { b ->
+            b.btnUnlockFortressSelfControl.setOnClickListener {
+                val ctx = contextProvider() ?: return@setOnClickListener
+                if (unlockInFlight) return@setOnClickListener
+                val qrNow = SelfControlQrManager.getInstance(ctx.applicationContext).isQrLockEnabled()
+                if (qrNow) {
+                    launchQrScanner(TAG_UNLOCK_FORTRESS)
+                } else {
+                    val liveFortress = viewModel.uiState.value.activeModesSnapshot.activeFortress
+                    liveFortress?.takeIf { !it.isEmergency }?.let { session ->
+                        showDirectFortressConfirm(session.resolveDisplayName(ctx))
+                    }
+                }
+            }
+            b.btnUnlockCurfewSelfControl.setOnClickListener {
+                val ctx = contextProvider() ?: return@setOnClickListener
+                if (unlockInFlight) return@setOnClickListener
+                val qrNow = SelfControlQrManager.getInstance(ctx.applicationContext).isQrLockEnabled()
+                if (qrNow) {
+                    launchQrScanner(TAG_UNLOCK_CURFEW)
+                } else {
+                    showDirectCurfewConfirm()
+                }
+            }
+        }
     }
 
     fun render(state: SelfControlUiState) {
@@ -88,57 +114,29 @@ internal class SelfControlActiveModesViewBinder(
         }
 
         b.cardActiveModesUnlock.visibility = View.VISIBLE
-        bindCurfewRow(b, showCurfewRow, isQrEnabled)
-        bindFortressRow(ctx, b, showFortressRow, activeFortress, isQrEnabled)
-    }
 
-    private fun bindCurfewRow(
-        b: FragmentSelfControlBinding,
-        show: Boolean,
-        isQrEnabled: Boolean
-    ) {
-        b.layoutActiveCurfewUnlockRow.isVisible = show
-        if (!show) return
-
-        b.btnUnlockCurfew.setText(
-            if (isQrEnabled) R.string.self_control_btn_unlock_curfew_qr else R.string.self_control_btn_unlock_curfew_direct
-        )
-        b.btnUnlockCurfew.setOnClickListener {
-            if (isQrEnabled) {
-                launchQrScanner(TAG_UNLOCK_CURFEW)
-            } else {
-                showDirectCurfewConfirm()
-            }
+        val fortressSession = activeFortress?.takeIf { showFortressRow }
+        val summaryParts = mutableListOf<String>()
+        fortressSession?.let { session ->
+            val displayName = session.resolveDisplayName(ctx)
+            summaryParts.add(
+                ctx.getString(
+                    R.string.self_control_active_fortress_row,
+                    displayName,
+                    HomeFortressesViewBinder.formatCountdown(session.remainingMs)
+                )
+            )
         }
-    }
-
-    private fun bindFortressRow(
-        ctx: Context,
-        b: FragmentSelfControlBinding,
-        show: Boolean,
-        session: ActiveFortressSession?,
-        isQrEnabled: Boolean
-    ) {
-        b.layoutActiveFortressUnlockRow.isVisible = show
-        if (!show || session == null) return
-
-        val displayName = session.resolveDisplayName(ctx)
-        val remainingStr = HomeFortressesViewBinder.formatCountdown(session.remainingMs)
-        b.tvActiveFortressLabel.text = ctx.getString(
-            R.string.self_control_active_fortress_row,
-            displayName,
-            remainingStr
-        )
-        b.btnUnlockFortress.setText(
-            if (isQrEnabled) R.string.self_control_btn_unlock_fortress_qr else R.string.self_control_btn_unlock_fortress_direct
-        )
-        b.btnUnlockFortress.setOnClickListener {
-            if (isQrEnabled) {
-                launchQrScanner(TAG_UNLOCK_FORTRESS)
-            } else if (!session.isEmergency) {
-                showDirectFortressConfirm(displayName)
-            }
+        if (showCurfewRow) {
+            summaryParts.add(ctx.getString(R.string.self_control_active_curfew_row))
         }
+        b.tvActiveModesSummary.isVisible = summaryParts.isNotEmpty()
+        b.tvActiveModesSummary.text = summaryParts.joinToString(ctx.getString(R.string.fortress_meta_separator))
+
+        b.btnUnlockFortressSelfControl.isVisible = showFortressRow
+        b.btnUnlockFortressSelfControl.isEnabled = !unlockInFlight
+        b.btnUnlockCurfewSelfControl.isVisible = showCurfewRow
+        b.btnUnlockCurfewSelfControl.isEnabled = !unlockInFlight
     }
 
     private fun launchQrScanner(tag: String) {
@@ -150,13 +148,15 @@ internal class SelfControlActiveModesViewBinder(
         val ctx = contextProvider() ?: return
         val act = ctx as? android.app.Activity
         if (act != null && (act.isFinishing || act.isDestroyed)) return
-        if (confirmDialog?.isShowing == true) return
+        if (unlockInFlight || confirmDialog?.isShowing == true) return
         confirmDialog = MaterialAlertDialogBuilder(ctx)
             .setTitle(R.string.self_control_unlock_curfew_confirm_title)
             .setMessage(R.string.self_control_unlock_curfew_confirm_msg)
             .setPositiveButton(R.string.self_control_btn_unlock_curfew_direct) { d, _ ->
                 d.dismiss()
+                unlockInFlight = true
                 viewModel.unlockNightCurfewDirect { ok ->
+                    unlockInFlight = false
                     showUnlockFeedback(ok, R.string.toast_curfew_unlocked)
                 }
             }
@@ -169,13 +169,15 @@ internal class SelfControlActiveModesViewBinder(
         val ctx = contextProvider() ?: return
         val act = ctx as? android.app.Activity
         if (act != null && (act.isFinishing || act.isDestroyed)) return
-        if (confirmDialog?.isShowing == true) return
+        if (unlockInFlight || confirmDialog?.isShowing == true) return
         confirmDialog = MaterialAlertDialogBuilder(ctx)
             .setTitle(R.string.self_control_unlock_fortress_confirm_title)
             .setMessage(ctx.getString(R.string.self_control_unlock_fortress_confirm_msg, displayName))
             .setPositiveButton(R.string.self_control_btn_unlock_fortress_direct) { d, _ ->
                 d.dismiss()
+                unlockInFlight = true
                 viewModel.unlockActiveFortressDirect { ok ->
+                    unlockInFlight = false
                     showUnlockFeedback(ok, R.string.toast_fortress_unlocked)
                 }
             }
@@ -193,6 +195,7 @@ internal class SelfControlActiveModesViewBinder(
     fun dismiss() {
         confirmDialog?.dismiss()
         confirmDialog = null
+        unlockInFlight = false
     }
 
     companion object {

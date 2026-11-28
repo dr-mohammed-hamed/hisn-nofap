@@ -698,7 +698,9 @@ object TrustedTimeProvider {
                 )
             )
             lastKnownTrueTimeMs.set(timeMs)
+            lastPersistedElapsedMs.set(elapsedRealtimeMs)
             hasEverSyncedFlag = true
+            isInitialized = true
         }
     }
 }

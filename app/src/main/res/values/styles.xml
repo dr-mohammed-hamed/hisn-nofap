@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Widget.Hisn.Card" parent="Widget.Material3.CardView.Filled">
+        <item name="cardBackgroundColor">?attr/colorSurfaceContainer</item>
+        <item name="strokeColor">?attr/colorOutlineVariant</item>
+        <item name="strokeWidth">1dp</item>
+        <item name="cardCornerRadius">@dimen/hisn_card_radius</item>
+        <item name="cardElevation">0dp</item>
+    </style>
+
+    <style name="Widget.Hisn.Tile" parent="Widget.Material3.CardView.Filled">
+        <item name="cardBackgroundColor">?attr/colorSurfaceContainer</item>
+        <item name="strokeColor">?attr/colorOutlineVariant</item>
+        <item name="strokeWidth">1dp</item>
+        <item name="cardCornerRadius">@dimen/hisn_card_radius</item>
+        <item name="cardElevation">0dp</item>
+    </style>
+
+    <style name="Widget.Hisn.StatusRow" parent="Widget.Material3.CardView.Filled">
+        <item name="cardBackgroundColor">?attr/colorSurfaceContainer</item>
+        <item name="strokeColor">?attr/colorOutlineVariant</item>
+        <item name="strokeWidth">1dp</item>
+        <item name="cardCornerRadius">@dimen/hisn_card_radius</item>
+        <item name="cardElevation">0dp</item>
+    </style>
+
+    <style name="Widget.Hisn.FortressButton" parent="Widget.Material3.Button">
+        <item name="android:minHeight">@dimen/hisn_control_height</item>
+        <item name="android:fontFamily">@font/tajawal</item>
+        <item name="android:gravity">center</item>
+        <item name="android:textAlignment">center</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="cornerRadius">14dp</item>
+    </style>
+</resources>

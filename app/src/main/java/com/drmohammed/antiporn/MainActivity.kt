@@ -377,9 +377,14 @@ class MainActivity : AppCompatActivity(),
 
         lifecycleScope.launch {
             if (enable) {
-                val saved = policyRepo.saveAndEnforceSelfPolicy(updatedPolicy)
+                val savedPolicy = policyRepo.mergeAndSaveSelfPolicyPatch { latest ->
+                    latest.copy(
+                        isScreenAiEnabledGlobally = true,
+                        screenAiSchemaVersion = DevicePolicyBundle.CURRENT_SCREEN_AI_SCHEMA_VERSION
+                    )
+                }
                 if (isFinishing || isDestroyed) return@launch
-                if (!saved) {
+                if (savedPolicy == null) {
                     Toast.makeText(this@MainActivity, R.string.self_control_section_locked_by_guardian, Toast.LENGTH_SHORT).show()
                     refreshSettingsAiUi()
                     return@launch
@@ -387,7 +392,7 @@ class MainActivity : AppCompatActivity(),
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                     val reconcileResult = withContext(Dispatchers.IO) {
-                        AccessibilityPolicyCoordinator.reconcile(this@MainActivity, updatedPolicy)
+                        AccessibilityPolicyCoordinator.reconcile(this@MainActivity, savedPolicy)
                     }
                     if (isFinishing || isDestroyed) return@launch
                     when (reconcileResult) {
@@ -414,9 +419,14 @@ class MainActivity : AppCompatActivity(),
                 }
             } else {
                 stopService(Intent(this@MainActivity, ScreenAiProjectionService::class.java))
-                policyRepo.saveAndEnforceSelfPolicy(updatedPolicy)
+                val savedPolicy = policyRepo.mergeAndSaveSelfPolicyPatch { latest ->
+                    latest.copy(
+                        isScreenAiEnabledGlobally = false,
+                        screenAiSchemaVersion = DevicePolicyBundle.CURRENT_SCREEN_AI_SCHEMA_VERSION
+                    )
+                } ?: updatedPolicy
                 withContext(Dispatchers.IO) {
-                    AccessibilityPolicyCoordinator.reconcile(this@MainActivity, updatedPolicy)
+                    AccessibilityPolicyCoordinator.reconcile(this@MainActivity, savedPolicy)
                 }
                 if (!isFinishing && !isDestroyed) {
                     refreshSettingsAiUi()
@@ -454,11 +464,15 @@ class MainActivity : AppCompatActivity(),
         val policyRepo = PolicyRepository.getInstance(applicationContext)
         val current = policyRepo.getCurrentPolicy()
         if (current.isScreenAiEnabledGlobally) {
-            val reverted = current.copy(
+            val reverted = policyRepo.mergeAndSaveSelfPolicyPatch { latest ->
+                latest.copy(
+                    isScreenAiEnabledGlobally = false,
+                    screenAiSchemaVersion = DevicePolicyBundle.CURRENT_SCREEN_AI_SCHEMA_VERSION
+                )
+            } ?: current.copy(
                 isScreenAiEnabledGlobally = false,
                 screenAiSchemaVersion = DevicePolicyBundle.CURRENT_SCREEN_AI_SCHEMA_VERSION
             )
-            policyRepo.saveAndEnforceSelfPolicy(reverted)
             withContext(Dispatchers.IO) {
                 AccessibilityPolicyCoordinator.reconcile(this@MainActivity, reverted)
             }

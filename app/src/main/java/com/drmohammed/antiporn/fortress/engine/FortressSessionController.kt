@@ -303,7 +303,9 @@ object FortressSessionController {
         return try {
             val prefs = FortressSessionPrefsStore.prefs(appContext)
             if (!prefs.getBoolean(FortressSessionPrefsStore.KEY_ACTIVE, false)) {
-                _activeSessionFlow.value = null
+                if (_activeSessionFlow.value != null) {
+                    _activeSessionFlow.value = null
+                }
                 return null
             }
 
@@ -340,7 +342,7 @@ object FortressSessionController {
                 endElapsedMs = endElapsed,
                 endWallMs = endWall,
                 remainingMs = remaining
-            ).also { _activeSessionFlow.value = it }
+            )
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "getActiveSessionLocked failed")
             null
