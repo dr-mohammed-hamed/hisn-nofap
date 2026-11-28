@@ -31,6 +31,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import java.security.SecureRandom
 import java.util.Locale
 import kotlin.coroutines.coroutineContext
@@ -245,20 +246,23 @@ open class AccountabilityRepository(
                 }
                 val publishedExpiresAt: Long? = withTimeout(15_000L) {
                     if (attempts == 1) {
-                        repositoryScope.launch(Dispatchers.IO) {
-                            try {
-                                withTimeout(10_000L) {
-                                    firestore.collection("policies").document(uid)
-                                        .set(currentLocalPolicy.toMap(), SetOptions.merge()).await()
-                                }
+                        try {
+                            val seeded = withTimeoutOrNull(6_000L) {
+                                firestore.collection("policies").document(uid)
+                                    .set(currentLocalPolicy.toMap(), SetOptions.merge()).await()
+                                true
+                            }
+                            if (seeded == true) {
                                 Timber.tag(TAG).d(
                                     "Ensured base policy document in Firestore for UID %s",
                                     com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(uid)
                                 )
-                            } catch (policyEx: Exception) {
-                                if (policyEx is CancellationException && policyEx !is TimeoutCancellationException) throw policyEx
-                                Timber.tag(TAG).w(policyEx, "Non-critical: base policy document seed skipped: %s", policyEx.message)
+                            } else {
+                                Timber.tag(TAG).w("Timed out seeding base policy document in Firestore; continuing pairing")
                             }
+                        } catch (policyEx: Exception) {
+                            if (policyEx is CancellationException) throw policyEx
+                            Timber.tag(TAG).w(policyEx, "Non-critical: base policy document seed skipped: %s", policyEx.message)
                         }
                     }
                     val existingDoc = firestore.collection("pairings").document(currentCode).get().await()
@@ -560,14 +564,13 @@ open class AccountabilityRepository(
                 try {
                     val policyDoc = firestore.collection("policies").document(targetUid).get().await()
                     val currentVersion = policyDoc.getLong("version") ?: 1L
+                    val existingPolicy = policyDoc.data?.let { DevicePolicyBundle.fromMap(it) }
 
-                    // Reset ward policy to safe default bundle with guardianUid = null
-                    val safeDefaultPolicy = DevicePolicyBundle.defaultPolicy().copy(
-                        guardianUid = null,
-                        guardianName = null,
-                        isSupervised = false,
-                        version = currentVersion + 1,
-                        updatedAt = TrustedTimeProvider.currentTimeMillis(appContext)
+                    // Reset ward policy to safe default bundle with guardianUid = null while preserving curfew lists and fortresses
+                    val safeDefaultPolicy = buildPostSupervisionPolicy(
+                        existingPolicy = existingPolicy,
+                        nextVersion = currentVersion + 1,
+                        now = TrustedTimeProvider.currentTimeMillis(appContext)
                     )
                     firestore.collection("policies").document(targetUid).set(safeDefaultPolicy.toMap(), SetOptions.merge()).await()
                     val maskedTarget = com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(targetUid)
@@ -850,6 +853,32 @@ open class AccountabilityRepository(
                     instance = it
                 }
             }
+        }
+
+        @androidx.annotation.VisibleForTesting
+        internal fun buildPostSupervisionPolicy(
+            existingPolicy: DevicePolicyBundle?,
+            nextVersion: Long,
+            now: Long,
+            breakoutStatus: String? = null
+        ): DevicePolicyBundle {
+            val base = DevicePolicyBundle.defaultPolicy()
+            val preservedWhitelist = existingPolicy?.customCurfewWhitelistPackages ?: base.customCurfewWhitelistPackages
+            val preservedVpnBypass = existingPolicy?.curfewVpnBypassPackages ?: base.curfewVpnBypassPackages
+            val preservedFortresses = existingPolicy?.fortressesConfig?.normalized() ?: base.fortressesConfig
+            return base.copy(
+                customCurfewWhitelistPackages = preservedWhitelist,
+                curfewVpnBypassPackages = preservedVpnBypass,
+                fortressesConfig = preservedFortresses,
+                guardianUid = null,
+                guardianName = null,
+                isSupervised = false,
+                breakoutStatus = breakoutStatus,
+                breakoutRequestedAt = null,
+                breakoutUnlockAt = null,
+                version = nextVersion,
+                updatedAt = now
+            )
         }
 
         @androidx.annotation.VisibleForTesting
