@@ -178,6 +178,58 @@ class WebFilterViewModelTest {
         }
     }
 
+    @Test
+    fun `isLocalVpnFallbackEnabled defaults to false, persists across savedState, and saves into DevicePolicyBundle`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            var savedBundle: DevicePolicyBundle? = null
+            val vm = createViewModel(scope).apply {
+                selfPolicyPatchSaver = { transform ->
+                    transform(DevicePolicyBundle.defaultPolicy()).also { savedBundle = it }
+                }
+            }
+            vm.initialize(false, "", DevicePolicyBundle.defaultPolicy())
+            assertFalse(vm.uiState.value.isLocalVpnFallbackEnabled)
+
+            vm.setLocalVpnFallbackEnabled(true)
+            assertTrue(vm.uiState.value.isLocalVpnFallbackEnabled)
+            assertTrue(vm.uiState.value.hasUnsavedChanges())
+
+            val savedState = MapSavedStateAccessor()
+            vm.writeToSavedState(savedState)
+
+            val restoredVm = createViewModel(scope).apply {
+                selfPolicyPatchSaver = { transform ->
+                    transform(DevicePolicyBundle.defaultPolicy()).also { savedBundle = it }
+                }
+            }
+            restoredVm.initialize(false, "", DevicePolicyBundle.defaultPolicy())
+            restoredVm.restoreFromSavedState(savedState)
+            assertTrue(restoredVm.uiState.value.isLocalVpnFallbackEnabled)
+            assertTrue(restoredVm.uiState.value.hasUnsavedChanges())
+
+            restoredVm.saveChanges()
+            val event = restoredVm.events.first()
+            assertTrue(event is WebFilterUiEvent.SaveSuccess)
+            assertTrue(savedBundle?.isLocalVpnFallbackEnabled == true)
+            assertTrue(restoredVm.uiState.value.initialPolicy.isLocalVpnFallbackEnabled)
+            assertFalse(restoredVm.uiState.value.hasUnsavedChanges())
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    private class MapSavedStateAccessor : WebFilterViewModel.SavedStateAccessor {
+        private val map = mutableMapOf<String, Any?>()
+        override fun getString(key: String, defaultValue: String): String = (map[key] as? String) ?: defaultValue
+        override fun getBoolean(key: String, defaultValue: Boolean): Boolean = (map[key] as? Boolean) ?: defaultValue
+        @Suppress("UNCHECKED_CAST")
+        override fun getStringArrayList(key: String): ArrayList<String>? = map[key] as? ArrayList<String>
+        override fun putString(key: String, value: String) { map[key] = value }
+        override fun putBoolean(key: String, value: Boolean) { map[key] = value }
+        override fun putStringArrayList(key: String, value: ArrayList<String>) { map[key] = value }
+    }
+
     private class FakeDevicePolicyDao : DevicePolicyDao {
         private var entity: DevicePolicyEntity? = null
         private val flow = MutableStateFlow<DevicePolicyEntity?>(null)
@@ -195,14 +247,16 @@ class WebFilterViewModelTest {
         override fun getPartnersByRoleFlow(role: String): Flow<List<PartnerEntity>> = MutableStateFlow(emptyList())
         override suspend fun getPartnersByRole(role: String): List<PartnerEntity> = emptyList()
         override fun getPartnersByRoleBlocking(role: String): List<PartnerEntity> = emptyList()
-        override suspend fun getPartnerById(id: String): PartnerEntity? = null
-        override fun getPartnerByIdBlocking(id: String): PartnerEntity? = null
+        override suspend fun getPartnersById(id: String): List<PartnerEntity> = emptyList()
+        override fun getPartnersByIdBlocking(id: String): List<PartnerEntity> = emptyList()
+        override suspend fun getPartnerByIdAndRole(id: String, role: String): PartnerEntity? = null
+        override fun getPartnerByIdAndRoleBlocking(id: String, role: String): PartnerEntity? = null
         override suspend fun savePartner(partner: PartnerEntity) {}
         override fun savePartnerBlocking(partner: PartnerEntity) {}
-        override suspend fun deletePartner(id: String): Int = 0
-        override fun deletePartnerBlocking(id: String): Int = 0
-        override suspend fun updatePartnerDisplayName(id: String, newName: String, syncTimestamp: Long): Int = 0
-        override fun updatePartnerDisplayNameBlocking(id: String, newName: String, syncTimestamp: Long): Int = 0
+        override suspend fun deletePartnerByIdAndRole(id: String, role: String): Int = 0
+        override fun deletePartnerByIdAndRoleBlocking(id: String, role: String): Int = 0
+        override suspend fun updatePartnerDisplayNameByRole(id: String, role: String, newName: String, syncTimestamp: Long): Int = 0
+        override fun updatePartnerDisplayNameByRoleBlocking(id: String, role: String, newName: String, syncTimestamp: Long): Int = 0
     }
 
     private class FakeApplication : Application() {

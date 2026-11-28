@@ -1,6 +1,7 @@
 package com.drmohammed.antiporn.ui.control.curfew
 
 import android.view.LayoutInflater
+import android.view.View
 import android.view.ViewGroup
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
@@ -12,6 +13,8 @@ import com.drmohammed.antiporn.ui.accountability.AppIconResolver
  */
 class CurfewAppPickerAdapter(
     private val isLocalMode: Boolean,
+    // main: when false the "Net" checkbox is hidden (run-only curfew exemption picking).
+    private val allowNetSelection: Boolean = true,
     private val onRunToggled: (CurfewAppPickerBottomSheet.CurfewAppItem, Boolean) -> Unit,
     private val onNetToggled: (CurfewAppPickerBottomSheet.CurfewAppItem, Boolean) -> Unit
 ) : RecyclerView.Adapter<CurfewAppPickerAdapter.ViewHolder>() {
@@ -71,8 +74,9 @@ class CurfewAppPickerAdapter(
 
         binding.cbRun.isChecked = item.isRunAllowed
         binding.cbNet.isChecked = item.isNetAllowed
+        binding.cbNet.visibility = if (allowNetSelection) View.VISIBLE else View.GONE
 
-        binding.cbNet.isEnabled = item.isRunAllowed
+        binding.cbNet.isEnabled = allowNetSelection && item.isRunAllowed
         binding.cbNet.alpha = if (item.isRunAllowed) 1.0f else 0.45f
 
         binding.cbRun.setOnCheckedChangeListener { _, isChecked ->

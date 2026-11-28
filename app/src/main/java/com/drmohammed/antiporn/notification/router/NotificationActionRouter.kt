@@ -7,12 +7,13 @@ import android.util.Log
 import android.widget.Toast
 import com.drmohammed.antiporn.MainActivity
 import com.drmohammed.antiporn.R
+import com.drmohammed.antiporn.curfew.CurfewAppResolver
 import com.drmohammed.antiporn.curfew.CurfewEnforcer
-import com.drmohammed.antiporn.curfew.CurfewConfig
-import com.drmohammed.antiporn.data.repository.PolicyRepository
+import com.drmohammed.antiporn.fortress.engine.EffectiveRestrictionResolver
 import com.drmohammed.antiporn.notification.model.InAppNotification
 import com.drmohammed.antiporn.notification.model.NotificationActionType
 import com.drmohammed.antiporn.ui.accountability.GuardianControlActivity
+import com.drmohammed.antiporn.ui.control.web.LocalDnsFallbackConsentActivity
 
 /**
  * Smart Action Router responsible for executing appropriate deep-linking
@@ -85,7 +86,10 @@ object NotificationActionRouter {
                         putExtra(GuardianControlActivity.EXTRA_WARD_ID, payload)
                         try {
                             val partner = com.drmohammed.antiporn.data.local.db.HisnRoomDatabase
-                                .getInstance(context).partnerDao().getPartnerByIdBlocking(payload)
+                                .getInstance(context).partnerDao().getPartnerByIdAndRoleBlocking(
+                                    payload,
+                                    com.drmohammed.antiporn.data.local.db.entity.PartnerEntity.ROLE_WARD
+                                )
                             if (partner != null && partner.displayName.isNotBlank()) {
                                 putExtra(GuardianControlActivity.EXTRA_WARD_NAME, partner.displayName)
                             }
@@ -108,17 +112,16 @@ object NotificationActionRouter {
             NotificationActionType.LAUNCH_APP -> {
                 val packageName = payload
                 if (!packageName.isNullOrBlank()) {
-                    val isCurfewActive = CurfewEnforcer.isEffectiveBlockActive(context)
-                    val policy = try {
-                        PolicyRepository.getInstance(context).getCurrentPolicy()
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed reading policy during package launch check", e)
-                        null
+                    val isBlockActive = CurfewEnforcer.isEffectiveBlockActive(context)
+                    val isWhitelisted = if (isBlockActive) {
+                        val effectiveAllowed = EffectiveRestrictionResolver.resolve(context).effectiveAllowedUserApps +
+                            CurfewAppResolver.resolveEssentialImmunePackages(context)
+                        effectiveAllowed.contains(packageName)
+                    } else {
+                        true
                     }
-                    val isWhitelisted = CurfewConfig.STATIC_WHITELIST.contains(packageName) ||
-                            policy?.customCurfewWhitelistPackages?.contains(packageName) == true
 
-                    if (isCurfewActive && !isWhitelisted) {
+                    if (isBlockActive && !isWhitelisted) {
                         Toast.makeText(
                             context,
                             R.string.notif_apps_suspended_title,
@@ -138,6 +141,16 @@ object NotificationActionRouter {
                         }
                     }
                 }
+            }
+
+            NotificationActionType.APPROVE_LOCAL_DNS_FALLBACK -> {
+                val intent = Intent(context, LocalDnsFallbackConsentActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    if (!payload.isNullOrBlank()) {
+                        putExtra(LocalDnsFallbackConsentActivity.EXTRA_NET_ID, payload)
+                    }
+                }
+                context.startActivity(intent)
             }
 
             NotificationActionType.NONE -> {

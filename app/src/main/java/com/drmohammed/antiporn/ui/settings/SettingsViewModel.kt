@@ -16,6 +16,7 @@ import com.drmohammed.antiporn.data.repository.AccountabilityRepository
 import com.drmohammed.antiporn.ota.model.OtaUpdateState
 import com.drmohammed.antiporn.ota.model.OtaVersionInfo
 import com.drmohammed.antiporn.ota.repository.OtaRepository
+import com.drmohammed.antiporn.waqf.repository.WaqfRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,7 +36,8 @@ class SettingsViewModel(
     private val otaRepository: OtaRepository = OtaRepository.getInstance(application),
     private val googleAuthManager: GoogleAuthManager = GoogleAuthManager.getInstance(application),
     private val accountabilityRepo: AccountabilityRepository = AccountabilityRepository.getInstance(application),
-    private val policyRepository: PolicyRepository = PolicyRepository.getInstance(application)
+    private val policyRepository: PolicyRepository = PolicyRepository.getInstance(application),
+    private val waqfRepository: WaqfRepository = WaqfRepository.getInstance(application)
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(SettingsUiState())
@@ -276,6 +278,13 @@ class SettingsViewModel(
 
     fun setSharingTelemetry(isSharing: Boolean) {
         _uiState.update { it.copy(isSharingTelemetry = isSharing) }
+    }
+
+    /**
+     * Silently prefetches Waqf configuration in the background if cache is absent or stale.
+     */
+    fun prefetchWaqfConfigIfStale() {
+        waqfRepository.prefetchIfStaleAsync()
     }
 
     companion object {

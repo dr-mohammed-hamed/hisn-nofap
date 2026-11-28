@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.drmohammed.antiporn.provisioning.engine.BlockingSecondaryUser
 import com.drmohammed.antiporn.provisioning.engine.DeviceOwnerPromoter
+import com.drmohammed.antiporn.provisioning.engine.OemPermissionType
 import com.drmohammed.antiporn.provisioning.engine.PromotionResult
 import com.drmohammed.antiporn.provisioning.service.AdbPairingNotificationService
 import kotlinx.coroutines.CancellationException
@@ -35,6 +36,8 @@ data class ProvisioningWizardUiState(
 sealed class ProvisioningWizardEvent {
     data object PromotionSucceeded : ProvisioningWizardEvent()
     data class SecondaryUsersBlocking(val users: List<BlockingSecondaryUser>) : ProvisioningWizardEvent()
+    data class OemPermissionRequired(val oemType: OemPermissionType) : ProvisioningWizardEvent()
+    data class AccountsBlocking(val payload: BlockingAccountsPayload) : ProvisioningWizardEvent()
     data class PromotionFailed(val message: String) : ProvisioningWizardEvent()
     data class UnexpectedError(val className: String, val message: String?) : ProvisioningWizardEvent()
 }
@@ -72,6 +75,11 @@ class ProvisioningWizardViewModel(
                 explicitUserConsentConfirmed = true
             )
         }
+
+    @VisibleForTesting
+    internal var promoteIfAlreadyPairedAction: suspend (Int) -> PromotionResult = { connectPort ->
+        DeviceOwnerPromoter.promoteIfAlreadyPaired(getApplication(), connectPort)
+    }
 
     @VisibleForTesting
     internal var isPromotionActiveCheck: () -> Boolean = { DeviceOwnerPromoter.isPromotionActive }
@@ -113,6 +121,64 @@ class ProvisioningWizardViewModel(
                 _events.send(ProvisioningWizardEvent.SecondaryUsersBlocking(blockingUsers))
             } else {
                 _events.send(ProvisioningWizardEvent.PromotionFailed(errorMessage.orEmpty()))
+            }
+        }
+    }
+
+    /**
+     * main: handles external failure broadcasts that carry an OEM-permission or account-blocking
+     * outcome. The decision stays in the ViewModel (rotation-safe); the Activity only renders the
+     * corresponding dialog.
+     */
+    fun onExternalBroadcastFailureWithOutcome(
+        blockingUsers: List<BlockingSecondaryUser>,
+        oemType: OemPermissionType?,
+        accountsPayload: BlockingAccountsPayload?,
+        errorMessage: String?
+    ) {
+        val state = _uiState.value
+        val hasOutcome = blockingUsers.isNotEmpty() || oemType != null || accountsPayload != null
+        if (!hasOutcome && state.isPromoting && isPromotionActiveCheck()) {
+            Timber.tag(TAG).i("Ignoring concurrent failure broadcast while local promotion is active")
+            return
+        }
+        _uiState.update { it.copy(isPromoting = false, isCleaningSecondaryUsers = false) }
+        workScope.launch {
+            when {
+                blockingUsers.isNotEmpty() -> {
+                    _uiState.update {
+                        it.copy(pendingBlockingUsersJson = BlockingSecondaryUser.listToJson(blockingUsers))
+                    }
+                    _events.send(ProvisioningWizardEvent.SecondaryUsersBlocking(blockingUsers))
+                }
+                oemType != null -> _events.send(ProvisioningWizardEvent.OemPermissionRequired(oemType))
+                accountsPayload != null -> _events.send(ProvisioningWizardEvent.AccountsBlocking(accountsPayload))
+                else -> _events.send(ProvisioningWizardEvent.PromotionFailed(errorMessage.orEmpty()))
+            }
+        }
+    }
+
+    /**
+     * main: retry a promotion on a device that is already paired, routed through the ViewModel so
+     * an active promotion survives rotation.
+     */
+    fun retryAlreadyPaired() {
+        if (_uiState.value.isPromoting || isPromotionActiveCheck()) return
+        val connectPort = _uiState.value.discoveredConnectPort.takeIf { it > 0 }
+            ?: AdbPairingNotificationService.capturedConnectPort
+        _uiState.update { it.copy(isPromoting = true, isCleaningSecondaryUsers = false) }
+        workScope.launch {
+            try {
+                val result = withContext(ioDispatcher + NonCancellable) {
+                    promoteIfAlreadyPairedAction(connectPort)
+                }
+                handlePromotionResult(result)
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                Timber.tag(TAG).e(t, "Unexpected error during already-paired retry")
+                _events.send(ProvisioningWizardEvent.UnexpectedError(t.javaClass.simpleName, t.message))
+            } finally {
+                _uiState.update { it.copy(isPromoting = false, isCleaningSecondaryUsers = false) }
             }
         }
     }
@@ -182,6 +248,16 @@ class ProvisioningWizardViewModel(
                     it.copy(pendingBlockingUsersJson = BlockingSecondaryUser.listToJson(result.users))
                 }
                 _events.send(ProvisioningWizardEvent.SecondaryUsersBlocking(result.users))
+            }
+            is PromotionResult.OemPermissionRequired -> {
+                _events.send(ProvisioningWizardEvent.OemPermissionRequired(result.oemType))
+            }
+            is PromotionResult.AccountsBlocking -> {
+                _events.send(
+                    ProvisioningWizardEvent.AccountsBlocking(
+                        BlockingAccountsPayload(result.accountLabels, result.accountTypes, result.message)
+                    )
+                )
             }
             is PromotionResult.Failure -> {
                 _events.send(ProvisioningWizardEvent.PromotionFailed(result.message))

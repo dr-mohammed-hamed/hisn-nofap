@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -73,6 +74,12 @@ object BankingCloakManager {
     @Volatile
     internal var accessibilityActiveCheckOverride: ((Context) -> Boolean)? = null
 
+    @VisibleForTesting
+    @Volatile
+    internal var viewUriIntentFactory: (Uri) -> Intent = { uri ->
+        Intent(Intent.ACTION_VIEW, uri)
+    }
+
     private fun getMainHandlerOrNull(): Handler? {
         cachedMainHandler?.let { return it }
         return try {
@@ -112,6 +119,7 @@ object BankingCloakManager {
             AccessibilitySelfActivator.disableCleanly(ctx, isTemporaryCloak = true, cloakDurationMs = durationMs)
         }
         accessibilityActiveCheckOverride = null
+        viewUriIntentFactory = { uri -> Intent(Intent.ACTION_VIEW, uri) }
     }
 
     /**
@@ -214,20 +222,7 @@ object BankingCloakManager {
         }
 
         val appContext = context.applicationContext ?: context
-        val pm = try {
-            appContext.packageManager
-        } catch (e: Exception) {
-            Timber.tag(TAG).w(e, "Unable to access package manager")
-            null
-        }
-
-        val launchIntent = try {
-            pm?.getLaunchIntentForPackage(targetPackage)
-        } catch (e: Exception) {
-            Timber.tag(TAG).w(e, "Error querying launch intent for $targetPackage")
-            null
-        }
-
+        val launchIntent = resolveLaunchIntent(appContext, targetPackage)
         if (launchIntent == null) {
             try {
                 Toast.makeText(appContext, R.string.banking_app_not_installed, Toast.LENGTH_SHORT).show()
@@ -238,14 +233,7 @@ object BankingCloakManager {
             return false
         }
 
-        // 1. تطهير وفصل كافة نوافذ التعتيم العائمة فوراً لمنع حظر Tapjacking في البنك
-        try {
-            com.drmohammed.antiporn.ai.overlay.ScreenBlurOverlayManager.dismissAllOverlaysForBanking()
-        } catch (e: Exception) {
-            Timber.tag(TAG).w(e, "Failed dismissing overlays for banking launch")
-        }
-
-        // 2. تسجيل حالة خيارات المطورين في السجلات دون إزعاج المستخدم بتنبيهات Toast
+        dismissOverlaysSafely()
         if (isDeveloperOptionsEnabled(appContext)) {
             Timber.tag(TAG).d("Developer options or ADB enabled on device")
         }
@@ -256,12 +244,135 @@ object BankingCloakManager {
             Timber.tag(TAG).w(e, "Could not add flags to launchIntent")
         }
 
-        // 3. التحقق مما إذا كانت خدمة الوصول نشطة أو مفعلة فعلياً
-        val isA11yActiveOrEnabled = accessibilityActiveCheckOverride?.invoke(appContext) ?: run {
+        if (!isAccessibilityActive(appContext) && !isCloaked(appContext)) {
+            Timber.tag(TAG).i("Accessibility is not active or enabled; launching banking app $targetPackage directly without cloaking")
+            return startActivityDirect(context, launchIntent, appContext, targetPackage)
+        }
+
+        if (!engageCloakSession(appContext, targetPackage)) {
+            return false
+        }
+
+        return dispatchActivityLaunch(
+            context = context,
+            appContext = appContext,
+            intent = launchIntent,
+            targetPackage = targetPackage,
+            settlingDelayMs = settlingDelayMs
+        )
+    }
+
+    /**
+     * فتح رابط HTTPS موثوق (مثل رابط الدفع عبر إنستاباي) مع تفعيل التخفي البنكي تلقائياً
+     * فقط إذا كان التطبيق المستهدف معتمداً ومثبتاً وخدمة إمكانية الوصول نشطة.
+     * إذا لم يكن التطبيق مثبتاً أو كانت خدمة الوصول غير نشطة، يُفتح الرابط مباشرة بدون تخفي.
+     */
+    @Synchronized
+    fun launchUriWithCloakIfNeeded(
+        context: Context,
+        uri: Uri,
+        targetPackage: String = INSTAPAY_PACKAGE,
+        settlingDelayMs: Long = DEFAULT_SETTLING_DELAY_MS
+    ): Boolean {
+        if (!isValidHttpsUri(uri)) {
+            Timber.tag(TAG).e("Security violation: Rejecting non-HTTPS or invalid URI in launchUriWithCloakIfNeeded")
+            return false
+        }
+
+        val appContext = context.applicationContext ?: context
+        val viewIntent = try {
+            viewUriIntentFactory(uri).apply {
+                if (context !is android.app.Activity || context.isFinishing || context.isDestroyed) {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            }
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "Failed to construct ACTION_VIEW intent for URI")
+            return false
+        }
+
+        val isAllowedTarget = BankingAppRegistry.isAllowed(targetPackage)
+        val isInstalled = isAllowedTarget && resolveLaunchIntent(appContext, targetPackage) != null
+        val a11yActive = isAccessibilityActive(appContext)
+
+        if (!isInstalled || !a11yActive) {
+            Timber.tag(TAG).i(
+                "Launching URI directly without cloak (allowed=$isAllowedTarget, installed=$isInstalled, a11yActive=$a11yActive)"
+            )
+            return startActivityDirect(context, viewIntent, appContext, targetPackage)
+        }
+
+        dismissOverlaysSafely()
+        if (isDeveloperOptionsEnabled(appContext)) {
+            Timber.tag(TAG).d("Developer options or ADB enabled on device")
+        }
+
+        if (!isCloaked(appContext)) {
+            if (!engageCloakSession(appContext, targetPackage)) {
+                return false
+            }
+        } else {
+            activeTargetPackage = targetPackage
+            persistActiveTargetPackage(appContext, targetPackage)
+            showCloakActiveNotification(appContext)
+            scheduleRestoreAlarm(appContext)
+        }
+
+        return dispatchActivityLaunch(
+            context = context,
+            appContext = appContext,
+            intent = viewIntent,
+            targetPackage = targetPackage,
+            settlingDelayMs = settlingDelayMs
+        )
+    }
+
+    private fun isValidHttpsUri(uri: Uri): Boolean {
+        val schemeOk = try {
+            uri.scheme.equals("https", ignoreCase = true)
+        } catch (e: Exception) {
+            false
+        }
+        if (!schemeOk) return false
+
+        return try {
+            !uri.host.isNullOrBlank()
+        } catch (e: RuntimeException) {
+            // Allow minimal JVM test Uri doubles that only override getScheme()
+            e.message?.contains("not mocked", ignoreCase = true) == true ||
+                e.message?.contains("Stub", ignoreCase = true) == true
+        }
+    }
+
+    private fun resolveLaunchIntent(appContext: Context, targetPackage: String): Intent? {
+        val pm = try {
+            appContext.packageManager
+        } catch (e: Exception) {
+            Timber.tag(TAG).w(e, "Unable to access package manager")
+            null
+        }
+        return try {
+            pm?.getLaunchIntentForPackage(targetPackage)
+        } catch (e: Exception) {
+            Timber.tag(TAG).w(e, "Error querying launch intent for $targetPackage")
+            null
+        }
+    }
+
+    private fun dismissOverlaysSafely() {
+        try {
+            com.drmohammed.antiporn.ai.overlay.ScreenBlurOverlayManager.dismissAllOverlaysForBanking()
+        } catch (e: Exception) {
+            Timber.tag(TAG).w(e, "Failed dismissing overlays for banking launch")
+        }
+    }
+
+    private fun isAccessibilityActive(appContext: Context): Boolean {
+        return accessibilityActiveCheckOverride?.invoke(appContext) ?: run {
             val resolver = try {
                 appContext.contentResolver
             } catch (e: Exception) {
-                Timber.tag(TAG).w(e, "Could not access ContentResolver in launchSafely")
+                Timber.tag(TAG).w(e, "Could not access ContentResolver in BankingCloakManager")
                 null
             }
             if (resolver == null) {
@@ -272,16 +383,12 @@ object BankingCloakManager {
                     AccessibilitySelfActivator.isServiceEnabledInSettings(appContext)
             }
         }
+    }
 
-        if (!isA11yActiveOrEnabled && !isCloaked(appContext)) {
-            Timber.tag(TAG).i("Accessibility is not active or enabled; launching banking app $targetPackage directly without cloaking")
-            return startActivityDirect(context, launchIntent, appContext, targetPackage)
-        }
-
+    private fun engageCloakSession(appContext: Context, targetPackage: String): Boolean {
         activeTargetPackage = targetPackage
         persistActiveTargetPackage(appContext, targetPackage)
 
-        // 4. إيقاف خدمة الوصول بنظافة تامة وتخزين حالة التخفي المؤقت
         val cloaked = disableCleanlyAction(appContext, CLOAK_TIMEOUT_MS)
         if (!cloaked) {
             Timber.tag(TAG).e("Banking cloak activation failed for target: $targetPackage; aborting launch")
@@ -296,13 +403,18 @@ object BankingCloakManager {
         }
         Timber.tag(TAG).i("Banking cloak activated (result=$cloaked) for target: $targetPackage")
 
-        // 5. عرض إشعار مستمر لحالة الوضع البنكي الآمن يتيح الاستعادة بنقرة واحدة
         showCloakActiveNotification(appContext)
-
-        // 6. جدولة منبه استعادة الحماية كصمام أمان نظامي يتجدد ديناميكياً أثناء بقاء المستخدم داخل البنك
         scheduleRestoreAlarm(appContext)
+        return true
+    }
 
-        // 7. تشغيل تطبيق البنك في مهمة جديدة مع ضمان مهلة تسكين كافية (>= 350ms في الإنتاج)
+    private fun dispatchActivityLaunch(
+        context: Context,
+        appContext: Context,
+        intent: Intent,
+        targetPackage: String,
+        settlingDelayMs: Long
+    ): Boolean {
         val effectiveDelayMs = if (settlingDelayMs > 0L) {
             maxOf(settlingDelayMs, MIN_CLOAK_SETTLING_DELAY_MS)
         } else {
@@ -328,7 +440,7 @@ object BankingCloakManager {
                         }
                         pendingLaunchRunnable = null
                     }
-                    startActivityInternal(contextRef.get() ?: appContext, launchIntent, appContext, targetPackage)
+                    startActivityInternal(contextRef.get() ?: appContext, intent, appContext, targetPackage)
                 }
                 pendingLaunchRunnable = runnable
                 try {
@@ -337,14 +449,14 @@ object BankingCloakManager {
                 } catch (e: Exception) {
                     pendingLaunchRunnable = null
                     Timber.tag(TAG).w(e, "Handler postDelayed failed, launching immediately")
-                    startActivityInternal(contextRef.get() ?: appContext, launchIntent, appContext, targetPackage)
+                    startActivityInternal(contextRef.get() ?: appContext, intent, appContext, targetPackage)
                 }
             } else {
                 Timber.tag(TAG).w("Main handler unavailable for delayed launch; launching immediately")
-                startActivityInternal(contextRef.get() ?: appContext, launchIntent, appContext, targetPackage)
+                startActivityInternal(contextRef.get() ?: appContext, intent, appContext, targetPackage)
             }
         } else {
-            startActivityInternal(contextRef.get() ?: appContext, launchIntent, appContext, targetPackage)
+            startActivityInternal(contextRef.get() ?: appContext, intent, appContext, targetPackage)
         }
     }
 

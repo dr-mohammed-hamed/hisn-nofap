@@ -6,8 +6,6 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
-import com.drmohammed.antiporn.core.policy.AppClassification
-import com.drmohammed.antiporn.core.policy.AppPolicyRegistry
 import com.drmohammed.antiporn.data.repository.ApprovalRepository
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
@@ -29,6 +27,11 @@ internal object AppSuspensionHandler {
     private const val IN_FLIGHT_WAIT_TIMEOUT_SECONDS = 15L
     private val shieldScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val inFlightPackages = ConcurrentHashMap<String, CompletableFuture<Boolean>>()
+
+    @androidx.annotation.VisibleForTesting
+    internal var isPackageInstalledProvider: (PackageManager?, String) -> Boolean = { pm, pkg ->
+        pm != null && isPackageInstalled(pm, pkg)
+    }
 
     fun isPackageInstalled(pm: PackageManager, packageName: String): Boolean {
         if (packageName.isBlank()) return false
@@ -67,7 +70,8 @@ internal object AppSuspensionHandler {
             Log.w(TAG, "Immunity guard: Cannot freeze immune or self package ($packageName)")
             return true
         }
-        if (!isPackageInstalled(context.packageManager, packageName)) {
+        val pm = context.packageManager
+        if (pm == null || !isPackageInstalled(pm, packageName)) {
             Log.d(TAG, "Package $packageName is not installed; skipping freeze")
             return true
         }
@@ -117,7 +121,7 @@ internal object AppSuspensionHandler {
                             context = context,
                             shieldId = shieldId,
                             isSuccess = true,
-                            details = "Suspended blacklisted pkg=$packageName"
+                            details = "Suspended pkg=$packageName"
                         )
                         true
                     }
@@ -153,60 +157,56 @@ internal object AppSuspensionHandler {
             Log.w(TAG, "Failed reading pending approvals in AppSuspensionHandler", e)
             emptyList()
         }
-        val approvedByPkg = approvals.associateBy { it.packageName }
 
-        val customBlacklist = try {
-            PolicyRepository.getInstance(appContext).getCurrentPolicy().customBlacklistPackages
+        val policy = try {
+            PolicyRepository.getInstance(appContext).getCurrentPolicy()
         } catch (e: Exception) {
-            Log.w(TAG, "Failed reading policy custom blacklist in AppSuspensionHandler", e)
-            emptySet()
+            Log.w(TAG, "Failed reading policy in AppSuspensionHandler", e)
+            null
         }
-        candidates.addAll(customBlacklist)
+        candidates.addAll(policy?.customBlacklistPackages ?: emptySet())
 
         for (approval in approvals) {
-            if (approval.isPending || approval.isRejected) {
+            if (approval.isRejected || (policy?.lockNewInstallsUntilApproved == true && approval.isPending)) {
                 candidates.add(approval.packageName)
             }
         }
 
-        AppPolicyRegistry.RULES
-            .asSequence()
-            .filter { !it.isWildcard && it.classification == AppClassification.PERMANENT_BLACKLIST }
-            .map { it.pattern }
-            .forEach { pkg ->
-                val approval = approvedByPkg[pkg]
-                val isApproved = approval != null && approval.isApproved
-                if (!isApproved) {
-                    candidates.add(pkg)
-                }
-            }
-
         return candidates.filter { pkg ->
             pkg != appContext.packageName &&
                 !AppSuspensionShield.isImmune(pkg) &&
-                isPackageInstalled(pm, pkg)
+                isPackageInstalledProvider(pm, pkg)
         }
     }
 
     fun handlePackageAdded(context: Context, packageName: String, shieldId: String) {
         val appContext = context.applicationContext ?: context
-        val policy = com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(appContext).getCurrentPolicy()
+        val policy = PolicyRepository.getInstance(appContext).getCurrentPolicy()
         val isCustomBlacklisted = policy.customBlacklistPackages.contains(packageName)
-        val isPermanentlyBlacklisted = AppSuspensionShield.isBlacklisted(packageName)
-        val isHighRisk = AppPolicyRegistry.isHighRisk(packageName)
-        if (!policy.lockNewInstallsUntilApproved && !isCustomBlacklisted && !isPermanentlyBlacklisted && !isHighRisk) {
+        if (!policy.lockNewInstallsUntilApproved && !isCustomBlacklisted) {
             return
         }
-        if (AppSuspensionShield.isImmune(packageName) ||
-            (!AppSuspensionShield.isBlacklisted(packageName) && !AppPolicyRegistry.isHighRisk(packageName))
-        ) {
+        if (AppSuspensionShield.isImmune(packageName)) {
             return
+        }
+        if (!isCustomBlacklisted) {
+            val existingApproval = try {
+                ApprovalRepository.getInstance(appContext)
+                    .getLocalPendingApprovals()
+                    .firstOrNull { it.packageName == packageName }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed checking approval state in handlePackageAdded for $packageName", e)
+                null
+            }
+            if (existingApproval?.isApproved == true) {
+                return
+            }
         }
         if (!SafeDpmGateway.isDeviceOwner(appContext)) {
             Log.w(TAG, "Cannot freeze $packageName: App is not Device/Profile Owner")
             return
         }
-        Log.i(TAG, "Freezing high-risk or blacklisted app on install: $packageName")
+        Log.i(TAG, "Freezing blacklisted or unapproved app on install: $packageName")
         SafeDpmGateway.executeRawBlocking(
             context = appContext,
             tag = BlackBoxRecorder.TAG_SHIELD,

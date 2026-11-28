@@ -14,6 +14,7 @@ import com.drmohammed.antiporn.data.repository.ApprovalRepository
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.ota.repository.OtaRepository
 import com.drmohammed.antiporn.provisioning.ui.SystemAppsManagerViewModel
+import com.drmohammed.antiporn.waqf.repository.WaqfRepository
 import com.drmohammed.antiporn.ui.accountability.AccountabilityViewModel
 import com.drmohammed.antiporn.ui.accountability.GuardianApprovalsHubViewModel
 import com.drmohammed.antiporn.ui.accountability.GuardianControlViewModel
@@ -31,6 +32,7 @@ import com.drmohammed.antiporn.work.WatchdogHealthWorker
 import com.drmohammed.antiporn.notification.manager.AppNotificationManager
 import com.drmohammed.antiporn.notification.repository.NotificationRepository
 import com.drmohammed.antiporn.ui.notification.NotificationCenterViewModel
+import com.drmohammed.antiporn.ui.waqf.WaqfSupportViewModel
 import com.drmohammed.antiporn.waqfa.data.WaqfaDao
 import com.drmohammed.antiporn.waqfa.data.WaqfaRepository
 import com.drmohammed.antiporn.waqfa.engine.WaqfaSessionManager
@@ -91,6 +93,7 @@ class AppModuleTest : KoinTest {
             AppInventoryManager::class,
             GoogleAuthManager::class,
             OtaRepository::class,
+            WaqfRepository::class,
             MainViewModel::class,
             HomeViewModel::class,
             SelfControlViewModel::class,
@@ -104,6 +107,7 @@ class AppModuleTest : KoinTest {
             SystemAppsManagerViewModel::class,
             com.drmohammed.antiporn.provisioning.ui.ProvisioningWizardViewModel::class,
             SettingsViewModel::class,
+            WaqfSupportViewModel::class,
             NotificationRepository::class,
             AppNotificationManager::class,
             NotificationCenterViewModel::class,
@@ -124,7 +128,7 @@ class AppModuleTest : KoinTest {
                 registeredTypes.contains(expected)
             )
         }
-        assertEquals(40, registeredTypes.size)
+        assertEquals(42, registeredTypes.size)
     }
 
     @Test

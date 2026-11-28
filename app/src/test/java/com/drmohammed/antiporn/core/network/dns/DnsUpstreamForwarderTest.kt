@@ -5,11 +5,13 @@ import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import java.nio.ByteBuffer
 import java.util.concurrent.CountDownLatch
@@ -17,6 +19,16 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 class DnsUpstreamForwarderTest {
+
+    @Before
+    fun setUp() {
+        DnsResilienceManager.resetStateSync()
+    }
+
+    @After
+    fun tearDown() {
+        DnsResilienceManager.resetStateSync()
+    }
 
     @Test
     fun testForwarderPortStrippingCacheGuardAndServfailRefusedFailover() = runBlocking {
@@ -262,7 +274,7 @@ class DnsUpstreamForwarderTest {
         // Mock resilience state into FALLBACK_LOCAL_VPN_DOH
         val stateLockField = DnsResilienceManager.javaClass.getDeclaredField("stateLock")
         stateLockField.isAccessible = true
-        val lock = stateLockField.get(DnsResilienceManager)
+        val lock = requireNotNull(stateLockField.get(DnsResilienceManager))
         val activeModeField = DnsResilienceManager.javaClass.getDeclaredField("activeMode")
         activeModeField.isAccessible = true
         synchronized(lock) {
@@ -278,6 +290,47 @@ class DnsUpstreamForwarderTest {
         } finally {
             synchronized(lock) {
                 activeModeField.set(DnsResilienceManager, DnsResilienceManager.DnsResilienceMode.PRIMARY_STRICT_DOT)
+            }
+        }
+    }
+
+    @Test
+    fun testForwarder_duringRestoringPrimaryFence_abortsWithoutCallingDot853() = runBlocking {
+        val calls = mutableListOf<String>()
+        val forwarder = DnsUpstreamForwarder(
+            vpnService = object : VpnService() {},
+            lruCache = DnsLruCache(16),
+            dotQueryExecutor = { host, _, _ ->
+                calls.add("dot:$host")
+                null
+            },
+            dohQueryExecutor = { _, _ ->
+                calls.add("doh:443")
+                null
+            },
+            udpQueryExecutor = { ip, _, _ ->
+                calls.add("udp:$ip")
+                null
+            }
+        )
+
+        val stateLockField = DnsResilienceManager.javaClass.getDeclaredField("stateLock")
+        stateLockField.isAccessible = true
+        val lock = requireNotNull(stateLockField.get(DnsResilienceManager))
+        val restoringField = DnsResilienceManager.javaClass.getDeclaredField("isRestoringPrimary")
+        restoringField.isAccessible = true
+        synchronized(lock) {
+            restoringField.set(DnsResilienceManager, true)
+        }
+
+        try {
+            val query = buildMinimalQuery(0x3002.toShort())
+            val resolved = forwarder.resolve("example.com", 1, 0x3002.toShort(), query)
+            assertNull(resolved)
+            assertTrue("No doomed DoT/DoH/UDP calls may run while TUN is restoring primary", calls.isEmpty())
+        } finally {
+            synchronized(lock) {
+                restoringField.set(DnsResilienceManager, false)
             }
         }
     }

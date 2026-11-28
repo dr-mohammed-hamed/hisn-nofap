@@ -409,12 +409,12 @@ object CloudSyncManager {
             val activePartners = db.partnerDao().getAllPartnersBlocking().filter { it.status == PartnerEntity.STATUS_ACTIVE }
             val hasPendingTeardownAck = hasPendingCloudTeardownAck(appCtx)
 
-            if (!isSupervised && activePartners.isEmpty() && !hasPendingTeardownAck) {
+            if (!isSupervised && activePartners.isEmpty() && !hasPendingTeardownAck && currentPairingSession == null) {
                 safeLog(Log.INFO, "No active supervision relationships found. Rolling back cloud sync to false.")
                 currentPairingSession = null
                 setCloudSyncEnabled(appCtx, false)
             } else {
-                safeLog(Log.DEBUG, "Retaining cloud sync (supervised=$isSupervised, partners=${activePartners.size}, pendingTeardownAck=$hasPendingTeardownAck).")
+                safeLog(Log.DEBUG, "Retaining cloud sync (supervised=$isSupervised, partners=${activePartners.size}, pendingTeardownAck=$hasPendingTeardownAck, activePairing=${currentPairingSession != null}).")
             }
         } catch (e: Exception) {
             safeLog(Log.WARN, "Error evaluating auto-rollback: ${e.message}")

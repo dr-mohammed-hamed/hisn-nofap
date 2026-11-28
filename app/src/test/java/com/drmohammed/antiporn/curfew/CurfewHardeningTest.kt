@@ -12,7 +12,7 @@ import java.util.TimeZone
 
 /**
  * Regression tests for Thursday same-day curfew windows, partial-release package tracking,
- * and Nap veto invariants over curfew snooze requests.
+ * and Fortress veto invariants over curfew snooze requests.
  */
 class CurfewHardeningTest {
 
@@ -226,46 +226,55 @@ class CurfewHardeningTest {
     }
 
     @Test
-    fun testCurfewEnforcer_snoozeRejectedWhileNapIsActive() {
+    fun testCurfewEnforcer_snoozeRejectedWhileFortressIsActive() {
         val prefsMap = mutableMapOf<String, InMemoryPrefs>()
         val context = object : ContextWrapper(null) {
             override fun getSharedPreferences(name: String?, mode: Int): SharedPreferences =
                 prefsMap.getOrPut(name ?: "default") { InMemoryPrefs() }
             override fun getApplicationContext(): Context = this
         }
-        val origElapsed = NapController.elapsedProvider
-        val origWall = NapController.wallProvider
-        val origBoot = NapController.bootCountProvider
+        val fortressController = com.drmohammed.antiporn.fortress.engine.FortressSessionController
         try {
-            NapController.elapsedProvider = { 10_000L }
-            NapController.wallProvider = { 1_000_000L }
-            NapController.bootCountProvider = { 1 }
+            fortressController.elapsedProvider = { 10_000L }
+            fortressController.wallProvider = { 1_000_000L }
+            fortressController.bootCountProvider = { 1 }
 
-            NapController.startNap(context)
-            assertTrue(NapController.isNapActive(context))
+            fortressController.startFortress(
+                context,
+                com.drmohammed.antiporn.fortress.model.FortressProfile.defaultEmergency()
+            )
+            assertTrue(fortressController.isFortressActive(context))
             assertFalse(
-                "Curfew snooze must be rejected while Nap session is active",
+                "Curfew snooze must be rejected while Fortress session is active",
                 CurfewEnforcer.snoozeCurfew(context, minutes = 15)
             )
             val curfewPrefs = prefsMap[CurfewConfig.PREFS_NAME]
             assertEquals(
-                "Snooze end timestamp must not be written when Nap vetoes snooze",
+                "Snooze end timestamp must not be written when Fortress vetoes snooze",
                 0L,
                 curfewPrefs?.getLong(CurfewConfig.KEY_CURFEW_SNOOZE_END_WALL, 0L) ?: 0L
             )
         } finally {
-            NapController.elapsedProvider = origElapsed
-            NapController.wallProvider = origWall
-            NapController.bootCountProvider = origBoot
+            fortressController.resetForTesting()
         }
     }
 
     @Test
-    fun testDaytimeHighRiskRelease_respectsGuardianApprovalAndRejectsAutoDecisions() {
+    fun testDaytimeHighRiskRelease_treatsHighRiskIdenticallyToNormalAppsAndEnforcesCustomBlacklist() {
         val highRiskPkg = "org.telegram.messenger"
 
-        // Guardian-approved high-risk app can be released during daytime unless custom-blacklisted
+        // High-risk apps are treated identically to normal apps during daytime release:
+        // only explicit customBlacklist blocks release in isHighRiskOrBlacklistedForRelease.
         assertTrue(CurfewLifecycleHandler.isApprovalEligibleForRelease(highRiskPkg, isApproved = true, decidedBy = "guardian_uid_123"))
+        assertTrue(CurfewLifecycleHandler.isApprovalEligibleForRelease(highRiskPkg, isApproved = true, decidedBy = "INITIAL_DEVICE_BASELINE"))
+        assertTrue(CurfewLifecycleHandler.isApprovalEligibleForRelease(highRiskPkg, isApproved = true, decidedBy = "AUTO_APPROVED_UNLOCKED"))
+        assertTrue(CurfewLifecycleHandler.isApprovalEligibleForRelease(highRiskPkg, isApproved = true, decidedBy = null))
+        assertFalse(CurfewLifecycleHandler.isApprovalEligibleForRelease(highRiskPkg, isApproved = false, decidedBy = "guardian_uid_123"))
+
+        // Non-high-risk approved apps remain eligible even with null decidedBy
+        assertTrue(CurfewLifecycleHandler.isApprovalEligibleForRelease("com.whatsapp", isApproved = true, decidedBy = null))
+
+        // Not in customBlacklist -> NOT blocked by isHighRiskOrBlacklistedForRelease (even if unapproved)
         assertFalse(
             CurfewLifecycleHandler.isHighRiskOrBlacklistedForRelease(
                 pkg = highRiskPkg,
@@ -273,28 +282,26 @@ class CurfewHardeningTest {
                 customBlacklist = emptySet()
             )
         )
-
-        // Approved high-risk apps (including baseline/auto-approved) are eligible for daytime release unless custom-blacklisted
-        assertTrue(CurfewLifecycleHandler.isApprovalEligibleForRelease(highRiskPkg, isApproved = true, decidedBy = "guardian_uid_123"))
-        assertTrue(CurfewLifecycleHandler.isApprovalEligibleForRelease(highRiskPkg, isApproved = true, decidedBy = "INITIAL_DEVICE_BASELINE"))
-        assertTrue(CurfewLifecycleHandler.isApprovalEligibleForRelease(highRiskPkg, isApproved = true, decidedBy = "AUTO_APPROVED_UNLOCKED"))
-        assertFalse(CurfewLifecycleHandler.isApprovalEligibleForRelease(highRiskPkg, isApproved = false, decidedBy = "guardian_uid_123"))
-
-        // Non-high-risk approved apps remain eligible even with null decidedBy
-        assertTrue(CurfewLifecycleHandler.isApprovalEligibleForRelease("com.whatsapp", isApproved = true, decidedBy = null))
-
-        // Unapproved high-risk app or explicitly custom-blacklisted app stays suspended
-        assertTrue(
+        assertFalse(
             CurfewLifecycleHandler.isHighRiskOrBlacklistedForRelease(
                 pkg = highRiskPkg,
                 approvedPackages = emptySet(),
                 customBlacklist = emptySet()
             )
         )
+
+        // Explicitly custom-blacklisted app stays suspended regardless of approval set
         assertTrue(
             CurfewLifecycleHandler.isHighRiskOrBlacklistedForRelease(
                 pkg = highRiskPkg,
                 approvedPackages = setOf(highRiskPkg),
+                customBlacklist = setOf(highRiskPkg)
+            )
+        )
+        assertTrue(
+            CurfewLifecycleHandler.isHighRiskOrBlacklistedForRelease(
+                pkg = highRiskPkg,
+                approvedPackages = emptySet(),
                 customBlacklist = setOf(highRiskPkg)
             )
         )
@@ -403,6 +410,26 @@ class CurfewHardeningTest {
     }
 
     @Test
+    fun testCurfewConfig_pendingDpmPrivateDnsSyncPersistenceAndTeardownClear() {
+        val prefs = InMemoryPrefs()
+        val context = object : ContextWrapper(null) {
+            override fun getSharedPreferences(name: String?, mode: Int): SharedPreferences = prefs
+            override fun getApplicationContext(): Context = this
+        }
+
+        assertFalse(CurfewConfig.isPendingDpmPrivateDnsSync(context))
+        assertEquals(null, CurfewConfig.getPendingDpmPrivateDnsHost(context))
+
+        CurfewConfig.setPendingDpmPrivateDnsSync(context, true, "family.adguard-dns.com")
+        assertTrue(CurfewConfig.isPendingDpmPrivateDnsSync(context))
+        assertEquals("family.adguard-dns.com", CurfewConfig.getPendingDpmPrivateDnsHost(context))
+
+        CurfewConfig.clearTransientFlagsForTeardown(context)
+        assertFalse(CurfewConfig.isPendingDpmPrivateDnsSync(context))
+        assertEquals(null, CurfewConfig.getPendingDpmPrivateDnsHost(context))
+    }
+
+    @Test
     fun testWatchdog_localVpnWithUnaffiliatedFamilyDoT_suppressesDesync() {
         val mode: String? = "hostname"
         val specifier = "family.cloudflare-dns.com"
@@ -489,5 +516,69 @@ class CurfewHardeningTest {
             com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.releaseTransitionToken(token)
             com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.resetForTest()
         }
+    }
+
+    @Test
+    fun testCurfewLifecycleSupport_isVpnReconcileNeeded_skipsDaytimeStartAndReleasesBlackhole() {
+        assertFalse(
+            "Daytime DNS_FILTERING_ONLY without active tunnel must not trigger curfew release reconcile",
+            CurfewLifecycleSupport.isVpnReconcileNeeded(
+                instantKill = false,
+                requiredMode = CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY,
+                isServiceOrTunnelActive = false,
+                currentMode = CurfewBlackholeVpnService.VpnMode.IDLE
+            )
+        )
+        assertFalse(
+            "Already running daytime DNS_FILTERING_ONLY must not trigger release reconcile",
+            CurfewLifecycleSupport.isVpnReconcileNeeded(
+                instantKill = false,
+                requiredMode = CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY,
+                isServiceOrTunnelActive = true,
+                currentMode = CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY
+            )
+        )
+        assertTrue(
+            "Active CURFEW_BLACKHOLE must trigger release reconcile when downgrading to DNS_FILTERING_ONLY",
+            CurfewLifecycleSupport.isVpnReconcileNeeded(
+                instantKill = false,
+                requiredMode = CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY,
+                isServiceOrTunnelActive = true,
+                currentMode = CurfewBlackholeVpnService.VpnMode.CURFEW_BLACKHOLE
+            )
+        )
+        assertTrue(
+            "Active tunnel must trigger release reconcile when requiredMode is IDLE",
+            CurfewLifecycleSupport.isVpnReconcileNeeded(
+                instantKill = false,
+                requiredMode = CurfewBlackholeVpnService.VpnMode.IDLE,
+                isServiceOrTunnelActive = true,
+                currentMode = CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY
+            )
+        )
+        assertFalse(
+            "Inactive tunnel with requiredMode=IDLE needs no reconcile",
+            CurfewLifecycleSupport.isVpnReconcileNeeded(
+                instantKill = false,
+                requiredMode = CurfewBlackholeVpnService.VpnMode.IDLE,
+                isServiceOrTunnelActive = false,
+                currentMode = CurfewBlackholeVpnService.VpnMode.IDLE
+            )
+        )
+        assertFalse(
+            "Instant kill active must skip release reconcile",
+            CurfewLifecycleSupport.isVpnReconcileNeeded(
+                instantKill = true,
+                requiredMode = CurfewBlackholeVpnService.VpnMode.IDLE,
+                isServiceOrTunnelActive = true,
+                currentMode = CurfewBlackholeVpnService.VpnMode.CURFEW_BLACKHOLE
+            )
+        )
+    }
+
+    @Test
+    fun testCurfewVpnTunnelHandler_shouldConfigureIpv6Tunnel() {
+        assertFalse(CurfewVpnTunnelHandler.shouldConfigureIpv6Tunnel(false))
+        assertTrue(CurfewVpnTunnelHandler.shouldConfigureIpv6Tunnel(true))
     }
 }

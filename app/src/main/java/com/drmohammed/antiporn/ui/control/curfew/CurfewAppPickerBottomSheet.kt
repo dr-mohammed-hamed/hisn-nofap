@@ -31,8 +31,8 @@ import kotlinx.coroutines.withContext
 import timber.log.Timber
 
 /**
- * نافذة سفلية منبثقة مبسطة لاختيار التطبيقات المستثناة أثناء الحظر الليلي.
- * تتيح تحديد: «تشغيل» (فتح التطبيق) و«نت» (اتصال الإنترنت أثناء عزل الحظر).
+ * Ù†Ø§ÙØ°Ø© Ø³ÙÙ„ÙŠØ© Ù…Ù†Ø¨Ø«Ù‚Ø© Ù…Ø¨Ø³Ø·Ø© Ù„Ø§Ø®ØªÙŠØ§Ø± Ø§Ù„ØªØ·Ø¨ÙŠÙ‚Ø§Øª Ø§Ù„Ù…Ø³ØªØ«Ù†Ø§Ø© Ø£Ø«Ù†Ø§Ø¡ Ø§Ù„Ø­Ø¸Ø± Ø§Ù„Ù„ÙŠÙ„ÙŠ.
+ * ØªØªÙŠØ­ ØªØ­Ø¯ÙŠØ¯: Â«ØªØ´ØºÙŠÙ„Â» (ÙØªØ­ Ø§Ù„ØªØ·Ø¨ÙŠÙ‚) ÙˆÂ«Ù†ØªÂ» (Ø§ØªØµØ§Ù„ Ø§Ù„Ø¥Ù†ØªØ±Ù†Øª Ø£Ø«Ù†Ø§Ø¡ Ø¹Ø²Ù„ Ø§Ù„Ø­Ø¸Ø±).
  */
 class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
 
@@ -98,9 +98,15 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
         }
 
         val isRemote = arguments?.getBoolean(ARG_IS_REMOTE) ?: false
+        val allowNetSelection = arguments?.getBoolean(ARG_ALLOW_NET_SELECTION, true) ?: true
+
+        _binding?.tvPickerDesc?.setText(
+            if (allowNetSelection) R.string.curfew_picker_desc else R.string.curfew_picker_desc_run_only
+        )
 
         adapter = CurfewAppPickerAdapter(
             isLocalMode = !isRemote,
+            allowNetSelection = allowNetSelection,
             onRunToggled = { item, isChecked ->
                 item.isRunAllowed = isChecked
                 if (!isChecked) {
@@ -277,7 +283,6 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
         if (pkg == selfPackageName) return true
         if (criticalPackages.contains(pkg)) return true
         if (AppPolicyRegistry.isImmune(pkg)) return true
-        if (AppSuspensionShield.isBlacklisted(pkg)) return true
         if (customBlacklist.contains(pkg)) return true
         if (CurfewConfig.KNOWN_APP_STORES.contains(pkg)) return true
         if (CurfewConfig.CURFEW_SEARCH_APPS.contains(pkg)) return true
@@ -307,8 +312,13 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
     }
 
     private fun confirmSelection() {
+        val allowNetSelection = arguments?.getBoolean(ARG_ALLOW_NET_SELECTION, true) ?: true
         val newWhitelist = allApps.filter { it.isRunAllowed }.map { it.packageName }.toSet()
-        val newVpnBypass = allApps.filter { it.isRunAllowed && it.isNetAllowed }.map { it.packageName }.toSet()
+        val newVpnBypass = if (allowNetSelection) {
+            allApps.filter { it.isRunAllowed && it.isNetAllowed }.map { it.packageName }.toSet()
+        } else {
+            emptySet()
+        }
 
         val resultBundle = Bundle().apply {
             putStringArrayList(RESULT_WHITELIST, ArrayList(newWhitelist))
@@ -337,13 +347,15 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
         private const val KEY_SAVED_RUN_WHITELIST = "key_saved_run_whitelist"
         private const val KEY_SAVED_VPN_BYPASS = "key_saved_vpn_bypass"
         private const val KEY_SEARCH_QUERY = "key_search_query"
+        private const val ARG_ALLOW_NET_SELECTION = "arg_allow_net_selection"
 
         fun newInstance(
             isRemote: Boolean,
             wardId: String,
             initialWhitelist: Set<String>,
             initialVpnBypass: Set<String>,
-            blacklist: Set<String>
+            blacklist: Set<String>,
+            allowNetSelection: Boolean = true
         ): CurfewAppPickerBottomSheet {
             return CurfewAppPickerBottomSheet().apply {
                 arguments = Bundle().apply {
@@ -352,6 +364,7 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
                     putStringArrayList(ARG_INITIAL_WHITELIST, ArrayList(initialWhitelist))
                     putStringArrayList(ARG_INITIAL_VPN_BYPASS, ArrayList(initialVpnBypass))
                     putStringArrayList(ARG_BLACKLIST, ArrayList(blacklist))
+                    putBoolean(ARG_ALLOW_NET_SELECTION, allowNetSelection)
                 }
             }
         }

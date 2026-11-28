@@ -114,6 +114,41 @@ interface SafeDpmPolicyBridge : SafeDpmBaseGateway {
         return resultCode
     }
 
+    fun formatPrivateDnsErrorLabel(statusCode: Int, sdkInt: Int = Build.VERSION.SDK_INT): String? {
+        if (sdkInt < Build.VERSION_CODES.Q) return null
+        return when (statusCode) {
+            DevicePolicyManager.PRIVATE_DNS_SET_NO_ERROR -> null
+            DevicePolicyManager.PRIVATE_DNS_SET_ERROR_HOST_NOT_SERVING ->
+                "PRIVATE_DNS_SET_ERROR_HOST_NOT_SERVING ($statusCode)"
+            DevicePolicyManager.PRIVATE_DNS_SET_ERROR_FAILURE_SETTING ->
+                "PRIVATE_DNS_SET_ERROR_FAILURE_SETTING ($statusCode)"
+            else -> "PRIVATE_DNS_SET_UNKNOWN_ERROR ($statusCode)"
+        }
+    }
+
+    private fun recordPrivateDnsDpmTelemetry(
+        context: Context,
+        tag: String,
+        actionName: String,
+        res: DpmExecutionResult<Int>,
+        targetMeta: String
+    ) {
+        if (res is DpmExecutionResult.Success) {
+            val statusCode = res.data
+            val isNoError = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+                statusCode == DevicePolicyManager.PRIVATE_DNS_SET_NO_ERROR
+            BlackBoxRecorder.record(
+                context = context,
+                tag = tag,
+                actionName = actionName,
+                isSuccess = isNoError,
+                executionTimeMs = res.executionTimeMs,
+                errorDetails = formatPrivateDnsErrorLabel(statusCode),
+                metadata = "$targetMeta, code=$statusCode"
+            )
+        }
+    }
+
     suspend fun setGlobalPrivateDns(
         context: Context,
         host: String?,
@@ -122,7 +157,8 @@ interface SafeDpmPolicyBridge : SafeDpmBaseGateway {
         context = context,
         tag = tag,
         actionName = "setGlobalPrivateDns",
-        metadata = "host=$host"
+        metadata = "host=$host",
+        recordSuccess = false
     ) { dpm, admin ->
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val status = if (host.isNullOrBlank()) {
@@ -134,6 +170,8 @@ interface SafeDpmPolicyBridge : SafeDpmBaseGateway {
         } else {
             0
         }
+    }.also { res ->
+        recordPrivateDnsDpmTelemetry(context, tag, "setGlobalPrivateDns", res, "host=$host")
     }
 
     fun setGlobalPrivateDnsBlocking(
@@ -144,7 +182,8 @@ interface SafeDpmPolicyBridge : SafeDpmBaseGateway {
         context = context,
         tag = tag,
         actionName = "setGlobalPrivateDnsBlocking",
-        metadata = "host=$host"
+        metadata = "host=$host",
+        recordSuccess = false
     ) { dpm, admin ->
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val status = if (host.isNullOrBlank()) {
@@ -156,6 +195,8 @@ interface SafeDpmPolicyBridge : SafeDpmBaseGateway {
         } else {
             0
         }
+    }.also { res ->
+        recordPrivateDnsDpmTelemetry(context, tag, "setGlobalPrivateDnsBlocking", res, "host=$host")
     }
 
     suspend fun setGlobalPrivateDnsOpportunistic(
@@ -165,13 +206,16 @@ interface SafeDpmPolicyBridge : SafeDpmBaseGateway {
         context = context,
         tag = tag,
         actionName = "setGlobalPrivateDnsOpportunistic",
-        metadata = "mode=opportunistic"
+        metadata = "mode=opportunistic",
+        recordSuccess = false
     ) { dpm, admin ->
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             validatePrivateDnsResult(dpm.setGlobalPrivateDnsModeOpportunistic(admin))
         } else {
             0
         }
+    }.also { res ->
+        recordPrivateDnsDpmTelemetry(context, tag, "setGlobalPrivateDnsOpportunistic", res, "mode=opportunistic")
     }
 
     fun setGlobalPrivateDnsOpportunisticBlocking(
@@ -181,13 +225,16 @@ interface SafeDpmPolicyBridge : SafeDpmBaseGateway {
         context = context,
         tag = tag,
         actionName = "setGlobalPrivateDnsOpportunisticBlocking",
-        metadata = "mode=opportunistic"
+        metadata = "mode=opportunistic",
+        recordSuccess = false
     ) { dpm, admin ->
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             validatePrivateDnsResult(dpm.setGlobalPrivateDnsModeOpportunistic(admin))
         } else {
             0
         }
+    }.also { res ->
+        recordPrivateDnsDpmTelemetry(context, tag, "setGlobalPrivateDnsOpportunisticBlocking", res, "mode=opportunistic")
     }
 
     fun getAutoTimeRequiredBlocking(

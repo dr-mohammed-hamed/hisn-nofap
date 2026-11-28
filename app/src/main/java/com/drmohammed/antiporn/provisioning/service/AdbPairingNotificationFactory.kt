@@ -13,6 +13,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.RemoteInput
 import com.drmohammed.antiporn.MainActivity
 import com.drmohammed.antiporn.R
+import com.drmohammed.antiporn.notification.registry.NotificationRegistry
 import com.drmohammed.antiporn.provisioning.engine.OemProvisioningHelper
 import com.drmohammed.antiporn.provisioning.engine.ProvisioningAckStore
 import com.drmohammed.antiporn.provisioning.receiver.PairingCodeReceiver
@@ -47,8 +48,19 @@ internal object AdbPairingNotificationFactory {
             vibrationPattern = VIBRATION_PATTERN
         }
 
+        val criticalChannel = NotificationChannel(
+            NotificationRegistry.CHANNEL_ID_CRITICAL_ALERTS,
+            context.getString(R.string.critical_alerts_channel_name),
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = context.getString(R.string.critical_alerts_channel_desc)
+            setShowBadge(true)
+            enableVibration(true)
+        }
+
         manager.createNotificationChannel(guideChannel)
         manager.createNotificationChannel(headsUpChannel)
+        manager.createNotificationChannel(criticalChannel)
     }
 
     fun buildBalOptionsBundle(): Bundle? {
@@ -90,7 +102,7 @@ internal object AdbPairingNotificationFactory {
     fun buildSuccessNotification(context: Context, mainIntent: Intent, optionsBundle: Bundle?): Notification {
         val successPending = PendingIntent.getActivity(
             context,
-            1002,
+            NotificationRegistry.REQUEST_CODE_PROVISIONING_SUCCESS,
             mainIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             optionsBundle
@@ -107,7 +119,7 @@ internal object AdbPairingNotificationFactory {
     fun buildBlockingUsersNotification(context: Context, wizardIntent: Intent, optionsBundle: Bundle?): Notification {
         val wizardPending = PendingIntent.getActivity(
             context,
-            1003,
+            NotificationRegistry.REQUEST_CODE_BLOCKING_USERS,
             wizardIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             optionsBundle
@@ -127,15 +139,106 @@ internal object AdbPairingNotificationFactory {
             .build()
     }
 
-    fun buildFailureNotification(context: Context, errorMessage: String): Notification {
-        val wizardIntent = Intent(context, ProvisioningWizardActivity::class.java).apply {
+    fun buildOemPermissionNotification(
+        context: Context,
+        wizardIntent: Intent,
+        optionsBundle: Bundle?,
+        message: String
+    ): Notification {
+        val wizardPending = PendingIntent.getActivity(
+            context,
+            NotificationRegistry.REQUEST_CODE_OEM_PERMISSION,
+            wizardIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            optionsBundle
+        )
+        return NotificationCompat.Builder(context, AdbPairingNotificationService.CHANNEL_ID_HEADS_UP)
+            .setSmallIcon(R.drawable.ic_shield_device_owner)
+            .setContentTitle(context.getString(R.string.provisioning_oem_notif_title))
+            .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setVibrate(VIBRATION_PATTERN)
+            .setContentIntent(wizardPending)
+            .setAutoCancel(true)
+            .build()
+    }
+
+    fun buildAccountsBlockingNotification(
+        context: Context,
+        wizardIntent: Intent,
+        optionsBundle: Bundle?,
+        accountLabels: List<String>
+    ): Notification {
+        val wizardPending = PendingIntent.getActivity(
+            context,
+            NotificationRegistry.REQUEST_CODE_ACCOUNTS_BLOCKING,
+            wizardIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            optionsBundle
+        )
+        val summary = accountLabels
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .takeIf { it.isNotEmpty() }
+            ?.joinToString(", ")
+            ?: context.getString(R.string.provisioning_accounts_fallback_label)
+        val desc = context.getString(R.string.provisioning_accounts_notif_desc, summary)
+        return NotificationCompat.Builder(context, AdbPairingNotificationService.CHANNEL_ID_HEADS_UP)
+            .setSmallIcon(R.drawable.ic_shield_device_owner)
+            .setContentTitle(context.getString(R.string.provisioning_accounts_notif_title))
+            .setContentText(desc)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(desc))
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setVibrate(VIBRATION_PATTERN)
+            .setContentIntent(wizardPending)
+            .setAutoCancel(true)
+            .build()
+    }
+
+    fun buildFreezeRecoveryNotification(
+        context: Context,
+        affectedCount: Int,
+        wizardIntent: Intent,
+        optionsBundle: Bundle?
+    ): Notification {
+        val wizardPending = PendingIntent.getActivity(
+            context,
+            NotificationRegistry.REQUEST_CODE_FREEZE_RECOVERY,
+            wizardIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            optionsBundle
+        )
+        val recoveryDesc = context.getString(R.string.provisioning_recovery_notif_desc, affectedCount)
+        return NotificationCompat.Builder(context, NotificationRegistry.CHANNEL_ID_CRITICAL_ALERTS)
+            .setSmallIcon(R.drawable.ic_shield_device_owner)
+            .setContentTitle(context.getString(R.string.provisioning_recovery_notif_title))
+            .setContentText(recoveryDesc)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(recoveryDesc))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setContentIntent(wizardPending)
+            .setAutoCancel(true)
+            .build()
+    }
+
+    fun buildFailureNotification(
+        context: Context,
+        errorMessage: String,
+        targetIntent: Intent? = null,
+        optionsBundle: Bundle? = null
+    ): Notification {
+        val wizardIntent = targetIntent ?: Intent(context, ProvisioningWizardActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
         val wizardPending = PendingIntent.getActivity(
             context,
-            1004,
+            NotificationRegistry.REQUEST_CODE_PROVISIONING_FAILURE,
             wizardIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            optionsBundle
         )
         return NotificationCompat.Builder(context, AdbPairingNotificationService.CHANNEL_ID_HEADS_UP)
             .setSmallIcon(R.drawable.ic_shield_device_owner)
@@ -163,7 +266,7 @@ internal object AdbPairingNotificationFactory {
             }
             val ackPendingIntent = PendingIntent.getActivity(
                 context,
-                103,
+                NotificationRegistry.REQUEST_CODE_ACK_WIZARD,
                 ackWizardIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
@@ -196,14 +299,14 @@ internal object AdbPairingNotificationFactory {
         val replyPendingIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             PendingIntent.getForegroundService(
                 context,
-                101,
+                NotificationRegistry.REQUEST_CODE_PAIRING_REPLY,
                 replyIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
             )
         } else {
             PendingIntent.getService(
                 context,
-                101,
+                NotificationRegistry.REQUEST_CODE_PAIRING_REPLY,
                 replyIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
             )

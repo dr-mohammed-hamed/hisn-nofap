@@ -294,6 +294,17 @@ class TelemetryAndGatewayTest {
         val formatted = AiTelemetryReporter.formatEventDetails(event)
         assertFalse(formatted.contains("rawUidValue9999"))
         assertFalse(formatted.contains("rawWardValue8888"))
+
+        val dpmAlwaysOnEvent = DiagnosticEventDto(
+            timestamp = 1730577600000L,
+            tag = BlackBoxRecorder.TAG_DPM,
+            actionName = "setAlwaysOnVpnPackageBlocking",
+            executionTimeMs = 9L,
+            isSuccess = true,
+            errorDetails = null,
+            contextMetadata = "vpn=null, lockdown=false"
+        )
+        assertEquals("vpn=null, lockdown=false", AiTelemetryReporter.formatEventDetails(dpmAlwaysOnEvent))
     }
 
     @Test
@@ -547,12 +558,28 @@ class TelemetryAndGatewayTest {
         }
 
         sanitizeAndCall(lockdown = false, bypassedPackages = setOf("com.example.app"))
-        assertFalse(passedLockdown!!)
+        assertEquals(false, passedLockdown)
         assertNull("bypassedPackages must be sanitized to null when lockdown is false", passedBypassedPackages)
 
         sanitizeAndCall(lockdown = true, bypassedPackages = setOf("com.example.app"))
-        assertTrue(passedLockdown!!)
+        assertEquals(true, passedLockdown)
         assertEquals(setOf("com.example.app"), passedBypassedPackages)
+    }
+
+    @Test
+    fun testFormatPrivateDnsErrorLabel_mapsDpmStatusCodesAccurately() {
+        val qSdk = android.os.Build.VERSION_CODES.Q
+        assertNull(SafeDpmGateway.formatPrivateDnsErrorLabel(android.app.admin.DevicePolicyManager.PRIVATE_DNS_SET_NO_ERROR, qSdk))
+        assertEquals(
+            "PRIVATE_DNS_SET_ERROR_HOST_NOT_SERVING (1)",
+            SafeDpmGateway.formatPrivateDnsErrorLabel(android.app.admin.DevicePolicyManager.PRIVATE_DNS_SET_ERROR_HOST_NOT_SERVING, qSdk)
+        )
+        assertEquals(
+            "PRIVATE_DNS_SET_ERROR_FAILURE_SETTING (2)",
+            SafeDpmGateway.formatPrivateDnsErrorLabel(android.app.admin.DevicePolicyManager.PRIVATE_DNS_SET_ERROR_FAILURE_SETTING, qSdk)
+        )
+        assertEquals("PRIVATE_DNS_SET_UNKNOWN_ERROR (99)", SafeDpmGateway.formatPrivateDnsErrorLabel(99, qSdk))
+        assertNull(SafeDpmGateway.formatPrivateDnsErrorLabel(1, android.os.Build.VERSION_CODES.P))
     }
 
     private class InMemorySharedPreferences : SharedPreferences {

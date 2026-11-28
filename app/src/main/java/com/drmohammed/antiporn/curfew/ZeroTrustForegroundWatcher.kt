@@ -101,7 +101,7 @@ object ZeroTrustForegroundWatcher {
                 pkg.isNotBlank() &&
                     !criticalPackages.contains(pkg) &&
                     !AppPolicyRegistry.isImmune(pkg) &&
-                    (!curfewWhitelisted.contains(pkg) || AppPolicyRegistry.isHighRisk(pkg)) &&
+                    !curfewWhitelisted.contains(pkg) &&
                     isPackageInstalled(pm, pkg)
             }.toSet()
 
@@ -139,16 +139,7 @@ object ZeroTrustForegroundWatcher {
                     com.drmohammed.antiporn.telemetry.SafeDpmGateway.isPackageSuspendedBlocking(appContext, pkg).getOrNull() != true
                 }
                 if (unapprovedToSuspend.isNotEmpty()) {
-                    try {
-                        com.drmohammed.antiporn.telemetry.SafeDpmGateway.setPackagesSuspendedBlocking(
-                            appContext,
-                            unapprovedToSuspend.toTypedArray(),
-                            true
-                        )
-                        Log.i(TAG, "Event-driven Zero-Trust reconciliation: Enforced DPM suspension on ${unapprovedToSuspend.size} packages: $unapprovedToSuspend")
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to enforce DPM suspension during syncWatcherState", e)
-                    }
+                    ApprovalRepository.getInstance(appContext).enforcePendingSuspensionsLocked(unapprovedToSuspend)
                 }
             }
         }

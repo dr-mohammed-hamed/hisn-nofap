@@ -49,39 +49,56 @@ class PageShieldAlarmReceiver : BroadcastReceiver() {
         private const val TAG = "AntiPorn_PageShieldAlarm"
 
         suspend fun liftFreezeChecked(context: Context, packageName: String, appName: String) {
-            // 1. مسح سجل درع الصفحات دائماً لانتهاء مؤقت الدرع
-            PageShieldFreezeStore.clearFreeze(context, packageName)
-
-            // 2. التحقق من دروع التجميد الأخرى لمنع أي تضارب
-            if (isAppFrozenByOtherShields(context, packageName)) {
-                Timber.tag(TAG).w("Package $packageName will remain suspended: active constraint from Curfew/Waqfa/Blacklist")
-                BlackBoxRecorder.recordPageShield(
-                    context = context,
-                    action = "UNFREEZE_SKIPPED_DUE_TO_OTHER_SHIELD",
-                    isSuccess = true,
-                    details = "pkg=$packageName, app=$appName"
+            val record = PageShieldFreezeStore.getFrozenRecord(context, packageName)
+            val nowTrusted = com.drmohammed.antiporn.core.time.TrustedTimeProvider.currentTimeMillis(context)
+            if (record != null && !record.isExpired(nowTrusted)) {
+                Timber.tag(TAG).w(
+                    "Premature PageShield unfreeze alarm for $packageName (trustedNow=$nowTrusted < end=${record.freezeEndEpochMs}); rescheduling"
                 )
+                PageShieldAlarmScheduler.scheduleUnfreezeAlarm(context, packageName, appName, record.freezeEndEpochMs)
                 return
             }
 
-            // 3. فك التجميد بأمان عبر SafeDpmGateway
-            if (SafeDpmGateway.isDeviceOwner(context)) {
-                val res = SafeDpmGateway.setPackagesSuspended(context, arrayOf(packageName), false)
-                if (res.isSuccess) {
-                    Timber.tag(TAG).i("Successfully unsuspended $packageName via SafeDpmGateway")
-                    PageShieldNotificationHelper.postUnfreezeNotification(context, appName)
+            val res = synchronized(CurfewEnforcer) {
+                // 1. التحقق من دروع التجميد الأخرى لمنع أي تضارب
+                if (isAppFrozenByOtherShields(context, packageName)) {
+                    PageShieldFreezeStore.clearFreeze(context, packageName)
+                    Timber.tag(TAG).w("Package $packageName will remain suspended: active constraint from Curfew/Waqfa/Blacklist")
                     BlackBoxRecorder.recordPageShield(
                         context = context,
-                        action = "APP_UNFROZEN",
+                        action = "UNFREEZE_SKIPPED_DUE_TO_OTHER_SHIELD",
                         isSuccess = true,
                         details = "pkg=$packageName, app=$appName"
                     )
-                } else {
-                    val errMsg = (res as? com.drmohammed.antiporn.telemetry.DpmExecutionResult.Failure)?.message ?: "Unknown DPM failure"
-                    Timber.tag(TAG).e("Failed unsuspending $packageName via SafeDpmGateway: $errMsg")
+                    return@synchronized null
                 }
+
+                if (!SafeDpmGateway.isDeviceOwner(context)) {
+                    PageShieldFreezeStore.clearFreeze(context, packageName)
+                    Timber.tag(TAG).w("Device Owner missing; cleared store only for $packageName")
+                    return@synchronized null
+                }
+
+                // 2. فك التجميد بأمان عبر SafeDpmGateway ومسح السجل عند النجاح
+                SafeDpmGateway.setPackagesSuspendedBlocking(context, arrayOf(packageName), false).also { dpmRes ->
+                    if (dpmRes.isSuccess) {
+                        PageShieldFreezeStore.clearFreeze(context, packageName)
+                    }
+                }
+            } ?: return
+
+            if (res.isSuccess) {
+                Timber.tag(TAG).i("Successfully unsuspended $packageName via SafeDpmGateway")
+                PageShieldNotificationHelper.postUnfreezeNotification(context, appName)
+                BlackBoxRecorder.recordPageShield(
+                    context = context,
+                    action = "APP_UNFROZEN",
+                    isSuccess = true,
+                    details = "pkg=$packageName, app=$appName"
+                )
             } else {
-                Timber.tag(TAG).w("Device Owner missing; cleared store only for $packageName")
+                val errMsg = (res as? com.drmohammed.antiporn.telemetry.DpmExecutionResult.Failure)?.message ?: "Unknown DPM failure"
+                Timber.tag(TAG).e("Failed unsuspending $packageName via SafeDpmGateway: $errMsg")
             }
         }
 
@@ -94,12 +111,16 @@ class PageShieldAlarmReceiver : BroadcastReceiver() {
                 return true
             }
 
-            // ب. حظر التجوال (Curfew)
+            // ب. حظر التجوال أو الحصن (Curfew / Fortress)
             if (CurfewEnforcer.isEffectiveBlockActive(context)) {
                 val curfewTargets = CurfewAppResolver.getCurfewTargetPackages(context)
+                val immunePackages = CurfewAppResolver.resolveImmunePackages(context)
                 val trackedCurfew = CurfewConfig.getTrackedSuspendedPackages(context)
                 val storesAndSearch = CurfewConfig.OEM_APP_STORES + CurfewConfig.CURFEW_SEARCH_APPS
-                if (curfewTargets.contains(packageName) || trackedCurfew.contains(packageName) || storesAndSearch.contains(packageName)) {
+                if (curfewTargets.contains(packageName) ||
+                    (trackedCurfew.contains(packageName) && !immunePackages.contains(packageName)) ||
+                    storesAndSearch.contains(packageName)
+                ) {
                     return true
                 }
             }
@@ -111,16 +132,17 @@ class PageShieldAlarmReceiver : BroadcastReceiver() {
 
             val policy = try {
                 PolicyRepository.getInstance(context).getCurrentPolicy()
-            } catch (_: Exception) {
-                null
+            } catch (e: Exception) {
+                Timber.tag(TAG).e(e, "Failed reading policy in isAppFrozenByOtherShields; failing closed")
+                return true
             }
 
-            if (policy != null && policy.customBlacklistPackages.contains(packageName)) {
+            if (policy.customBlacklistPackages.contains(packageName)) {
                 return true
             }
 
             // د. نظام انعدام الثقة (Zero-Trust) والتطبيقات المعلقة للموافقة
-            if (policy?.lockNewInstallsUntilApproved == true) {
+            if (policy.lockNewInstallsUntilApproved) {
                 try {
                     val approvalRepo = ApprovalRepository.getInstance(context)
                     val unapproved = approvalRepo.getLocalPendingApprovals()

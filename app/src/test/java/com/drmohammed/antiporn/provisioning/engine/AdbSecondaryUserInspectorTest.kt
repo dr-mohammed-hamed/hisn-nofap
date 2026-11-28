@@ -21,13 +21,11 @@ class AdbSecondaryUserInspectorTest {
         override fun getPackageManager(): PackageManager? = null
     }
 
-    private fun shellOk(stdout: String, stderr: String = ""): ShellResult {
-        return ShellResult(stdout.toByteArray(), stderr.toByteArray(), 0)
-    }
+    private fun shellOk(stdout: String, stderr: String = ""): ShellResult =
+        ShellResult(stdout.toByteArray(), stderr.toByteArray(), 0)
 
-    private fun shellFail(stdout: String = "", stderr: String = "", exitCode: Int = 1): ShellResult {
-        return ShellResult(stdout.toByteArray(), stderr.toByteArray(), exitCode)
-    }
+    private fun shellFail(stdout: String = "", stderr: String = "", exitCode: Int = 1): ShellResult =
+        ShellResult(stdout.toByteArray(), stderr.toByteArray(), exitCode)
 
     @Test
     fun parsePmListUsers_parsesSamsungXiaomiOppoPixelColonsAndExcludesPrimaryAndCurrent() {
@@ -45,10 +43,7 @@ class AdbSecondaryUserInspectorTest {
         """.trimIndent()
 
         val parsedDefaultCurrent = AdbSecondaryUserInspector.parsePmListUsers(output, currentUserId = 0)
-        assertEquals(
-            listOf(150, 152, 95, 999, 10, 11, 12),
-            parsedDefaultCurrent.map { it.userId }
-        )
+        assertEquals(listOf(150, 152, 95, 999, 10, 11, 12), parsedDefaultCurrent.map { it.userId })
         assertFalse(parsedDefaultCurrent.any { it.userId <= 0 })
         assertEquals("XSpace", parsedDefaultCurrent.first { it.userId == 999 }.rawName)
         assertEquals("Work: Profile", parsedDefaultCurrent.first { it.userId == 10 }.rawName)
@@ -60,85 +55,30 @@ class AdbSecondaryUserInspectorTest {
 
     @Test
     fun classifyAdbUser_allCategoriesArabicEnglishAndLocalProfileType() {
-        assertEquals(
-            BlockingUserCategory.SECURE_FOLDER,
-            AdbSecondaryUserInspector.classifyAdbUser(150, "Secure Folder", "10061030", isSamsung = true)
-        )
-        assertEquals(
-            BlockingUserCategory.SECURE_FOLDER,
-            AdbSecondaryUserInspector.classifyAdbUser(152, "المجلد الآمن", "61090", isSamsung = true)
-        )
-        assertEquals(
-            BlockingUserCategory.SECURE_FOLDER,
-            AdbSecondaryUserInspector.classifyAdbUser(155, "User 155", "1000", isSamsung = true)
-        )
-        assertEquals(
-            BlockingUserCategory.SECONDARY_USER,
-            AdbSecondaryUserInspector.classifyAdbUser(150, "Secondary", "1000", isSamsung = false)
-        )
+        assertEquals(BlockingUserCategory.SECURE_FOLDER, AdbSecondaryUserInspector.classifyAdbUser(150, "Secure Folder", "10061030", true))
+        assertEquals(BlockingUserCategory.SECURE_FOLDER, AdbSecondaryUserInspector.classifyAdbUser(152, "المجلد الآمن", "61090", true))
+        assertEquals(BlockingUserCategory.SECURE_FOLDER, AdbSecondaryUserInspector.classifyAdbUser(155, "User 155", "1000", true))
+        assertEquals(BlockingUserCategory.SECONDARY_USER, AdbSecondaryUserInspector.classifyAdbUser(150, "Secondary", "1000", false))
 
-        assertEquals(
-            BlockingUserCategory.DUAL_APP_CLONE,
-            AdbSecondaryUserInspector.classifyAdbUser(95, "DUAL_APP", "20001010", isSamsung = true)
-        )
-        assertEquals(
-            BlockingUserCategory.DUAL_APP_CLONE,
-            AdbSecondaryUserInspector.classifyAdbUser(96, "Clone", "1010", isSamsung = false)
-        )
-        assertEquals(
-            BlockingUserCategory.DUAL_APP_CLONE,
-            AdbSecondaryUserInspector.classifyAdbUser(999, "XSpace", "20001010", isSamsung = false)
-        )
-        assertEquals(
-            BlockingUserCategory.DUAL_APP_CLONE,
-            AdbSecondaryUserInspector.classifyAdbUser(22, "تطبيق مزدوج", "1010", isSamsung = false)
-        )
+        assertEquals(BlockingUserCategory.DUAL_APP_CLONE, AdbSecondaryUserInspector.classifyAdbUser(95, "DUAL_APP", "20001010", true))
+        assertEquals(BlockingUserCategory.DUAL_APP_CLONE, AdbSecondaryUserInspector.classifyAdbUser(96, "Clone", "1010", false))
+        assertEquals(BlockingUserCategory.DUAL_APP_CLONE, AdbSecondaryUserInspector.classifyAdbUser(999, "XSpace", "20001010", false))
+        assertEquals(BlockingUserCategory.DUAL_APP_CLONE, AdbSecondaryUserInspector.classifyAdbUser(22, "تطبيق مزدوج", "1010", false))
 
+        assertEquals(BlockingUserCategory.PRIVATE_SPACE, AdbSecondaryUserInspector.classifyAdbUser(11, "Private space", "1090", false))
+        assertEquals(BlockingUserCategory.PRIVATE_SPACE, AdbSecondaryUserInspector.classifyAdbUser(13, "المساحة الخاصة", "1090", false))
         assertEquals(
             BlockingUserCategory.PRIVATE_SPACE,
-            AdbSecondaryUserInspector.classifyAdbUser(11, "Private space", "1090", isSamsung = false)
-        )
-        assertEquals(
-            BlockingUserCategory.PRIVATE_SPACE,
-            AdbSecondaryUserInspector.classifyAdbUser(13, "المساحة الخاصة", "1090", isSamsung = false)
-        )
-        assertEquals(
-            BlockingUserCategory.PRIVATE_SPACE,
-            AdbSecondaryUserInspector.classifyAdbUser(
-                14,
-                "Espace privé",
-                "1090",
-                isSamsung = false,
-                localProfileType = SecondaryProfileDetector.ProfileType.PRIVATE_SPACE
-            )
+            AdbSecondaryUserInspector.classifyAdbUser(14, "Espace privé", "1090", false, SecondaryProfileDetector.ProfileType.PRIVATE_SPACE)
         )
 
-        assertEquals(
-            BlockingUserCategory.GUEST_USER,
-            AdbSecondaryUserInspector.classifyAdbUser(12, "Guest", "4", isSamsung = false)
-        )
-        assertEquals(
-            BlockingUserCategory.GUEST_USER,
-            AdbSecondaryUserInspector.classifyAdbUser(15, "ضيف", "10", isSamsung = false)
-        )
+        assertEquals(BlockingUserCategory.GUEST_USER, AdbSecondaryUserInspector.classifyAdbUser(12, "Guest", "4", false))
+        assertEquals(BlockingUserCategory.GUEST_USER, AdbSecondaryUserInspector.classifyAdbUser(15, "ضيف", "10", false))
 
-        assertEquals(
-            BlockingUserCategory.WORK_PROFILE,
-            AdbSecondaryUserInspector.classifyAdbUser(10, "Work profile", "1030", isSamsung = false)
-        )
-        assertEquals(
-            BlockingUserCategory.WORK_PROFILE,
-            AdbSecondaryUserInspector.classifyAdbUser(17, "Island", "1010", isSamsung = false)
-        )
-        assertEquals(
-            BlockingUserCategory.WORK_PROFILE,
-            AdbSecondaryUserInspector.classifyAdbUser(18, "Shelter", "1010", isSamsung = false)
-        )
-
-        assertEquals(
-            BlockingUserCategory.SECONDARY_USER,
-            AdbSecondaryUserInspector.classifyAdbUser(20, "Ahmed", "10", isSamsung = false)
-        )
+        assertEquals(BlockingUserCategory.WORK_PROFILE, AdbSecondaryUserInspector.classifyAdbUser(10, "Work profile", "1030", false))
+        assertEquals(BlockingUserCategory.WORK_PROFILE, AdbSecondaryUserInspector.classifyAdbUser(17, "Island", "1010", false))
+        assertEquals(BlockingUserCategory.WORK_PROFILE, AdbSecondaryUserInspector.classifyAdbUser(18, "Shelter", "1010", false))
+        assertEquals(BlockingUserCategory.SECONDARY_USER, AdbSecondaryUserInspector.classifyAdbUser(20, "Ahmed", "10", false))
     }
 
     @Test
@@ -160,14 +100,45 @@ class AdbSecondaryUserInspectorTest {
         assertTrue(blockedKnox)
         assertTrue(knoxPkgs.isEmpty())
 
-        val permissionDenial = "Permission Denial: can't list packages for user 152"
-        val (deniedPkgs, blockedDenied) = AdbSecondaryUserInspector.parseThirdPartyPackagesOutput(permissionDenial)
+        val (deniedPkgs, blockedDenied) = AdbSecondaryUserInspector.parseThirdPartyPackagesOutput(
+            "Permission Denial: can't list packages for user 152"
+        )
         assertTrue(blockedDenied)
         assertTrue(deniedPkgs.isEmpty())
 
-        val doesNotHavePerm = "Shell does not have permission to access user 11"
-        val (_, blockedDoesNotHave) = AdbSecondaryUserInspector.parseThirdPartyPackagesOutput(doesNotHavePerm)
+        val (_, blockedDoesNotHave) = AdbSecondaryUserInspector.parseThirdPartyPackagesOutput(
+            "Shell does not have permission to access user 11"
+        )
         assertTrue(blockedDoesNotHave)
+    }
+
+    @Test
+    fun parseThirdPartyPackagesOutput_treatsErrorsAndLockedUserAsBlockedWhenNoPackages() {
+        val blockedPayloads = listOf(
+            "java.lang.IllegalStateException: Cannot query packages",
+            "User 11 is locked",
+            "Error: Unknown user 150",
+            "Failure [USER_LOCKED]",
+            "Cannot inspect: user locked"
+        )
+        for (payload in blockedPayloads) {
+            val (pkgs, blocked) = AdbSecondaryUserInspector.parseThirdPartyPackagesOutput(payload)
+            assertTrue("Expected blocked=true for: $payload", blocked)
+            assertTrue("Expected empty packages for: $payload", pkgs.isEmpty())
+        }
+
+        val (blankPkgs, blankBlocked) = AdbSecondaryUserInspector.parseThirdPartyPackagesOutput("")
+        assertFalse(blankBlocked)
+        assertTrue(blankPkgs.isEmpty())
+
+        val strayWarningWithPackages = """
+            Warning: Error: temporary binder notice; user locked check bypassed
+            package:com.whatsapp
+            package:com.example.failure
+        """.trimIndent()
+        val (parsedPkgs, blockedWithPkgs) = AdbSecondaryUserInspector.parseThirdPartyPackagesOutput(strayWarningWithPackages)
+        assertFalse(blockedWithPkgs)
+        assertEquals(listOf("com.whatsapp", "com.example.failure"), parsedPkgs)
     }
 
     @Test
@@ -216,10 +187,7 @@ class AdbSecondaryUserInspectorTest {
 
         val failedCurrentUser = runCatching {
             AdbSecondaryUserInspector.inspectBlockingUsersWithShell(context) { cmd ->
-                when (cmd) {
-                    "am get-current-user" -> shellFail("", "Permission Denial", 1)
-                    else -> shellOk("")
-                }
+                if (cmd == "am get-current-user") shellFail("", "Permission Denial", 1) else shellOk("")
             }
         }
         assertTrue(failedCurrentUser.isFailure)
@@ -237,7 +205,7 @@ class AdbSecondaryUserInspectorTest {
     }
 
     @Test
-    fun removeApprovedUsersWithShell_protectsActiveUserAndHandlesSuccessAndFailure() = runBlocking {
+    fun removeApprovedUsersWithShell_protectsActiveUserAndHandlesSuccess() = runBlocking {
         val context = FakeAppContext()
         var listUsersCalls = 0
         val outcome = AdbSecondaryUserInspector.removeApprovedUsersWithShell(
@@ -249,23 +217,9 @@ class AdbSecondaryUserInspectorTest {
                 "pm list users" -> {
                     listUsersCalls++
                     if (listUsersCalls == 1) {
-                        shellOk(
-                            """
-                            Users:
-                                UserInfo{0:Owner:4c13}
-                                UserInfo{10:Active:10} running
-                                UserInfo{95:DUAL_APP:20001010}
-                                UserInfo{150:Secure Folder:10061030}
-                            """.trimIndent()
-                        )
+                        shellOk("Users:\n\tUserInfo{0:Owner:4c13}\n\tUserInfo{10:Active:10} running\n\tUserInfo{95:DUAL_APP:20001010}\n\tUserInfo{150:Secure Folder:10061030}")
                     } else {
-                        shellOk(
-                            """
-                            Users:
-                                UserInfo{0:Owner:4c13}
-                                UserInfo{10:Active:10} running
-                            """.trimIndent()
-                        )
+                        shellOk("Users:\n\tUserInfo{0:Owner:4c13}\n\tUserInfo{10:Active:10} running")
                     }
                 }
                 "pm remove-user 95" -> shellOk("Success: removed user")
@@ -281,30 +235,93 @@ class AdbSecondaryUserInspectorTest {
     }
 
     @Test
+    fun removeApprovedUsersWithShell_returnsImmediatelyWithoutPollingWhenAllRemovalsFailImmediately() = runBlocking {
+        val context = FakeAppContext()
+        var listUsersCalls = 0
+        val initialUsers = "Users:\n\tUserInfo{0:Owner:4c13} running\n\tUserInfo{95:DUAL_APP:20001010}\n\tUserInfo{150:Secure Folder:10061030}"
+        val outcome = AdbSecondaryUserInspector.removeApprovedUsersWithShell(
+            context = context,
+            approvedUserIds = setOf(95, 150)
+        ) { cmd ->
+            when (cmd) {
+                "am get-current-user" -> shellOk("0")
+                "pm list users" -> {
+                    listUsersCalls++
+                    shellOk(initialUsers)
+                }
+                "pm remove-user 95" -> shellFail("", "Error: couldn't remove user 95", 1)
+                "pm remove-user 150" -> shellOk("Failure: Couldn't remove user 150")
+                else -> shellOk("")
+            }
+        }
+
+        assertEquals("pm list users must be called only twice (initial + final inspect)", 2, listUsersCalls)
+        assertTrue(outcome.removedIds.isEmpty())
+        assertEquals(listOf(95, 150), outcome.failedIds)
+        assertEquals(setOf(95, 150), outcome.failureMessages.keys)
+        assertEquals(setOf(95, 150), outcome.remainingUsers.map { it.userId }.toSet())
+    }
+
+    @Test
+    fun removeApprovedUsersWithShell_mixedImmediateFailureAndSuccessSkipsPollingForFailedId() = runBlocking {
+        val context = FakeAppContext()
+        var listUsersCalls = 0
+        val outcome = AdbSecondaryUserInspector.removeApprovedUsersWithShell(
+            context = context,
+            approvedUserIds = setOf(95, 150)
+        ) { cmd ->
+            when (cmd) {
+                "am get-current-user" -> shellOk("0")
+                "pm list users" -> {
+                    listUsersCalls++
+                    if (listUsersCalls == 1) {
+                        shellOk("Users:\n\tUserInfo{0:Owner:4c13} running\n\tUserInfo{95:DUAL_APP:20001010}\n\tUserInfo{150:Secure Folder:10061030}")
+                    } else {
+                        shellOk("Users:\n\tUserInfo{0:Owner:4c13} running\n\tUserInfo{150:Secure Folder:10061030}")
+                    }
+                }
+                "pm remove-user 95" -> shellOk("Success: removed user")
+                "pm remove-user 150" -> shellFail("", "Failure: Couldn't remove user 150", 1)
+                "pm list packages -3 --user 150" -> shellFail("", "SecurityException: denied", 1)
+                else -> shellOk("")
+            }
+        }
+
+        assertEquals(3, listUsersCalls)
+        assertEquals(listOf(95), outcome.removedIds)
+        assertEquals(listOf(150), outcome.failedIds)
+        assertEquals(listOf(150), outcome.remainingUsers.map { it.userId })
+        assertTrue(outcome.failureMessages[150]?.contains("Failure") == true)
+    }
+
+    @Test
+    fun filterSafePackagesForFreeze_acceptsValidPackagesAndRejectsShellInjection() {
+        val input = listOf(
+            "com.google.android.gms",
+            "com.whatsapp",
+            "org.telegram.messenger",
+            "com.example_1.app_2",
+            "com.bad; rm -rf /",
+            "com.bad && id",
+            "$(whoami)",
+            "singleword",
+            "com..double"
+        )
+        val filtered = AdbPromotionExecutor.filterSafePackagesForFreeze(input)
+        assertEquals(
+            listOf("com.google.android.gms", "com.whatsapp", "org.telegram.messenger", "com.example_1.app_2"),
+            filtered
+        )
+    }
+
+    @Test
     fun blockingSecondaryUserJson_roundTripAndNullSafetyFilter() {
         val original = listOf(
-            BlockingSecondaryUser(
-                userId = 150,
-                rawName = "Secure Folder",
-                flagsHex = "10061030",
-                category = BlockingUserCategory.SECURE_FOLDER,
-                installedAppNames = emptyList(),
-                installedPackageNames = emptyList(),
-                isAppsInspectionBlocked = true
-            ),
-            BlockingSecondaryUser(
-                userId = 95,
-                rawName = "DUAL_APP",
-                flagsHex = "20001010",
-                category = BlockingUserCategory.DUAL_APP_CLONE,
-                installedAppNames = listOf("WhatsApp", "Telegram"),
-                installedPackageNames = listOf("com.whatsapp", "org.telegram.messenger"),
-                isAppsInspectionBlocked = false
-            )
+            BlockingSecondaryUser(150, "Secure Folder", "10061030", BlockingUserCategory.SECURE_FOLDER, emptyList(), emptyList(), true),
+            BlockingSecondaryUser(95, "DUAL_APP", "20001010", BlockingUserCategory.DUAL_APP_CLONE, listOf("WhatsApp", "Telegram"), listOf("com.whatsapp", "org.telegram.messenger"), false)
         )
 
-        val json = BlockingSecondaryUser.listToJson(original)
-        val restored = BlockingSecondaryUser.listFromJson(json)
+        val restored = BlockingSecondaryUser.listFromJson(BlockingSecondaryUser.listToJson(original))
         assertEquals(original, restored)
 
         val unsafeJson = """[{"userId":0,"rawName":"Owner","flagsHex":"4c13","category":"SECONDARY_USER"}]"""
@@ -312,11 +329,9 @@ class AdbSecondaryUserInspectorTest {
         assertTrue(BlockingSecondaryUser.listFromJson(null).isEmpty())
         assertTrue(BlockingSecondaryUser.listFromJson("not-json").isEmpty())
 
-        val invalidCategoryJson = """{"userId":95,"rawName":"Dual","category":"UNKNOWN_CAT"}"""
-        assertNull(BlockingSecondaryUser.fromJson(JSONObject(invalidCategoryJson)))
+        assertNull(BlockingSecondaryUser.fromJson(JSONObject("""{"userId":95,"rawName":"Dual","category":"UNKNOWN_CAT"}""")))
 
-        val jsonNullField = """{"userId":95,"rawName":null,"flagsHex":null,"category":"DUAL_APP_CLONE"}"""
-        val parsedNull = BlockingSecondaryUser.fromJson(JSONObject(jsonNullField))
+        val parsedNull = BlockingSecondaryUser.fromJson(JSONObject("""{"userId":95,"rawName":null,"flagsHex":null,"category":"DUAL_APP_CLONE"}"""))
         assertEquals("", parsedNull?.rawName)
         assertEquals("", parsedNull?.flagsHex)
     }
@@ -324,50 +339,17 @@ class AdbSecondaryUserInspectorTest {
     @Test
     fun removeSecondaryUsersAndPromote_rejectsMissingConsentEmptyOrNonPositiveUserIds() = runBlocking {
         val context = FakeAppContext()
-
-        val noConsent = DeviceOwnerPromoter.removeSecondaryUsersAndPromote(
-            context = context,
-            connectPort = 5555,
-            approvedUserIds = setOf(150),
-            explicitUserConsentConfirmed = false
+        val invalidCases = listOf(
+            false to setOf(150),
+            true to emptySet(),
+            true to setOf(0),
+            true to setOf(150, 0),
+            true to setOf(-1)
         )
-        assertTrue(noConsent is PromotionResult.Failure)
-        assertTrue((noConsent as PromotionResult.Failure).message.contains("Explicit user consent"))
-
-        val emptyIds = DeviceOwnerPromoter.removeSecondaryUsersAndPromote(
-            context = context,
-            connectPort = 5555,
-            approvedUserIds = emptySet(),
-            explicitUserConsentConfirmed = true
-        )
-        assertTrue(emptyIds is PromotionResult.Failure)
-        assertTrue((emptyIds as PromotionResult.Failure).message.contains("Explicit user consent"))
-
-        val zeroUser = DeviceOwnerPromoter.removeSecondaryUsersAndPromote(
-            context = context,
-            connectPort = 5555,
-            approvedUserIds = setOf(0),
-            explicitUserConsentConfirmed = true
-        )
-        assertTrue(zeroUser is PromotionResult.Failure)
-        assertTrue((zeroUser as PromotionResult.Failure).message.contains("Explicit user consent"))
-
-        val mixedWithZero = DeviceOwnerPromoter.removeSecondaryUsersAndPromote(
-            context = context,
-            connectPort = 5555,
-            approvedUserIds = setOf(150, 0),
-            explicitUserConsentConfirmed = true
-        )
-        assertTrue(mixedWithZero is PromotionResult.Failure)
-        assertTrue((mixedWithZero as PromotionResult.Failure).message.contains("Explicit user consent"))
-
-        val negativeUser = DeviceOwnerPromoter.removeSecondaryUsersAndPromote(
-            context = context,
-            connectPort = 5555,
-            approvedUserIds = setOf(-1),
-            explicitUserConsentConfirmed = true
-        )
-        assertTrue(negativeUser is PromotionResult.Failure)
-        assertTrue((negativeUser as PromotionResult.Failure).message.contains("Explicit user consent"))
+        for ((consent, ids) in invalidCases) {
+            val result = DeviceOwnerPromoter.removeSecondaryUsersAndPromote(context, 5555, ids, consent)
+            assertTrue(result is PromotionResult.Failure)
+            assertTrue((result as PromotionResult.Failure).message.contains("Explicit user consent"))
+        }
     }
 }

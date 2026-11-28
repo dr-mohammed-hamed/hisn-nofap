@@ -168,9 +168,9 @@
                     android:textSize="12sp" />
             </LinearLayout>
 
-            <!-- Center Screen: 1-Hour Nap Hero Section -->
+            <!-- Center Screen: Emergency Fortress Hero & Custom Fortresses -->
             <com.google.android.material.card.MaterialCardView
-                android:id="@+id/cardHeroNapSection"
+                android:id="@+id/cardHeroFortresses"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="28dp"
@@ -183,29 +183,40 @@
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:gravity="center"
+                    android:gravity="center_horizontal"
                     android:orientation="vertical"
                     android:padding="20dp">
 
-                    <!-- Nap Hero Action Button -->
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="10dp"
+                        android:fontFamily="@font/tajawal"
+                        android:text="@string/home_fortresses_section_title"
+                        android:textAlignment="viewStart"
+                        android:textColor="?attr/colorPrimary"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+
+                    <!-- Emergency Fortress Hero Action Button -->
                     <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnHeroNapStart"
+                        android:id="@+id/btnHeroEmergencyFortressStart"
                         style="@style/Widget.Material3.Button"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:minHeight="60dp"
-                        android:text="@string/btn_hero_nap_start"
+                        android:text="@string/fortress_emergency_default_name"
                         android:textSize="16sp"
                         android:textStyle="bold"
                         app:cornerRadius="18dp"
-                        app:icon="@drawable/ic_shield_curfew"
+                        app:icon="@drawable/ic_shield_time"
                         app:iconGravity="textStart"
                         app:iconPadding="10dp"
                         app:iconSize="22dp" />
 
-                    <!-- Active Nap Live Countdown & Controls (Shown when Nap is Active) -->
+                    <!-- Active Emergency Fortress Live Countdown & Extend Controls -->
                     <LinearLayout
-                        android:id="@+id/layoutNapActiveControls"
+                        android:id="@+id/layoutEmergencyFortressActive"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="12dp"
@@ -214,7 +225,7 @@
                         android:visibility="gone">
 
                         <TextView
-                            android:id="@+id/tvHeroNapCountdown"
+                            android:id="@+id/tvEmergencyFortressCountdown"
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
@@ -225,36 +236,47 @@
                             android:textColor="@color/status_green"
                             android:textSize="14sp"
                             android:textStyle="bold"
-                            tools:text="قيلولة نشطة (59:45)" />
+                            tools:text="المتبقي: 59:45" />
 
                         <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnHeroNapExtend"
+                            android:id="@+id/btnEmergencyFortressExtend"
                             style="@style/Widget.Material3.Button.OutlinedButton"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:minHeight="48dp"
                             android:layout_marginStart="10dp"
-                            android:text="@string/btn_hero_nap_extend"
+                            android:minHeight="48dp"
+                            android:text="@string/notif_action_extend_fortress"
                             android:textSize="12sp"
                             app:cornerRadius="12dp" />
                     </LinearLayout>
 
                     <TextView
-                        android:id="@+id/tvNapSubtext"
-                        android:layout_width="wrap_content"
+                        android:id="@+id/tvEmergencyFortressSubtitle"
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="10dp"
-                        android:text="@string/card_nap_subtext"
+                        android:fontFamily="@font/tajawal"
+                        android:gravity="center"
+                        android:text="@string/home_emergency_fortress_desc"
                         android:textColor="?attr/colorOnSurfaceVariant"
                         android:textSize="12sp" />
+
+                    <!-- Dynamic Custom Fortresses Container -->
+                    <LinearLayout
+                        android:id="@+id/layoutCustomFortressesContainer"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:orientation="vertical"
+                        android:visibility="gone" />
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btnGrantUsageAccess"
                         style="@style/Widget.Material3.Button.TextButton"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:minHeight="48dp"
                         android:layout_marginTop="4dp"
+                        android:minHeight="48dp"
                         android:text="@string/btn_grant_usage_access"
                         android:textColor="@color/status_orange"
                         android:textSize="12sp"

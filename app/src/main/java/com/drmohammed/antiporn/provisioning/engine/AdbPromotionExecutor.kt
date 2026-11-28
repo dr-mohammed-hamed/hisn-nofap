@@ -1,411 +1,384 @@
 package com.drmohammed.antiporn.provisioning.engine
 
-import android.accounts.AccountManager
 import android.content.Context
 import android.os.Build
+import android.provider.Settings
+import androidx.annotation.VisibleForTesting
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
+import com.drmohammed.antiporn.provisioning.engine.AdbShellValidation.ADMIN_COMPONENT_REGEX
+import com.drmohammed.antiporn.provisioning.engine.AdbShellValidation.combinedOutput
+import com.drmohammed.antiporn.provisioning.engine.AdbShellValidation.isDpmUserOptionUnsupported
+import com.drmohammed.antiporn.provisioning.engine.AdbShellValidation.sanitizeUserFacingError
 import com.drmohammed.antiporn.shields.DnsShield
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
+import com.drmohammed.antiporn.telemetry.SafeDpmGateway
 import io.github.rhythmcache.adb.AdbClient
+import io.github.rhythmcache.adb.ShellResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import timber.log.Timber
 
+internal sealed class SetupBypassOutcome {
+    data object Success : SetupBypassOutcome()
+    data class OemPermissionRequired(val oemType: OemPermissionType, val message: String) : SetupBypassOutcome()
+    data class SecondaryUsersError(val rawOutput: String) : SetupBypassOutcome()
+    data class AccountsBlockedFailure(val rawOutput: String) : SetupBypassOutcome()
+    data class HardStopFailure(val message: String) : SetupBypassOutcome()
+}
+
 /**
  * Executes low-level ADB shell commands for zero-account Device Owner promotion,
- * Private DNS pre-provisioning, and post-promotion Wireless ADB cleanup.
+ * Private DNS pre-provisioning, and OEM fail-fast permission diagnostics.
  */
 internal object AdbPromotionExecutor {
 
     private const val TAG = "AntiPorn_PromoterExec"
 
+    @VisibleForTesting
+    internal fun filterSafePackagesForFreeze(packages: Collection<String>): List<String> =
+        AdbPackageFreezeManager.filterSafePackagesForFreeze(packages)
+
+    internal fun isDpmOwnerSetSuccess(output: String): Boolean =
+        (output.contains("Success", ignoreCase = true) || output.contains("device owner set", ignoreCase = true)) &&
+            !output.contains("error", ignoreCase = true) && !output.contains("exception", ignoreCase = true)
+
+    private fun isPermissionDenialOutput(lower: String): Boolean =
+        lower.contains("securityexception") || lower.contains("permission denial") ||
+            lower.contains("usb debugging (security settings)") || lower.contains("permission monitoring")
+
+    private fun isAccountsBlockedOutput(lower: String): Boolean =
+        lower.contains("already some accounts") || lower.contains("accounts on the device") ||
+            lower.contains("has accounts") || lower.contains("account(s) on the device") ||
+            lower.contains("existing accounts")
+
+    private fun buildOemPermissionOutcome(context: Context?, rawOutput: String, isRealmeOrOppo: Boolean): SetupBypassOutcome.OemPermissionRequired {
+        val oemType = if (isRealmeOrOppo) OemPermissionType.REALME_OPPO_PERMISSION_MONITORING else OemPermissionType.XIAOMI_SECURITY_SETTINGS
+        val msg = context.safeGetString(
+            if (isRealmeOrOppo) R.string.provisioning_error_realme_permission_monitoring else R.string.provisioning_error_xiaomi_security_settings
+        ) ?: sanitizeUserFacingError(rawOutput)
+        return SetupBypassOutcome.OemPermissionRequired(oemType, msg)
+    }
+
+    private fun buildOemOrHardStop(context: Context?, rawOutput: String, isXiaomi: Boolean, isRealmeOrOppo: Boolean): SetupBypassOutcome =
+        if (isRealmeOrOppo || isXiaomi) buildOemPermissionOutcome(context, rawOutput, isRealmeOrOppo)
+        else SetupBypassOutcome.HardStopFailure(formatFriendlyError(context, rawOutput))
+
+    internal fun classifySetupBypassOutput(context: Context?, output: String, isXiaomi: Boolean, isRealmeOrOppo: Boolean): SetupBypassOutcome {
+        if (isDpmOwnerSetSuccess(output)) return SetupBypassOutcome.Success
+        val lower = output.lowercase()
+        return when {
+            lower.contains("already several users") || lower.contains("user 150") || lower.contains("user 95") ->
+                SetupBypassOutcome.SecondaryUsersError(output)
+            isPermissionDenialOutput(lower) -> buildOemOrHardStop(context, output, isXiaomi, isRealmeOrOppo)
+            isAccountsBlockedOutput(lower) -> SetupBypassOutcome.AccountsBlockedFailure(output)
+            !lower.contains("already provisioned") && lower.contains("already") && lower.contains("owner") ->
+                SetupBypassOutcome.HardStopFailure(context.safeGetString(R.string.provisioning_error_already_device_owner) ?: sanitizeUserFacingError(output))
+            lower.contains("precondition 99") ->
+                SetupBypassOutcome.HardStopFailure(context.safeGetString(R.string.provisioning_error_realme_precondition) ?: sanitizeUserFacingError(output))
+            else -> SetupBypassOutcome.HardStopFailure(formatFriendlyError(context, output))
+        }
+    }
+
     suspend fun executeZeroAccountPromotion(
         context: Context,
         client: AdbClient,
         adminComponent: String,
-        userId: Int = 0
+        userId: Int = 0,
+        reconnectProvider: (suspend () -> AdbClient?)? = null
+    ): PromotionResult = executeZeroAccountPromotionWithShell(
+        context = context, adminComponent = adminComponent, userId = userId,
+        shellExecutor = { cmd -> client.shell(cmd) }, reconnectProvider = reconnectProvider,
+        postPromotionVerifier = { appCtx, uid, didBypass -> AdbPostPromotionVerifier.verifyAndFinalize(appCtx, client, uid, didBypass, reconnectProvider) },
+        packageFreezeRunner = { appCtx, comp, uid -> AdbPackageFreezeManager.executePackageFreezePromotion(appCtx, client, comp, uid, reconnectProvider) }
+    )
+
+    @VisibleForTesting
+    internal suspend fun executeZeroAccountPromotionWithShell(
+        context: Context,
+        adminComponent: String,
+        userId: Int = 0,
+        shellExecutor: suspend (String) -> ShellResult,
+        reconnectProvider: (suspend () -> AdbClient?)? = null,
+        isDeviceOwnerChecker: (Context) -> Boolean = { SafeDpmGateway.isDeviceOwner(it) },
+        canWriteSecureSettingsChecker: (Context) -> Boolean = { AccessibilitySelfActivator.canWriteSecureSettings(it) },
+        blockingUsersInspector: suspend (Context) -> List<BlockingSecondaryUser> = { AdbSecondaryUserInspector.inspectBlockingUsersWithShell(it, shellExecutor) },
+        sdkVersionProvider: suspend () -> Int = { shellExecutor("getprop ro.build.version.sdk").stdoutText.trim().toIntOrNull() ?: Build.VERSION.SDK_INT },
+        isXiaomi: Boolean = OemProvisioningHelper.isXiaomi(),
+        isRealmeOrOppo: Boolean = OemProvisioningHelper.isRealmeOrOppo(),
+        postPromotionVerifier: suspend (Context, Int, Boolean) -> PromotionResult,
+        packageFreezeRunner: suspend (Context, String, Int) -> PromotionResult
     ): PromotionResult {
+        require(userId >= 0) { "Invalid userId: $userId" }
+        require(ADMIN_COMPONENT_REGEX.matches(adminComponent)) { "Unsafe adminComponent: $adminComponent" }
+
         val appContext = context.applicationContext ?: context
-        val blockingUsers = AdbSecondaryUserInspector.inspectBlockingUsers(appContext, client)
+        AdbPackageFreezeManager.healStrandedPackagesWithShell(appContext, shellExecutor)
+        if (ProvisioningFreezeRecoveryStore.getPendingLedger(appContext) != null) {
+            return PromotionResult.Failure(appContext.safeGetString(R.string.provisioning_error_heal_failed) ?: "Could not re-enable stranded apps via Wireless ADB.")
+        }
+        if (isDeviceOwnerChecker(appContext)) return postPromotionVerifier(appContext, userId, true)
+
+        val blockingUsers = blockingUsersInspector(appContext)
         if (blockingUsers.isNotEmpty()) {
-            Timber.tag(TAG).w("Found ${blockingUsers.size} blocking secondary user(s); pausing promotion for explicit user confirmation")
+            Timber.tag(TAG).w("Found ${blockingUsers.size} blocking secondary user(s); pausing promotion")
             return PromotionResult.SecondaryUsersBlocking(blockingUsers)
         }
+        grantPrivilegedAppOpsAndPermissions(appContext, shellExecutor, canWriteSecureSettingsChecker, isXiaomi, isRealmeOrOppo)?.let { return it }
+        provisionPrivateDnsViaAdbWithShell(appContext, shellExecutor)
+        tryFastPathZeroAccountPromotion(appContext, shellExecutor, adminComponent, userId, isXiaomi, isRealmeOrOppo, blockingUsersInspector, postPromotionVerifier)?.let { return it }
 
-        grantPrivilegedAppOpsAndPermissions(appContext, client)
-        provisionPrivateDnsViaAdb(appContext, client)
-
-        val sdkVerStr = client.shell("getprop ro.build.version.sdk").stdoutText.trim()
-        val sdkVersion = sdkVerStr.toIntOrNull() ?: Build.VERSION.SDK_INT
+        val sdkVersion = sdkVersionProvider()
         Timber.tag(TAG).i("Executing zero-account promotion on Android SDK $sdkVersion for user $userId")
-
-        val result = if (sdkVersion >= 31) {
-            when (val primaryResult = executeSetupBypassPromotion(appContext, client, adminComponent, userId)) {
-                is PromotionResult.Success -> {
-                    disableWirelessAdbSilently(client)
-                    primaryResult
-                }
-                is PromotionResult.SecondaryUsersBlocking -> primaryResult
-                is PromotionResult.Failure -> {
-                    Timber.tag(TAG).w("Setup bypass failed: ${primaryResult.message}. Attempting fallback to package freeze...")
-                    val fallbackResult = executePackageFreezePromotion(appContext, client, adminComponent, userId)
-                    if (fallbackResult is PromotionResult.Success) {
-                        disableWirelessAdbSilently(client)
-                    }
-                    fallbackResult
-                }
-            }
-        } else {
-            val legacyResult = executePackageFreezePromotion(appContext, client, adminComponent, userId)
-            if (legacyResult is PromotionResult.Success) {
-                disableWirelessAdbSilently(client)
-            }
-            legacyResult
-        }
-
-        if (result is PromotionResult.Failure) {
-            val lowerMsg = result.message.lowercase()
-            val secFolderLocalized = appContext.getString(R.string.provisioning_error_samsung_secure_folder)
-            if (result.message == secFolderLocalized ||
-                lowerMsg.contains("already several users") ||
-                lowerMsg.contains("user 150") ||
-                lowerMsg.contains("user 95")
-            ) {
-                val rechecked = AdbSecondaryUserInspector.inspectBlockingUsers(appContext, client)
-                if (rechecked.isNotEmpty()) {
-                    Timber.tag(TAG).w("Safety fallback re-check detected ${rechecked.size} blocking user(s)")
-                    return PromotionResult.SecondaryUsersBlocking(rechecked)
+        if (sdkVersion >= 31) {
+            return when (val outcome = executeSetupBypassPromotion(appContext, shellExecutor, adminComponent, userId, isXiaomi, isRealmeOrOppo)) {
+                is SetupBypassOutcome.Success -> postPromotionVerifier(appContext, userId, true)
+                is SetupBypassOutcome.OemPermissionRequired -> PromotionResult.OemPermissionRequired(outcome.oemType, outcome.message)
+                is SetupBypassOutcome.SecondaryUsersError -> recheckSecondaryUsersOrFail(appContext, blockingUsersInspector, outcome.rawOutput)
+                is SetupBypassOutcome.HardStopFailure -> PromotionResult.Failure(outcome.message)
+                is SetupBypassOutcome.AccountsBlockedFailure -> {
+                    Timber.tag(TAG).w("Setup bypass blocked by accounts; invoking triple-failsafe package freeze")
+                    delay(1500L)
+                    runPackageFreezeAndVerify(appContext, adminComponent, userId, packageFreezeRunner, postPromotionVerifier, didSetupBypass = true)
                 }
             }
         }
-
-        return result
+        return runPackageFreezeAndVerify(appContext, adminComponent, userId, packageFreezeRunner, postPromotionVerifier)
     }
 
-    private suspend fun grantPrivilegedAppOpsAndPermissions(appContext: Context, client: AdbClient) {
+    private suspend fun runPackageFreezeAndVerify(
+        appContext: Context, adminComponent: String, userId: Int,
+        packageFreezeRunner: suspend (Context, String, Int) -> PromotionResult,
+        postPromotionVerifier: suspend (Context, Int, Boolean) -> PromotionResult,
+        didSetupBypass: Boolean = false
+    ): PromotionResult = packageFreezeRunner(appContext, adminComponent, userId).let {
+        if (it is PromotionResult.Success) postPromotionVerifier(appContext, userId, didSetupBypass) else it
+    }
+
+    private suspend fun tryFastPathZeroAccountPromotion(
+        appContext: Context, shellExecutor: suspend (String) -> ShellResult, adminComponent: String, userId: Int,
+        isXiaomi: Boolean, isRealmeOrOppo: Boolean,
+        blockingUsersInspector: suspend (Context) -> List<BlockingSecondaryUser>,
+        postPromotionVerifier: suspend (Context, Int, Boolean) -> PromotionResult
+    ): PromotionResult? {
+        val audit = AdbAccountInspector.inspectAccountsWithShell(
+            appContext, userId, shellExecutor, AdbAccountInspector.buildLocalAuthenticatorMap(appContext), recordAudit = true
+        )
+        if (audit.status != AccountAuditStatus.VERIFIED_ZERO) return null
+        val output = runDpmSetDeviceOwnerWithUserFallback(userId, adminComponent, shellExecutor)
+        BlackBoxRecorder.recordPairing(appContext, "FAST_PATH_ZERO_ACCOUNT_DPM", isSuccess = isDpmOwnerSetSuccess(output), details = sanitizeUserFacingError(output))
+        return when (val outcome = classifySetupBypassOutput(appContext, output, isXiaomi, isRealmeOrOppo)) {
+            is SetupBypassOutcome.Success -> postPromotionVerifier(appContext, userId, false)
+            is SetupBypassOutcome.OemPermissionRequired -> PromotionResult.OemPermissionRequired(outcome.oemType, outcome.message)
+            is SetupBypassOutcome.SecondaryUsersError -> recheckSecondaryUsersOrFail(appContext, blockingUsersInspector, outcome.rawOutput)
+            is SetupBypassOutcome.AccountsBlockedFailure -> null
+            is SetupBypassOutcome.HardStopFailure -> PromotionResult.Failure(outcome.message)
+        }
+    }
+
+    private suspend fun recheckSecondaryUsersOrFail(
+        appContext: Context, blockingUsersInspector: suspend (Context) -> List<BlockingSecondaryUser>, rawOutput: String
+    ): PromotionResult = blockingUsersInspector(appContext).let {
+        if (it.isNotEmpty()) PromotionResult.SecondaryUsersBlocking(it) else PromotionResult.Failure(formatFriendlyError(appContext, rawOutput))
+    }
+
+    private fun recordSecureSettingsGrantFailure(appContext: Context, rawDetail: String, isRealmeOrOppo: Boolean, cause: Throwable? = null) {
+        val oemHint = if (isRealmeOrOppo) "Disable permission monitoring required on OPPO/Realme" else null
+        val details = listOfNotNull(oemHint, rawDetail.takeIf { it.isNotBlank() }).joinToString(" | ")
+        if (cause != null) Timber.tag(TAG).w(cause, "Failed granting WRITE_SECURE_SETTINGS via ADB: $details")
+        else Timber.tag(TAG).w("WRITE_SECURE_SETTINGS grant via ADB did not take effect: $details")
+        BlackBoxRecorder.recordPairing(appContext, "ADB_WRITE_SECURE_SETTINGS_GRANT", isSuccess = false, error = details)
+    }
+
+    private suspend fun grantPrivilegedAppOpsAndPermissions(
+        appContext: Context,
+        shellExecutor: suspend (String) -> ShellResult,
+        canWriteSecureSettingsChecker: (Context) -> Boolean,
+        isXiaomi: Boolean,
+        isRealmeOrOppo: Boolean
+    ): PromotionResult.OemPermissionRequired? {
+        if (isXiaomi) {
+            runShellStep("Read Xiaomi persist.security.adbinput") {
+                val prop = shellExecutor("getprop persist.security.adbinput").stdoutText.trim()
+                BlackBoxRecorder.recordPairing(appContext, "XIAOMI_ADB_INPUT_PROP", isSuccess = true, details = "persist.security.adbinput=${prop.ifBlank { "<blank>" }}")
+            }
+        }
+        var denialText = ""
         try {
-            val grantRes = client.shell("pm grant ${appContext.packageName} android.permission.WRITE_SECURE_SETTINGS")
-            val rawGrantOutput = (grantRes.stdoutText + "\n" + grantRes.stderrText).trim()
-            val sanitizedGrantOutput = sanitizeShellOutput(rawGrantOutput)
-            val granted = AccessibilitySelfActivator.canWriteSecureSettings(appContext)
-            if (granted) {
-                Timber.tag(TAG).i("Verified WRITE_SECURE_SETTINGS granted via ADB")
-                BlackBoxRecorder.recordPairing(
-                    appContext,
-                    "ADB_WRITE_SECURE_SETTINGS_GRANT",
-                    isSuccess = true,
-                    details = sanitizedGrantOutput.ifBlank { "granted=true" }
-                )
+            val combined = shellExecutor("pm grant ${appContext.packageName} android.permission.WRITE_SECURE_SETTINGS").combinedOutput()
+            val sanitizedOutput = sanitizeUserFacingError(combined, maxLength = 300)
+            if (canWriteSecureSettingsChecker(appContext)) {
+                BlackBoxRecorder.recordPairing(appContext, "ADB_WRITE_SECURE_SETTINGS_GRANT", isSuccess = true, details = sanitizedOutput.ifBlank { "granted=true" })
             } else {
-                val oemHint = if (OemProvisioningHelper.isRealmeOrOppo()) {
-                    "Disable permission monitoring required on OPPO/Realme"
-                } else {
-                    null
-                }
-                val details = listOfNotNull(
-                    oemHint,
-                    sanitizedGrantOutput.takeIf { it.isNotBlank() } ?: "canWriteSecureSettings=false"
-                ).joinToString(" | ")
-                Timber.tag(TAG).w("WRITE_SECURE_SETTINGS grant via ADB did not take effect: $details")
-                BlackBoxRecorder.recordPairing(
-                    appContext,
-                    "ADB_WRITE_SECURE_SETTINGS_GRANT",
-                    isSuccess = false,
-                    error = details
-                )
+                denialText = combined
+                recordSecureSettingsGrantFailure(appContext, sanitizedOutput.ifBlank { "canWriteSecureSettings=false" }, isRealmeOrOppo)
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            val oemHint = if (OemProvisioningHelper.isRealmeOrOppo()) {
-                "Disable permission monitoring required on OPPO/Realme"
-            } else {
-                null
-            }
-            val details = listOfNotNull(
-                oemHint,
-                sanitizeShellOutput("${e.javaClass.simpleName}: ${e.message ?: "Unknown error"}")
-            ).joinToString(" | ")
-            Timber.tag(TAG).w(e, "Failed granting WRITE_SECURE_SETTINGS permission via ADB")
-            BlackBoxRecorder.recordPairing(
-                appContext,
-                "ADB_WRITE_SECURE_SETTINGS_GRANT",
-                isSuccess = false,
-                error = details
-            )
+            denialText = sanitizeUserFacingError("${e.javaClass.simpleName}: ${e.message ?: "Unknown error"}", maxLength = 300)
+            recordSecureSettingsGrantFailure(appContext, denialText, isRealmeOrOppo, e)
         }
-        try {
-            client.shell("appops set ${appContext.packageName} ACCESS_RESTRICTED_SETTINGS allow")
-            Timber.tag(TAG).i("Granted ACCESS_RESTRICTED_SETTINGS allow via ADB")
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            Timber.tag(TAG).w(e, "Failed setting ACCESS_RESTRICTED_SETTINGS via ADB")
+        if (denialText.isNotEmpty() && (isRealmeOrOppo || isXiaomi) && isPermissionDenialOutput(denialText.lowercase())) {
+            val outcome = buildOemPermissionOutcome(appContext, "", isRealmeOrOppo)
+            return PromotionResult.OemPermissionRequired(outcome.oemType, outcome.message)
         }
-        try {
-            client.shell("dumpsys deviceidle whitelist +${appContext.packageName}")
-            Timber.tag(TAG).i("Whitelisted package in deviceidle via ADB")
-        } catch (e: Exception) {
+        runShellStep("Grant ACCESS_RESTRICTED_SETTINGS") {
+            val res = shellExecutor("appops set ${appContext.packageName} ACCESS_RESTRICTED_SETTINGS allow")
+            if (!res.isSuccess) Timber.tag(TAG).w("Grant ACCESS_RESTRICTED_SETTINGS failed (exit=${res.exitCode}): ${sanitizeUserFacingError(res.combinedOutput(), 200)}")
+        }
+        runShellStep("Whitelist package in deviceidle") {
+            val res = shellExecutor("dumpsys deviceidle whitelist +${appContext.packageName}")
+            if (!res.isSuccess) Timber.tag(TAG).w("Whitelist package in deviceidle failed (exit=${res.exitCode}): ${sanitizeUserFacingError(res.combinedOutput(), 200)}")
+        }
+        return null
+    }
+
+    private suspend inline fun runShellStep(label: String, action: () -> Unit) {
+        try { action() } catch (e: Exception) {
             if (e is CancellationException) throw e
-            Timber.tag(TAG).w(e, "Failed adding to deviceidle whitelist via ADB")
+            Timber.tag(TAG).w(e, "Failed step: $label")
         }
     }
 
-    private suspend fun disableWirelessAdbSilently(client: AdbClient) {
-        try {
-            Timber.tag(TAG).i("Disabling adb_wifi_enabled for security cleanup (leaving adb_enabled intact)...")
-            client.shell("settings put global adb_wifi_enabled 0")
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            Timber.tag(TAG).w(e, "Failed disabling adb_wifi_enabled after promotion")
-        }
+    private fun recordDnsProvisionError(appContext: Context, host: String, stepLabel: String, err: String) {
+        Timber.tag(TAG).w("ADB Private DNS provisioning $stepLabel ($host): $err")
+        BlackBoxRecorder.recordPairing(appContext, "ADB_PRIVATE_DNS_PROVISION", isSuccess = false, details = "host=$host", error = err)
     }
 
-    private suspend fun provisionPrivateDnsViaAdb(appContext: Context, client: AdbClient) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+    internal suspend fun provisionPrivateDnsViaAdb(appContext: Context, client: AdbClient) =
+        provisionPrivateDnsViaAdbWithShell(appContext, shellExecutor = { cmd -> client.shell(cmd) })
 
+    private suspend fun putAndVerifyDnsSetting(
+        appContext: Context, shellExecutor: suspend (String) -> ShellResult,
+        key: String, expected: String, stepLabel: String, host: String
+    ): Boolean {
+        val putOut = shellExecutor("settings put global $key $expected").combinedOutput()
+        if (hasShellError(putOut)) return recordDnsProvisionError(appContext, host, stepLabel, sanitizeUserFacingError(putOut, 300)).let { false }
+        val actual = shellExecutor("settings get global $key").stdoutText.trim()
+        if (!actual.equals(expected, ignoreCase = true)) {
+            recordDnsProvisionError(appContext, host, "$stepLabel verification", "expected=$expected, actual=${sanitizeUserFacingError(actual, 300)}")
+            return false
+        }
+        return true
+    }
+
+    internal suspend fun provisionPrivateDnsViaAdbWithShell(
+        appContext: Context, shellExecutor: suspend (String) -> ShellResult, sdkInt: Int = Build.VERSION.SDK_INT
+    ) {
+        if (sdkInt < Build.VERSION_CODES.Q) return
         var targetHost = DevicePolicyBundle.CLOUDFLARE_FAMILY_DNS_HOST
         try {
-            val rawHost = try {
-                DnsShield.getEffectiveDnsHost(appContext).trim()
-            } catch (e: Exception) {
+            val rawHost = try { DnsShield.getEffectiveDnsHost(appContext).trim() } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                Timber.tag(TAG).w(e, "Failed reading effective DNS host; falling back to default")
-                ""
+                Timber.tag(TAG).w(e, "Failed reading effective DNS host; falling back to default"); ""
             }
-            val safeHost = DeviceOwnerPromoter.sanitizeDnsHostForAdb(rawHost)
-            targetHost = safeHost
-
-            val specRes = client.shell("settings put global private_dns_specifier $safeHost")
-            val specOutput = (specRes.stdoutText + "\n" + specRes.stderrText).trim()
-            if (hasShellError(specOutput)) {
-                val err = "specifier write failed: ${sanitizeShellOutput(specOutput)}"
-                Timber.tag(TAG).w("ADB Private DNS provisioning aborted at Step 1 ($safeHost): $err")
-                BlackBoxRecorder.recordPairing(appContext, "ADB_PRIVATE_DNS_PROVISION", isSuccess = false, details = "host=$safeHost", error = err)
-                return
-            }
-
-            val verifySpec = client.shell("settings get global private_dns_specifier").stdoutText.trim()
-            if (!verifySpec.equals(safeHost, ignoreCase = true)) {
-                val err = "specifier read-back mismatch: expected=$safeHost, actual=${sanitizeShellOutput(verifySpec)}"
-                Timber.tag(TAG).w("ADB Private DNS provisioning aborted at Step 2: $err")
-                BlackBoxRecorder.recordPairing(appContext, "ADB_PRIVATE_DNS_PROVISION", isSuccess = false, details = "host=$safeHost", error = err)
-                return
-            }
-
-            val modeRes = client.shell("settings put global private_dns_mode hostname")
-            val modeOutput = (modeRes.stdoutText + "\n" + modeRes.stderrText).trim()
-            if (hasShellError(modeOutput)) {
-                val err = "mode write failed: ${sanitizeShellOutput(modeOutput)}"
-                Timber.tag(TAG).w("ADB Private DNS provisioning failed at Step 3 ($safeHost): $err")
-                BlackBoxRecorder.recordPairing(appContext, "ADB_PRIVATE_DNS_PROVISION", isSuccess = false, details = "host=$safeHost", error = err)
-                return
-            }
-
-            val verifyMode = client.shell("settings get global private_dns_mode").stdoutText.trim()
-            if (verifyMode.equals("hostname", ignoreCase = true)) {
-                Timber.tag(TAG).i("Successfully provisioned Private DNS via ADB (mode=hostname, specifier=$safeHost)")
-                BlackBoxRecorder.recordPairing(appContext, "ADB_PRIVATE_DNS_PROVISION", isSuccess = true, details = "host=$safeHost, mode=hostname")
-            } else {
-                val err = "mode read-back mismatch: expected=hostname, actual=${sanitizeShellOutput(verifyMode)}"
-                Timber.tag(TAG).w("ADB Private DNS mode verification failed ($safeHost): $err")
-                BlackBoxRecorder.recordPairing(appContext, "ADB_PRIVATE_DNS_PROVISION", isSuccess = false, details = "host=$safeHost", error = err)
-            }
+            targetHost = DeviceOwnerPromoter.sanitizeDnsHostForAdb(rawHost)
+            if (!putAndVerifyDnsSetting(appContext, shellExecutor, "private_dns_specifier", targetHost, "specifier", targetHost)) return
+            if (!putAndVerifyDnsSetting(appContext, shellExecutor, "private_dns_mode", "hostname", "mode", targetHost)) return
+            BlackBoxRecorder.recordPairing(appContext, "ADB_PRIVATE_DNS_PROVISION", isSuccess = true, details = "host=$targetHost, mode=hostname")
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            val err = sanitizeShellOutput("${e.javaClass.simpleName}: ${e.message ?: "Unknown error"}")
+            val err = sanitizeUserFacingError("${e.javaClass.simpleName}: ${e.message ?: "Unknown error"}", 300)
             Timber.tag(TAG).w(e, "Failed provisioning Private DNS via ADB for host=$targetHost")
             BlackBoxRecorder.recordPairing(appContext, "ADB_PRIVATE_DNS_PROVISION", isSuccess = false, details = "host=$targetHost", error = err)
         }
     }
 
-    private fun hasShellError(output: String): Boolean {
-        return output.contains("Exception", ignoreCase = true) ||
-            output.contains("Error", ignoreCase = true) ||
-            output.contains("Permission Denial", ignoreCase = true)
-    }
+    private fun hasShellError(output: String): Boolean =
+        output.contains("Exception", ignoreCase = true) || output.contains("Error", ignoreCase = true) || output.contains("Permission Denial", ignoreCase = true)
 
-    private fun sanitizeShellOutput(raw: String): String {
-        return raw.replace(Regex("\\s+"), " ").trim().take(300)
+    internal suspend fun runDpmSetDeviceOwnerWithUserFallback(
+        userId: Int, adminComponent: String, shellExecutor: suspend (String) -> ShellResult
+    ): String {
+        require(userId >= 0) { "Invalid userId: $userId" }
+        require(ADMIN_COMPONENT_REGEX.matches(adminComponent)) { "Unsafe adminComponent: $adminComponent" }
+        var output = ""
+        for (attempt in 0..2) {
+            if (attempt > 0) delay(1500L)
+            output = shellExecutor("dpm set-device-owner --user $userId $adminComponent").combinedOutput()
+            if (isDpmUserOptionUnsupported(output)) output = shellExecutor("dpm set-device-owner $adminComponent").combinedOutput()
+            if (!AdbShellValidation.isAdminBeingRemovedOutput(output)) break
+        }
+        return output
     }
 
     private suspend fun executeSetupBypassPromotion(
-        context: Context?,
-        client: AdbClient,
-        adminComponent: String,
-        userId: Int
-    ): PromotionResult {
-        val dexPath = "/data/local/tmp/antiporn_helper.dex"
-        client.shell("echo '$HELPER_DEX_BASE64' | base64 -d > $dexPath")
+        context: Context?, shellExecutor: suspend (String) -> ShellResult,
+        adminComponent: String, userId: Int, isXiaomi: Boolean, isRealmeOrOppo: Boolean
+    ): SetupBypassOutcome {
+        require(userId >= 0) { "Invalid userId: $userId" }
+        require(ADMIN_COMPONENT_REGEX.matches(adminComponent)) { "Unsafe adminComponent: $adminComponent" }
 
+        val dexPath = "/data/local/tmp/antiporn_helper.dex"
+        runShellStep("Clean stale helper dex") { shellExecutor("rm -f $dexPath") }
+        val dexRes = shellExecutor("echo '$HELPER_DEX_BASE64' | base64 -d > $dexPath && chmod 444 $dexPath")
+        if (!dexRes.isSuccess) {
+            val err = dexRes.combinedOutput().ifBlank { "Failed staging helper DEX" }
+            return buildOemOrHardStop(context, err, isXiaomi, isRealmeOrOppo)
+        }
         var isBypassed = false
         try {
-            val setupRes = client.shell("settings --user $userId put secure user_setup_complete 0")
+            val setupOutput = shellExecutor("settings --user $userId put secure user_setup_complete 0").combinedOutput()
+            if (isPermissionDenialOutput(setupOutput.lowercase())) return buildOemOrHardStop(context, setupOutput, isXiaomi, isRealmeOrOppo)
             isBypassed = true
-
-            if (setupRes.stdoutText.contains("SecurityException", ignoreCase = true) ||
-                setupRes.stderrText.contains("SecurityException", ignoreCase = true) ||
-                setupRes.stderrText.contains("Permission Denial", ignoreCase = true)
-            ) {
-                val errorMsg = if (OemProvisioningHelper.isRealmeOrOppo()) {
-                    context?.getString(R.string.provisioning_error_realme_permission_monitoring)
-                } else {
-                    context?.getString(R.string.provisioning_error_xiaomi_security_settings)
-                } ?: setupRes.stderrText.ifBlank { setupRes.stdoutText }
-                return PromotionResult.Failure(errorMsg)
+            val helperRes = shellExecutor("CLASSPATH=$dexPath app_process /system/bin SetupStateHelper $userId")
+            val helperOut = helperRes.combinedOutput()
+            context?.let {
+                BlackBoxRecorder.recordPairing(it, "SETUP_STATE_HELPER_RESULT", isSuccess = helperRes.isSuccess, details = "exit=${helperRes.exitCode}, output=${sanitizeUserFacingError(helperOut, 300)}")
             }
-
-            client.shell("CLASSPATH=$dexPath app_process /system/bin SetupStateHelper $userId")
-
-            var doResult = client.shell("dpm set-device-owner --user $userId $adminComponent")
-            var output = (doResult.stdoutText + "\n" + doResult.stderrText).trim()
-
-            if (output.contains("unknown option: --user", ignoreCase = true) ||
-                output.contains("illegal option", ignoreCase = true)
-            ) {
-                doResult = client.shell("dpm set-device-owner $adminComponent")
-                output = (doResult.stdoutText + "\n" + doResult.stderrText).trim()
+            if (!helperOut.contains("SETUP_STATE_SUCCESS")) {
+                return if ((isRealmeOrOppo || isXiaomi) && isPermissionDenialOutput(helperOut.lowercase())) {
+                    buildOemPermissionOutcome(context, helperOut, isRealmeOrOppo)
+                } else SetupBypassOutcome.AccountsBlockedFailure(helperOut)
             }
-
-            Timber.tag(TAG).i("DPM bypass execution output: $output")
-            val isSuccess = (output.contains("Success", ignoreCase = true) || output.contains("device owner set", ignoreCase = true)) &&
-                !output.contains("error", ignoreCase = true) && !output.contains("exception", ignoreCase = true)
-
-            return if (isSuccess) PromotionResult.Success else PromotionResult.Failure(formatFriendlyError(context, output))
+            val output = runDpmSetDeviceOwnerWithUserFallback(userId, adminComponent, shellExecutor)
+            Timber.tag(TAG).i("DPM bypass execution output: ${sanitizeUserFacingError(output)}")
+            return classifySetupBypassOutput(context, output, isXiaomi, isRealmeOrOppo)
         } finally {
             withContext(NonCancellable) {
                 withTimeoutOrNull(5_000L) {
                     if (isBypassed) {
-                        try {
-                            client.shell("settings --user $userId put secure user_setup_complete 1")
-                        } catch (e: Exception) {
-                            Timber.tag(TAG).e(e, "Failed to restore user_setup_complete in finally via ADB")
+                        runShellStep("ContentResolver user_setup_complete") {
+                            context?.let { (it.applicationContext ?: it).contentResolver?.let { r -> Settings.Secure.putInt(r, "user_setup_complete", 1) } }
                         }
-                        try {
-                            context?.let { ctx ->
-                                android.provider.Settings.Secure.putInt((ctx.applicationContext ?: ctx).contentResolver, "user_setup_complete", 1)
-                                Timber.tag(TAG).i("Local ContentResolver fallback restored user_setup_complete=1 successfully")
-                            }
-                        } catch (e: Exception) {
-                            Timber.tag(TAG).w(e, "Local ContentResolver fallback for user_setup_complete failed")
+                        withTimeoutOrNull(2_000L) {
+                            runShellStep("Restore user_setup_complete via ADB") { shellExecutor("settings --user $userId put secure user_setup_complete 1") }
                         }
-                        try {
-                            client.shell("CLASSPATH=$dexPath app_process /system/bin SetupStateHelper $userId")
-                        } catch (e: Exception) {
-                            Timber.tag(TAG).e(e, "Failed to refresh SetupStateHelper in finally")
+                        withTimeoutOrNull(2_000L) {
+                            runShellStep("Refresh SetupStateHelper in finally") { shellExecutor("CLASSPATH=$dexPath app_process /system/bin SetupStateHelper $userId") }
                         }
                     }
-                    try {
-                        client.shell("rm -f $dexPath")
-                    } catch (e: Exception) {
-                        Timber.tag(TAG).w(e, "Failed to remove helper dex in finally")
-                    }
+                    runShellStep("Remove helper dex in finally") { shellExecutor("rm -f $dexPath") }
                 }
             }
         }
     }
 
-    private suspend fun executePackageFreezePromotion(
-        context: Context?,
-        client: AdbClient,
-        adminComponent: String,
-        userId: Int
-    ): PromotionResult {
-        val dumpsys = client.shell("dumpsys account").stdoutText
-        val regex = "Account \\{name=.*?, type=(.*?)\\}".toRegex()
-        val accountTypes = mutableSetOf<String>()
-        dumpsys.lines().forEach { line ->
-            regex.find(line)?.let { accountTypes.add(it.groupValues[1]) }
-        }
-
-        val authenticatorMap = context?.let { ctx ->
-            try {
-                AccountManager.get(ctx.applicationContext ?: ctx).authenticatorTypes
-                    .associate { it.type to it.packageName }
-            } catch (e: Exception) {
-                Timber.tag(TAG).w(e, "Failed to retrieve authenticatorTypes from AccountManager")
-                emptyMap()
-            }
-        } ?: emptyMap()
-
-        val packagesToDisable = mutableSetOf<String>()
-        accountTypes.forEach { type ->
-            val mappedPkg = authenticatorMap[type]
-            if (mappedPkg != null) {
-                packagesToDisable.add(mappedPkg)
-            } else {
-                when {
-                    type.contains("google", ignoreCase = true) -> packagesToDisable.add("com.google.android.gms")
-                    type.contains("whatsapp", ignoreCase = true) -> packagesToDisable.add("com.whatsapp")
-                    type.contains("telegram", ignoreCase = true) -> packagesToDisable.add("org.telegram.messenger")
-                    type.contains("samsung", ignoreCase = true) -> packagesToDisable.add("com.osp.app.signin")
-                    type.contains("xiaomi", ignoreCase = true) -> packagesToDisable.add("com.xiaomi.account")
-                }
-            }
-        }
-        packagesToDisable.add("com.google.android.gms")
-
-        try {
-            val trapScript = packagesToDisable.joinToString("; ") { "pm enable --user $userId $it" }
-            val disableScript = packagesToDisable.joinToString("; ") { "pm disable-user --user $userId $it" }
-
-            val atomicCmd = "sh -c 'trap \"$trapScript\" EXIT; $disableScript; sleep 1; dpm set-device-owner --user $userId $adminComponent'"
-            var doResult = client.shell(atomicCmd)
-            var output = (doResult.stdoutText + "\n" + doResult.stderrText).trim()
-
-            if (output.contains("unknown option: --user", ignoreCase = true) ||
-                output.contains("illegal option", ignoreCase = true)
-            ) {
-                val legacyAtomicCmd = "sh -c 'trap \"$trapScript\" EXIT; $disableScript; sleep 1; dpm set-device-owner $adminComponent'"
-                doResult = client.shell(legacyAtomicCmd)
-                output = (doResult.stdoutText + "\n" + doResult.stderrText).trim()
-            }
-
-            Timber.tag(TAG).i("DPM legacy execution output: $output")
-            val isSuccess = (output.contains("Success", ignoreCase = true) || output.contains("device owner set", ignoreCase = true)) &&
-                !output.contains("error", ignoreCase = true) && !output.contains("exception", ignoreCase = true)
-
-            return if (isSuccess) PromotionResult.Success else PromotionResult.Failure(formatFriendlyError(context, output))
-        } finally {
-            withContext(NonCancellable) {
-                withTimeoutOrNull(5_000L) {
-                    for (pkg in packagesToDisable) {
-                        try {
-                            client.shell("pm enable --user $userId $pkg")
-                        } catch (e: Exception) {
-                            Timber.tag(TAG).e(e, "Failed to re-enable package $pkg in finally")
-                        }
-                    }
-                    try {
-                        client.shell("pm enable --user $userId com.google.android.gms")
-                    } catch (e: Exception) {
-                        Timber.tag(TAG).e(e, "Failed to re-enable com.google.android.gms in finally")
-                    }
-                }
-            }
-        }
-    }
-
-    private fun formatFriendlyError(context: Context?, output: String): String {
-        if (context == null) return output
+    internal fun formatFriendlyError(context: Context?, output: String): String {
+        val sanitized = sanitizeUserFacingError(output)
+        if (context == null) return sanitized
         val lower = output.lowercase()
         return when {
             lower.contains("already several users") || lower.contains("user 150") || lower.contains("user 95") ->
-                context.getString(R.string.provisioning_error_samsung_secure_folder)
+                context.safeGetString(R.string.provisioning_error_samsung_secure_folder) ?: sanitized
             lower.contains("precondition 99") ->
-                context.getString(R.string.provisioning_error_realme_precondition)
-            lower.contains("already") && lower.contains("owner") ->
-                context.getString(R.string.provisioning_error_already_device_owner)
-            lower.contains("securityexception") || lower.contains("permission denial") -> {
-                if (OemProvisioningHelper.isRealmeOrOppo()) {
-                    context.getString(R.string.provisioning_error_realme_permission_monitoring)
-                } else {
-                    context.getString(R.string.provisioning_error_xiaomi_security_settings)
-                }
+                context.safeGetString(R.string.provisioning_error_realme_precondition) ?: sanitized
+            isAccountsBlockedOutput(lower) ->
+                context.safeGetString(R.string.provisioning_error_accounts_blocked_generic) ?: "Active accounts on the device are preventing Device Owner activation."
+            AdbShellValidation.isAdminBeingRemovedOutput(output) ->
+                context.safeGetString(R.string.provisioning_error_admin_removing) ?: "System is finishing a previous reset. Please retry in a few seconds."
+            !lower.contains("already provisioned") && lower.contains("already") && lower.contains("owner") ->
+                context.safeGetString(R.string.provisioning_error_already_device_owner) ?: sanitized
+            isPermissionDenialOutput(lower) -> when {
+                OemProvisioningHelper.isRealmeOrOppo() -> context.safeGetString(R.string.provisioning_error_realme_permission_monitoring) ?: sanitized
+                OemProvisioningHelper.isXiaomi() -> context.safeGetString(R.string.provisioning_error_xiaomi_security_settings) ?: sanitized
+                else -> sanitized
             }
-            else -> output
+            else -> sanitized
         }
     }
 }

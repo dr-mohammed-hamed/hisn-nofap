@@ -43,6 +43,13 @@ class RoomMigrationTest {
     }
 
     @Test
+    fun testMigration6To7VersionInvariants() {
+        val migration = HisnRoomDatabase.MIGRATION_6_7
+        assertEquals("Migration start version must be 6", 6, migration.startVersion)
+        assertEquals("Migration end version must be 7", 7, migration.endVersion)
+    }
+
+    @Test
     fun testMigrationExecutionOnSupportDatabase() {
         val executedSqlList = mutableListOf<String>()
         val dummyDb = Proxy.newProxyInstance(
@@ -125,6 +132,32 @@ class RoomMigrationTest {
         assertTrue("Must create diagnostic_events_new", allSql.contains("diagnostic_events_new"))
         assertTrue("Must create idx_notif_timestamp", allSql.contains("idx_notif_timestamp"))
         assertTrue("Must create idx_notif_dedup", allSql.contains("idx_notif_dedup"))
+    }
+
+    @Test
+    fun testMigration6To7ExecutionUpgradesPartnersToCompositePrimaryKey() {
+        val executedSqlList = mutableListOf<String>()
+        val dummyDb = Proxy.newProxyInstance(
+            SupportSQLiteDatabase::class.java.classLoader,
+            arrayOf(SupportSQLiteDatabase::class.java)
+        ) { _, method, args ->
+            if (method.name == "execSQL" && args != null && args.isNotEmpty()) {
+                executedSqlList.add(args[0] as String)
+            }
+            null
+        } as SupportSQLiteDatabase
+
+        HisnRoomDatabase.MIGRATION_6_7.migrate(dummyDb)
+
+        assertEquals("Migration 6->7 must execute 6 SQL statements", 6, executedSqlList.size)
+        val allSql = executedSqlList.joinToString(separator = "\n")
+        assertTrue("Must create partners_new", executedSqlList[0].contains("CREATE TABLE IF NOT EXISTS `partners_new`"))
+        assertTrue("Must declare composite PRIMARY KEY(`id`, `role`)", executedSqlList[0].contains("PRIMARY KEY(`id`, `role`)"))
+        assertTrue("Must copy rows with INSERT OR REPLACE", executedSqlList[1].contains("INSERT OR REPLACE INTO `partners_new`"))
+        assertTrue("Must drop legacy partners table", executedSqlList[2] == "DROP TABLE IF EXISTS `partners`")
+        assertTrue("Must rename partners_new to partners", executedSqlList[3] == "ALTER TABLE `partners_new` RENAME TO `partners`")
+        assertTrue("Must create idx_partners_role", allSql.contains("CREATE INDEX IF NOT EXISTS `idx_partners_role` ON `partners` (`role`)"))
+        assertTrue("Must create idx_partners_id", allSql.contains("CREATE INDEX IF NOT EXISTS `idx_partners_id` ON `partners` (`id`)"))
     }
 
     @Test

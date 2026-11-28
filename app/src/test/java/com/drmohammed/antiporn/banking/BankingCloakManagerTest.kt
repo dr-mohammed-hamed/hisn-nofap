@@ -24,6 +24,8 @@ import android.content.res.Resources
 import android.content.res.XmlResourceParser
 import android.graphics.Rect
 import android.graphics.drawable.Drawable
+import android.net.TestUri
+import android.net.Uri
 import android.os.SystemClock
 import android.os.UserHandle
 import com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator
@@ -432,6 +434,88 @@ class BankingCloakManagerTest {
         assertEquals(BankingCloakManager.INSTAPAY_PACKAGE, BankingCloakManager.activeTargetPackage)
     }
 
+    @Test
+    fun testLaunchUriWithCloakIfNeeded_rejectsNonHttpsUri() {
+        dummyContext.installedPackages.add(BankingCloakManager.INSTAPAY_PACKAGE)
+        BankingCloakManager.viewUriIntentFactory = { u -> FakeIntent(Intent.ACTION_VIEW).apply { data = u } }
+
+        val httpUri = TestUri(schemeValue = "http", hostValue = "ipn.eg")
+        val jsUri = TestUri(schemeValue = "javascript", hostValue = null)
+
+        assertFalse(BankingCloakManager.launchUriWithCloakIfNeeded(dummyContext, httpUri))
+        assertFalse(BankingCloakManager.launchUriWithCloakIfNeeded(dummyContext, jsUri))
+        assertTrue(dummyContext.startedActivities.isEmpty())
+        assertFalse(BankingCloakManager.isCloaked(dummyContext))
+    }
+
+    @Test
+    fun testLaunchUriWithCloakIfNeeded_whenInstalledAndA11yActive_cloaksAndLaunchesUri() {
+        dummyContext.installedPackages.add(BankingCloakManager.INSTAPAY_PACKAGE)
+        BankingCloakManager.viewUriIntentFactory = { u -> FakeIntent(Intent.ACTION_VIEW).apply { data = u } }
+        val httpsUri = TestUri(schemeValue = "https", hostValue = "ipn.eg")
+
+        val result = BankingCloakManager.launchUriWithCloakIfNeeded(dummyContext, httpsUri)
+
+        assertTrue(result)
+        assertTrue(BankingCloakManager.isCloaked(dummyContext))
+        assertTrue(AccessibilitySelfActivator.isTemporarilyCloaked)
+        assertEquals(BankingCloakManager.INSTAPAY_PACKAGE, BankingCloakManager.activeTargetPackage)
+        assertEquals(1, dummyContext.startedActivities.size)
+        assertEquals(Intent.ACTION_VIEW, dummyContext.startedActivities[0].action)
+        assertEquals(httpsUri, dummyContext.startedActivities[0].data)
+        assertEquals(Intent.FLAG_ACTIVITY_NEW_TASK, dummyContext.startedActivities[0].flags and Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+
+    @Test
+    fun testLaunchUriWithCloakIfNeeded_whenNotInstalled_launchesDirectlyWithoutCloaking() {
+        dummyContext.installedPackages.clear()
+        BankingCloakManager.viewUriIntentFactory = { u -> FakeIntent(Intent.ACTION_VIEW).apply { data = u } }
+        val httpsUri = TestUri(schemeValue = "https", hostValue = "ipn.eg")
+
+        val result = BankingCloakManager.launchUriWithCloakIfNeeded(dummyContext, httpsUri)
+
+        assertTrue(result)
+        assertFalse(BankingCloakManager.isCloaked(dummyContext))
+        assertFalse(AccessibilitySelfActivator.isTemporarilyCloaked)
+        assertEquals(1, dummyContext.startedActivities.size)
+        assertEquals(Intent.ACTION_VIEW, dummyContext.startedActivities[0].action)
+        assertEquals(httpsUri, dummyContext.startedActivities[0].data)
+    }
+
+    @Test
+    fun testLaunchUriWithCloakIfNeeded_whenA11yInactive_launchesDirectlyWithoutCloaking() {
+        dummyContext.installedPackages.add(BankingCloakManager.INSTAPAY_PACKAGE)
+        BankingCloakManager.accessibilityActiveCheckOverride = { false }
+        BankingCloakManager.viewUriIntentFactory = { u -> FakeIntent(Intent.ACTION_VIEW).apply { data = u } }
+        val httpsUri = TestUri(schemeValue = "https", hostValue = "ipn.eg")
+
+        val result = BankingCloakManager.launchUriWithCloakIfNeeded(dummyContext, httpsUri)
+
+        assertTrue(result)
+        assertFalse(BankingCloakManager.isCloaked(dummyContext))
+        assertFalse(AccessibilitySelfActivator.isTemporarilyCloaked)
+        assertEquals(1, dummyContext.startedActivities.size)
+        assertEquals(Intent.ACTION_VIEW, dummyContext.startedActivities[0].action)
+    }
+
+    @Test
+    fun testLaunchUriWithCloakIfNeeded_whenPackageNotWhitelisted_launchesDirectlyWithoutCloaking() {
+        dummyContext.installedPackages.add("com.android.chrome")
+        BankingCloakManager.viewUriIntentFactory = { u -> FakeIntent(Intent.ACTION_VIEW).apply { data = u } }
+        val httpsUri = TestUri(schemeValue = "https", hostValue = "ipn.eg")
+
+        val result = BankingCloakManager.launchUriWithCloakIfNeeded(
+            context = dummyContext,
+            uri = httpsUri,
+            targetPackage = "com.android.chrome"
+        )
+
+        assertTrue(result)
+        assertFalse(BankingCloakManager.isCloaked(dummyContext))
+        assertFalse(AccessibilitySelfActivator.isTemporarilyCloaked)
+        assertEquals(1, dummyContext.startedActivities.size)
+    }
+
     // =========================================================================
     // Test Doubles & Mocks
     // =========================================================================
@@ -440,12 +524,18 @@ class BankingCloakManagerTest {
         private var actionStr: String? = action
         private var pkg: String? = null
         private var flagsInt: Int = 0
+        private var dataUri: Uri? = null
 
         override fun getAction(): String? = actionStr
         override fun setAction(action: String?): Intent {
             actionStr = action
             return this
         }
+        override fun setData(data: Uri?): Intent {
+            dataUri = data
+            return this
+        }
+        override fun getData(): Uri? = dataUri
         override fun setPackage(packageName: String?): Intent {
             pkg = packageName
             return this

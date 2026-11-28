@@ -13,6 +13,7 @@ import com.drmohammed.antiporn.data.repository.AppInventoryManager
 import com.drmohammed.antiporn.data.repository.ApprovalRepository
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.ota.repository.OtaRepository
+import com.drmohammed.antiporn.waqf.repository.WaqfRepository
 import com.drmohammed.antiporn.notification.manager.AppNotificationManager
 import com.drmohammed.antiporn.notification.repository.NotificationRepository
 import com.drmohammed.antiporn.waqfa.data.WaqfaDao
@@ -33,6 +34,7 @@ import com.drmohammed.antiporn.ui.home.HomeViewModel
 import com.drmohammed.antiporn.ui.main.MainViewModel
 import com.drmohammed.antiporn.ui.notification.NotificationCenterViewModel
 import com.drmohammed.antiporn.ui.settings.SettingsViewModel
+import com.drmohammed.antiporn.ui.waqf.WaqfSupportViewModel
 import com.drmohammed.antiporn.work.CloudSyncWorker
 import com.drmohammed.antiporn.work.OtaUpdateWorker
 import com.drmohammed.antiporn.work.WatchdogHealthWorker
@@ -82,6 +84,7 @@ val appModule = module {
     single { AppInventoryManager.create(androidContext()) }
     single { GoogleAuthManager.getInstance(androidContext()) }
     single { OtaRepository.getInstance(androidContext()) }
+    single { WaqfRepository.getInstance(androidContext()) }
     single { NotificationRepository(get()) }
     single {
         AppNotificationManager(androidContext(), get()).also {
@@ -114,7 +117,8 @@ val appModule = module {
     viewModel { GuardianApprovalsHubViewModel(androidApplication(), get(), get(), get(), get()) }
     viewModel { SystemAppsManagerViewModel(androidApplication()) }
     viewModel { com.drmohammed.antiporn.provisioning.ui.ProvisioningWizardViewModel(androidApplication()) }
-    viewModel { SettingsViewModel(androidApplication(), get(), get(), get()) }
+    viewModel { SettingsViewModel(androidApplication(), get(), get(), get(), get(), get()) }
+    viewModel { WaqfSupportViewModel(androidApplication(), get()) }
     viewModel { NotificationCenterViewModel(get()) }
     viewModel { WaqfaGateViewModel(androidApplication(), get(), get()) }
     viewModel { WaqfaSettingsViewModel(androidApplication(), get(), get()) }

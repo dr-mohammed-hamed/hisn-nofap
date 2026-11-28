@@ -1,6 +1,17 @@
 package com.drmohammed.antiporn.shields
 
+import com.drmohammed.antiporn.PackageChangeHandler
+import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.core.policy.AppPolicyRegistry
+import com.drmohammed.antiporn.data.local.db.entity.DevicePolicyEntity
+import com.drmohammed.antiporn.data.local.db.entity.PendingApprovalEntity
+import com.drmohammed.antiporn.data.repository.ApprovalRepository
+import com.drmohammed.antiporn.data.repository.PolicyRepository
+import com.drmohammed.antiporn.testing.FakeTestApplicationContext
+import com.drmohammed.antiporn.testing.FakeTestDevicePolicyDao
+import com.drmohammed.antiporn.testing.FakeTestPartnerDao
+import com.drmohammed.antiporn.testing.FakeTestPendingApprovalDao
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -8,6 +19,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppSuspensionShieldTest {
+
+    @After
+    fun tearDown() {
+        ApprovalRepository.setInstance(null)
+        PolicyRepository.setInstance(null)
+        AppSuspensionHandler.isPackageInstalledProvider = { pm, pkg ->
+            pm != null && AppSuspensionHandler.isPackageInstalled(pm, pkg)
+        }
+    }
 
     @Test
     fun testTelegramPackagesAreBlacklisted() {
@@ -202,5 +222,196 @@ class AppSuspensionShieldTest {
         assertEquals(63, totalExpected)
         assertTrue("BLACKLISTED_PACKAGES must be empty under Unified Zero-Trust", AppSuspensionShield.BLACKLISTED_PACKAGES.isEmpty())
         assertEquals(0, AppSuspensionShield.BLACKLISTED_PACKAGES.size)
+    }
+
+    @Test
+    fun testResolveTargetsToEnforce_excludesUnblacklistedHighRiskApp() {
+        val telegramPkg = "org.telegram.messenger"
+        val customBlacklistedPkg = "com.custom.blocked"
+        val rejectedPkg = "com.rejected.app"
+
+        val context = FakeTestApplicationContext()
+        val policy = DevicePolicyBundle.defaultPolicy().copy(
+            lockNewInstallsUntilApproved = false,
+            customBlacklistPackages = setOf(customBlacklistedPkg)
+        )
+
+        val policyDao = FakeTestDevicePolicyDao().apply {
+            saveDevicePolicyBlocking(DevicePolicyEntity.fromBundle(policy))
+        }
+        val policyRepo = PolicyRepository(context, policyDao, FakeTestPartnerDao()).apply {
+            updateLocalPolicyWithoutEnforcing(policy)
+        }
+        PolicyRepository.setInstance(policyRepo)
+
+        val approvalDao = FakeTestPendingApprovalDao().apply {
+            savePendingApprovalBlocking(
+                PendingApprovalEntity(
+                    packageName = telegramPkg,
+                    appName = "Telegram",
+                    requestedAt = 1000L,
+                    status = PendingApprovalEntity.STATUS_APPROVED,
+                    decidedBy = "AUTO_APPROVED_UNLOCKED",
+                    decidedAt = 1000L,
+                    isCloudSynced = true
+                )
+            )
+            savePendingApprovalBlocking(
+                PendingApprovalEntity(
+                    packageName = rejectedPkg,
+                    appName = "Rejected",
+                    requestedAt = 1000L,
+                    status = PendingApprovalEntity.STATUS_REJECTED,
+                    decidedBy = "GuardianAlice",
+                    decidedAt = 1500L,
+                    isCloudSynced = true
+                )
+            )
+        }
+        ApprovalRepository.setInstance(ApprovalRepository(context, approvalDao))
+        AppSuspensionHandler.isPackageInstalledProvider = { _, _ -> true }
+
+        val targets = AppSuspensionHandler.resolveTargetsToEnforce(context)
+        assertFalse(
+            "org.telegram.messenger must NOT be returned when not in customBlacklist/pending/rejected",
+            targets.contains(telegramPkg)
+        )
+        assertTrue("Custom blacklisted package must be enforced", targets.contains(customBlacklistedPkg))
+        assertTrue("Rejected package must be enforced", targets.contains(rejectedPkg))
+    }
+
+    @Test
+    fun testPackageChangeHandler_doesNotFreezeHighRiskOnUpdateOrWhenUnlocked() {
+        val telegramPkg = "org.telegram.messenger"
+
+        // 1. Update (isReplacing = true) of unseeded app even when Zero-Trust lock is enabled -> must NOT freeze
+        val lockedPolicy = DevicePolicyBundle.defaultPolicy().copy(lockNewInstallsUntilApproved = true)
+        val updateDecision = PackageChangeHandler.evaluatePackageAddedDecision(
+            packageName = telegramPkg,
+            isReplacing = true,
+            policy = lockedPolicy,
+            localApprovals = emptyList()
+        )
+        assertFalse("Update (isReplacing=true) must NOT freeze unseeded org.telegram.messenger", updateDecision.shouldFreeze)
+        assertEquals("INITIAL_DEVICE_BASELINE", updateDecision.autoApproveDecidedBy)
+
+        // 2. Fresh install when lockNewInstallsUntilApproved == false -> must NOT freeze
+        val unlockedPolicy = DevicePolicyBundle.defaultPolicy().copy(lockNewInstallsUntilApproved = false)
+        val unlockedDecision = PackageChangeHandler.evaluatePackageAddedDecision(
+            packageName = telegramPkg,
+            isReplacing = false,
+            policy = unlockedPolicy,
+            localApprovals = emptyList()
+        )
+        assertFalse("Unlocked policy must NOT freeze org.telegram.messenger", unlockedDecision.shouldFreeze)
+        assertEquals("AUTO_APPROVED_UNLOCKED", unlockedDecision.autoApproveDecidedBy)
+
+        // 3. Explicit custom blacklist still freezes even when unlocked or replacing
+        val blacklistedPolicy = unlockedPolicy.copy(customBlacklistPackages = setOf(telegramPkg))
+        val blacklistedDecision = PackageChangeHandler.evaluatePackageAddedDecision(
+            packageName = telegramPkg,
+            isReplacing = true,
+            policy = blacklistedPolicy,
+            localApprovals = emptyList()
+        )
+        assertTrue("Custom blacklisted package must freeze", blacklistedDecision.shouldFreeze)
+    }
+
+    @Test
+    fun testPackageChangeHandler_preservesRejectedAndCustomBlacklistedOverApproved() {
+        val rejectedPkg = "com.rejected.app"
+        val customBlacklistedApprovedPkg = "com.blacklisted.approved"
+        val unlockedPolicy = DevicePolicyBundle.defaultPolicy().copy(
+            lockNewInstallsUntilApproved = false,
+            customBlacklistPackages = setOf(customBlacklistedApprovedPkg)
+        )
+        val approvals = listOf(
+            PendingApprovalEntity(
+                packageName = rejectedPkg,
+                appName = "Rejected",
+                requestedAt = 1000L,
+                status = PendingApprovalEntity.STATUS_REJECTED,
+                decidedBy = "GuardianAlice",
+                decidedAt = 1500L,
+                isCloudSynced = true
+            ),
+            PendingApprovalEntity(
+                packageName = customBlacklistedApprovedPkg,
+                appName = "Approved Then Blacklisted",
+                requestedAt = 1000L,
+                status = PendingApprovalEntity.STATUS_APPROVED,
+                decidedBy = "INITIAL_DEVICE_BASELINE",
+                decidedAt = 1000L,
+                isCloudSynced = true
+            )
+        )
+
+        val reinstallRejected = PackageChangeHandler.evaluatePackageAddedDecision(
+            packageName = rejectedPkg,
+            isReplacing = false,
+            policy = unlockedPolicy,
+            localApprovals = approvals
+        )
+        assertTrue("Guardian-rejected app must freeze on reinstall even when unlocked", reinstallRejected.shouldFreeze)
+        assertNull("Rejected app must NEVER auto-approve", reinstallRejected.autoApproveDecidedBy)
+
+        val updateRejected = PackageChangeHandler.evaluatePackageAddedDecision(
+            packageName = rejectedPkg,
+            isReplacing = true,
+            policy = unlockedPolicy,
+            localApprovals = approvals
+        )
+        assertTrue("Guardian-rejected app must freeze on update even when unlocked", updateRejected.shouldFreeze)
+        assertNull("Rejected app must NEVER auto-approve on update", updateRejected.autoApproveDecidedBy)
+
+        val updateBlacklistedApproved = PackageChangeHandler.evaluatePackageAddedDecision(
+            packageName = customBlacklistedApprovedPkg,
+            isReplacing = true,
+            policy = unlockedPolicy,
+            localApprovals = approvals
+        )
+        assertTrue("Custom-blacklisted app must freeze even if prior approval row exists", updateBlacklistedApproved.shouldFreeze)
+        assertNull(updateBlacklistedApproved.autoApproveDecidedBy)
+    }
+
+    @Test
+    fun testResolveTargetsToEnforce_pendingRespectsLockNewInstallsFlag() {
+        val pendingPkg = "com.pending.app"
+        val context = FakeTestApplicationContext()
+        val approvalDao = FakeTestPendingApprovalDao().apply {
+            savePendingApprovalBlocking(
+                PendingApprovalEntity(
+                    packageName = pendingPkg,
+                    appName = "Pending",
+                    requestedAt = 1000L,
+                    status = PendingApprovalEntity.STATUS_PENDING,
+                    isCloudSynced = true
+                )
+            )
+        }
+        ApprovalRepository.setInstance(ApprovalRepository(context, approvalDao))
+        AppSuspensionHandler.isPackageInstalledProvider = { _, _ -> true }
+
+        val unlockedPolicy = DevicePolicyBundle.defaultPolicy().copy(lockNewInstallsUntilApproved = false)
+        PolicyRepository.setInstance(
+            PolicyRepository(context, FakeTestDevicePolicyDao(), FakeTestPartnerDao()).apply {
+                updateLocalPolicyWithoutEnforcing(unlockedPolicy)
+            }
+        )
+        assertFalse(
+            "Pending package should not be enforced when lockNewInstallsUntilApproved=false",
+            AppSuspensionHandler.resolveTargetsToEnforce(context).contains(pendingPkg)
+        )
+
+        val lockedPolicy = DevicePolicyBundle.defaultPolicy().copy(lockNewInstallsUntilApproved = true)
+        PolicyRepository.setInstance(
+            PolicyRepository(context, FakeTestDevicePolicyDao(), FakeTestPartnerDao()).apply {
+                updateLocalPolicyWithoutEnforcing(lockedPolicy)
+            }
+        )
+        assertTrue(
+            "Pending package must be enforced when lockNewInstallsUntilApproved=true",
+            AppSuspensionHandler.resolveTargetsToEnforce(context).contains(pendingPkg)
+        )
     }
 }

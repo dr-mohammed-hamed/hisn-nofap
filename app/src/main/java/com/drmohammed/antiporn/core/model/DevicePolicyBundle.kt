@@ -1,6 +1,7 @@
 package com.drmohammed.antiporn.core.model
 
 import android.util.Log
+import com.drmohammed.antiporn.fortress.model.FortressesConfig
 import com.drmohammed.antiporn.waqfa.model.WaqfaConfig
 import org.json.JSONArray
 import org.json.JSONObject
@@ -35,6 +36,7 @@ data class DevicePolicyBundle(
     val dnsHost: String = CLOUDFLARE_FAMILY_DNS_HOST,
     val isYouTubeRestrictedModeEnabled: Boolean = false,
     val isAdBlockingEnabled: Boolean = false,
+    val isLocalVpnFallbackEnabled: Boolean = false,
     val isTelegramWebBlocked: Boolean = true,
     val isBlockExternalVpnEnabled: Boolean = true,
     val guardianUid: String? = null,
@@ -42,10 +44,10 @@ data class DevicePolicyBundle(
     val isSupervised: Boolean = false,
     val isSelfControlAllowed: Boolean = true,
     val selfControlCurfewAllowed: Boolean = true,
-    val selfControlWebAllowed: Boolean = false,
-    val selfControlAppsAllowed: Boolean = false,
+    val selfControlWebAllowed: Boolean = true,
+    val selfControlAppsAllowed: Boolean = true,
     val selfControlWaqfaAllowed: Boolean = true,
-    val selfControlNewAppsAllowed: Boolean = false,
+    val selfControlNewAppsAllowed: Boolean = true,
     val isDateTimeLocked: Boolean = false,
     val isClearAppDataAllowed: Boolean = true,
     val timeZoneId: String = com.drmohammed.antiporn.curfew.CurfewConfig.getDefaultFallbackTimeZone(),
@@ -61,7 +63,7 @@ data class DevicePolicyBundle(
     val lastSelfModifiedAt: Long? = null,
     val waqfaConfig: WaqfaConfig = WaqfaConfig(),
     val pageShieldConfig: com.drmohammed.antiporn.pageshield.model.PageShieldConfig = com.drmohammed.antiporn.pageshield.model.PageShieldConfig(),
-    val selfControlPageShieldAllowed: Boolean = false,
+    val selfControlPageShieldAllowed: Boolean = true,
     val version: Long = 1L,
     val updatedAt: Long = 0L,
     val remoteSelfControlResetRequestedAt: Long? = null,
@@ -72,8 +74,47 @@ data class DevicePolicyBundle(
     val wardCanWriteSecureSettings: Boolean? = null,
     val wardCapabilitiesUpdatedAt: Long = 0L,
     val wardA11yTamperAt: Long = 0L,
-    val wardSdkInt: Int? = null
+    val wardSdkInt: Int? = null,
+    // Fortresses & Remote Mode Unlock policy fields
+    val fortressesConfig: FortressesConfig = FortressesConfig.default(),
+    val selfControlFortressesAllowed: Boolean = true,
+    val selfControlFortressUnlockAllowed: Boolean = true,
+    val selfControlOtherSettingsAllowed: Boolean = true,
+    val remoteModeUnlockTarget: String? = null,
+    val remoteModeUnlockRequestedAt: Long? = null,
+    // Ward active-mode read-only telemetry (NEVER written by Guardian toMap() pushes)
+    val wardActiveFortressId: String? = null,
+    val wardActiveFortressName: String? = null,
+    val wardActiveFortressIsEmergency: Boolean = false,
+    val wardActiveFortressEndsAtWall: Long = 0L,
+    val wardIsCurfewActiveNow: Boolean = false,
+    val wardActiveModesUpdatedAt: Long = 0L
 ) {
+
+    fun hasAllSelfControlPermissionsEnabled(): Boolean =
+        isSelfControlAllowed &&
+            selfControlCurfewAllowed &&
+            selfControlWebAllowed &&
+            selfControlAppsAllowed &&
+            selfControlWaqfaAllowed &&
+            selfControlNewAppsAllowed &&
+            selfControlPageShieldAllowed &&
+            selfControlFortressesAllowed &&
+            selfControlFortressUnlockAllowed &&
+            selfControlOtherSettingsAllowed
+
+    fun withAllSelfControlPermissionsEnabled(): DevicePolicyBundle = copy(
+        isSelfControlAllowed = true,
+        selfControlCurfewAllowed = true,
+        selfControlWebAllowed = true,
+        selfControlAppsAllowed = true,
+        selfControlWaqfaAllowed = true,
+        selfControlNewAppsAllowed = true,
+        selfControlPageShieldAllowed = true,
+        selfControlFortressesAllowed = true,
+        selfControlFortressUnlockAllowed = true,
+        selfControlOtherSettingsAllowed = true
+    )
 
     fun toMap(): Map<String, Any?> {
         val map = mutableMapOf<String, Any?>(
@@ -106,6 +147,7 @@ data class DevicePolicyBundle(
             "dnsHost" to dnsHost,
             "isYouTubeRestrictedModeEnabled" to isYouTubeRestrictedModeEnabled,
             "isAdBlockingEnabled" to isAdBlockingEnabled,
+            "isLocalVpnFallbackEnabled" to isLocalVpnFallbackEnabled,
             "isTelegramWebBlocked" to isTelegramWebBlocked,
             "isBlockExternalVpnEnabled" to isBlockExternalVpnEnabled,
             "isSupervised" to isSupervised,
@@ -134,7 +176,13 @@ data class DevicePolicyBundle(
             "version" to version,
             "updatedAt" to updatedAt,
             "remoteSelfControlResetRequestedAt" to remoteSelfControlResetRequestedAt,
-            "remoteTeardownRequestedAt" to remoteTeardownRequestedAt
+            "remoteTeardownRequestedAt" to remoteTeardownRequestedAt,
+            "fortressesConfig" to fortressesConfig.toMap(),
+            "selfControlFortressesAllowed" to selfControlFortressesAllowed,
+            "selfControlFortressUnlockAllowed" to selfControlFortressUnlockAllowed,
+            "selfControlOtherSettingsAllowed" to selfControlOtherSettingsAllowed,
+            "remoteModeUnlockTarget" to remoteModeUnlockTarget,
+            "remoteModeUnlockRequestedAt" to remoteModeUnlockRequestedAt
         )
         map["guardianUid"] = guardianUid
         map["guardianName"] = guardianName
@@ -186,6 +234,7 @@ data class DevicePolicyBundle(
         json.put("dnsHost", dnsHost)
         json.put("isYouTubeRestrictedModeEnabled", isYouTubeRestrictedModeEnabled)
         json.put("isAdBlockingEnabled", isAdBlockingEnabled)
+        json.put("isLocalVpnFallbackEnabled", isLocalVpnFallbackEnabled)
         json.put("isTelegramWebBlocked", isTelegramWebBlocked)
         json.put("isBlockExternalVpnEnabled", isBlockExternalVpnEnabled)
         if (guardianUid != null) json.put("guardianUid", guardianUid)
@@ -223,6 +272,18 @@ data class DevicePolicyBundle(
         json.put("wardCapabilitiesUpdatedAt", wardCapabilitiesUpdatedAt)
         json.put("wardA11yTamperAt", wardA11yTamperAt)
         if (wardSdkInt != null) json.put("wardSdkInt", wardSdkInt)
+        json.put("fortressesConfig", fortressesConfig.toJson())
+        json.put("selfControlFortressesAllowed", selfControlFortressesAllowed)
+        json.put("selfControlFortressUnlockAllowed", selfControlFortressUnlockAllowed)
+        json.put("selfControlOtherSettingsAllowed", selfControlOtherSettingsAllowed)
+        if (remoteModeUnlockTarget != null) json.put("remoteModeUnlockTarget", remoteModeUnlockTarget)
+        if (remoteModeUnlockRequestedAt != null) json.put("remoteModeUnlockRequestedAt", remoteModeUnlockRequestedAt)
+        if (wardActiveFortressId != null) json.put("wardActiveFortressId", wardActiveFortressId)
+        if (wardActiveFortressName != null) json.put("wardActiveFortressName", wardActiveFortressName)
+        json.put("wardActiveFortressIsEmergency", wardActiveFortressIsEmergency)
+        json.put("wardActiveFortressEndsAtWall", wardActiveFortressEndsAtWall)
+        json.put("wardIsCurfewActiveNow", wardIsCurfewActiveNow)
+        json.put("wardActiveModesUpdatedAt", wardActiveModesUpdatedAt)
         return json.toString()
     }
 
@@ -252,6 +313,10 @@ data class DevicePolicyBundle(
         const val DEACTIVATION_DEFAULT_DELAY_MS = 48L * 60L * 60L * 1000L // 48 Hours
         const val DEACTIVATION_QR_DELAY_MS = 24L * 60L * 60L * 1000L // 24 Hours
 
+        const val REMOTE_MODE_UNLOCK_CURFEW = "CURFEW"
+        const val REMOTE_MODE_UNLOCK_FORTRESS = "FORTRESS"
+        const val REMOTE_MODE_UNLOCK_ALL = "ALL"
+
         fun defaultPolicy(): DevicePolicyBundle = DevicePolicyBundle(
             browserFilterMode = BROWSER_FILTER_OFF,
             isFullSystemFilteringEnabled = false,
@@ -261,6 +326,7 @@ data class DevicePolicyBundle(
             dnsHost = CLOUDFLARE_FAMILY_DNS_HOST,
             isYouTubeRestrictedModeEnabled = false,
             isAdBlockingEnabled = false,
+            isLocalVpnFallbackEnabled = false,
             isTelegramWebBlocked = true,
             isBlockExternalVpnEnabled = true,
             lockNewInstallsUntilApproved = false,
@@ -329,6 +395,7 @@ data class DevicePolicyBundle(
             val dns = (map["dnsHost"] as? String)?.takeIf { it.isNotBlank() } ?: CLOUDFLARE_FAMILY_DNS_HOST
             val ytRestricted = (map["isYouTubeRestrictedModeEnabled"] as? Boolean) ?: false
             val adBlocking = (map["isAdBlockingEnabled"] as? Boolean) ?: false
+            val localVpnFallback = (map["isLocalVpnFallbackEnabled"] as? Boolean) ?: false
             val tgBlocked = (map["isTelegramWebBlocked"] as? Boolean) ?: true
             val blockExternalVpn = (map["isBlockExternalVpnEnabled"] as? Boolean) ?: true
 
@@ -337,10 +404,10 @@ data class DevicePolicyBundle(
             val supervised = (map["isSupervised"] as? Boolean) ?: (!gUid.isNullOrBlank())
             val isSelfControlAllowed = (map["isSelfControlAllowed"] as? Boolean) ?: true
             val selfControlCurfewAllowed = (map["selfControlCurfewAllowed"] as? Boolean) ?: true
-            val selfControlWebAllowed = (map["selfControlWebAllowed"] as? Boolean) ?: false
-            val selfControlAppsAllowed = (map["selfControlAppsAllowed"] as? Boolean) ?: false
+            val selfControlWebAllowed = (map["selfControlWebAllowed"] as? Boolean) ?: true
+            val selfControlAppsAllowed = (map["selfControlAppsAllowed"] as? Boolean) ?: true
             val selfControlWaqfaAllowed = (map["selfControlWaqfaAllowed"] as? Boolean) ?: true
-            val selfControlNewAppsAllowed = (map["selfControlNewAppsAllowed"] as? Boolean) ?: false
+            val selfControlNewAppsAllowed = (map["selfControlNewAppsAllowed"] as? Boolean) ?: true
             val isDateTimeLocked = (map["isDateTimeLocked"] as? Boolean) ?: false
             val isClearAppDataAllowed = (map["isClearAppDataAllowed"] as? Boolean) ?: true
             val timeZoneId = (map["timeZoneId"] as? String)?.takeIf { it.isNotBlank() } ?: com.drmohammed.antiporn.curfew.CurfewConfig.DEFAULT_TIMEZONE_ID
@@ -358,7 +425,7 @@ data class DevicePolicyBundle(
             val remoteTeardownAt = (map["remoteTeardownRequestedAt"] as? Number)?.toLong()
             val waqfa = WaqfaConfig.fromMap(map["waqfaConfig"])
             val pageShield = com.drmohammed.antiporn.pageshield.model.PageShieldConfig.fromMap(map["pageShieldConfig"])
-            val selfControlPageShieldAllowed = (map["selfControlPageShieldAllowed"] as? Boolean) ?: false
+            val selfControlPageShieldAllowed = (map["selfControlPageShieldAllowed"] as? Boolean) ?: true
 
             val version = (map["version"] as? Number)?.toLong() ?: 1L
             val updatedAt = (map["updatedAt"] as? Number)?.toLong() ?: 0L
@@ -368,6 +435,19 @@ data class DevicePolicyBundle(
             val wardCapabilitiesUpdatedAt = (map["wardCapabilitiesUpdatedAt"] as? Number)?.toLong() ?: 0L
             val wardA11yTamperAt = (map["wardA11yTamperAt"] as? Number)?.toLong() ?: 0L
             val wardSdkInt = (map["wardSdkInt"] as? Number)?.toInt()
+
+            val fortressesConfig = FortressesConfig.fromMap(map["fortressesConfig"])
+            val selfControlFortressesAllowed = (map["selfControlFortressesAllowed"] as? Boolean) ?: true
+            val selfControlFortressUnlockAllowed = (map["selfControlFortressUnlockAllowed"] as? Boolean) ?: true
+            val selfControlOtherSettingsAllowed = (map["selfControlOtherSettingsAllowed"] as? Boolean) ?: true
+            val remoteModeUnlockTarget = (map["remoteModeUnlockTarget"] as? String)?.takeIf { it.isNotBlank() }
+            val remoteModeUnlockRequestedAt = (map["remoteModeUnlockRequestedAt"] as? Number)?.toLong()
+            val wardActiveFortressId = (map["wardActiveFortressId"] as? String)?.takeIf { it.isNotBlank() }
+            val wardActiveFortressName = (map["wardActiveFortressName"] as? String)?.takeIf { it.isNotBlank() }
+            val wardActiveFortressIsEmergency = (map["wardActiveFortressIsEmergency"] as? Boolean) ?: false
+            val wardActiveFortressEndsAtWall = (map["wardActiveFortressEndsAtWall"] as? Number)?.toLong() ?: 0L
+            val wardIsCurfewActiveNow = (map["wardIsCurfewActiveNow"] as? Boolean) ?: false
+            val wardActiveModesUpdatedAt = (map["wardActiveModesUpdatedAt"] as? Number)?.toLong() ?: 0L
 
             return DevicePolicyBundle(
                 curfewStartHour = startHour, curfewStartMinute = startMin,
@@ -394,6 +474,7 @@ data class DevicePolicyBundle(
                 dnsHost = dns,
                 isYouTubeRestrictedModeEnabled = ytRestricted,
                 isAdBlockingEnabled = adBlocking,
+                isLocalVpnFallbackEnabled = localVpnFallback,
                 isTelegramWebBlocked = tgBlocked,
                 isBlockExternalVpnEnabled = blockExternalVpn,
                 guardianUid = gUid, guardianName = gName,
@@ -425,7 +506,19 @@ data class DevicePolicyBundle(
                 wardCanWriteSecureSettings = wardCanWriteSecureSettings,
                 wardCapabilitiesUpdatedAt = wardCapabilitiesUpdatedAt,
                 wardA11yTamperAt = wardA11yTamperAt,
-                wardSdkInt = wardSdkInt
+                wardSdkInt = wardSdkInt,
+                fortressesConfig = fortressesConfig,
+                selfControlFortressesAllowed = selfControlFortressesAllowed,
+                selfControlFortressUnlockAllowed = selfControlFortressUnlockAllowed,
+                selfControlOtherSettingsAllowed = selfControlOtherSettingsAllowed,
+                remoteModeUnlockTarget = remoteModeUnlockTarget,
+                remoteModeUnlockRequestedAt = remoteModeUnlockRequestedAt,
+                wardActiveFortressId = wardActiveFortressId,
+                wardActiveFortressName = wardActiveFortressName,
+                wardActiveFortressIsEmergency = wardActiveFortressIsEmergency,
+                wardActiveFortressEndsAtWall = wardActiveFortressEndsAtWall,
+                wardIsCurfewActiveNow = wardIsCurfewActiveNow,
+                wardActiveModesUpdatedAt = wardActiveModesUpdatedAt
             )
         }
 
@@ -480,6 +573,7 @@ data class DevicePolicyBundle(
                 val dns = json.optNonBlankStringOrNull("dnsHost") ?: CLOUDFLARE_FAMILY_DNS_HOST
                 val ytRestricted = json.optBoolean("isYouTubeRestrictedModeEnabled", false)
                 val adBlocking = json.optBoolean("isAdBlockingEnabled", false)
+                val localVpnFallback = json.optBoolean("isLocalVpnFallbackEnabled", false)
                 val tgBlocked = json.optBoolean("isTelegramWebBlocked", true)
                 val blockExternalVpn = json.optBoolean("isBlockExternalVpnEnabled", true)
                 val gUid = json.optNonBlankStringOrNull("guardianUid")
@@ -487,10 +581,10 @@ data class DevicePolicyBundle(
                 val supervised = json.optBoolean("isSupervised", !gUid.isNullOrBlank())
                 val isSelfControlAllowed = json.optBoolean("isSelfControlAllowed", true)
                 val selfControlCurfewAllowed = json.optBoolean("selfControlCurfewAllowed", true)
-                val selfControlWebAllowed = json.optBoolean("selfControlWebAllowed", false)
-                val selfControlAppsAllowed = json.optBoolean("selfControlAppsAllowed", false)
+                val selfControlWebAllowed = json.optBoolean("selfControlWebAllowed", true)
+                val selfControlAppsAllowed = json.optBoolean("selfControlAppsAllowed", true)
                 val selfControlWaqfaAllowed = json.optBoolean("selfControlWaqfaAllowed", true)
-                val selfControlNewAppsAllowed = json.optBoolean("selfControlNewAppsAllowed", false)
+                val selfControlNewAppsAllowed = json.optBoolean("selfControlNewAppsAllowed", true)
                 val isDateTimeLocked = json.optBoolean("isDateTimeLocked", false)
                 val isClearAppDataAllowed = json.optBoolean("isClearAppDataAllowed", true)
                 val timeZoneId = json.optNonBlankStringOrNull("timeZoneId") ?: com.drmohammed.antiporn.curfew.CurfewConfig.DEFAULT_TIMEZONE_ID
@@ -508,7 +602,7 @@ data class DevicePolicyBundle(
                 val remoteTeardownAt = if (json.has("remoteTeardownRequestedAt") && !json.isNull("remoteTeardownRequestedAt")) json.optLong("remoteTeardownRequestedAt") else null
                 val waqfa = WaqfaConfig.fromJson(json.optJSONObject("waqfaConfig"))
                 val pageShield = com.drmohammed.antiporn.pageshield.model.PageShieldConfig.fromJson(json.optJSONObject("pageShieldConfig"))
-                val selfControlPageShieldAllowed = json.optBoolean("selfControlPageShieldAllowed", false)
+                val selfControlPageShieldAllowed = json.optBoolean("selfControlPageShieldAllowed", true)
                 val wardHasAccessibilityService = if (json.has("wardHasAccessibilityService") && !json.isNull("wardHasAccessibilityService")) {
                     json.optBoolean("wardHasAccessibilityService")
                 } else {
@@ -531,6 +625,22 @@ data class DevicePolicyBundle(
                 } else {
                     null
                 }
+                val fortressesConfig = FortressesConfig.fromJson(json.optJSONObject("fortressesConfig"))
+                val selfControlFortressesAllowed = json.optBoolean("selfControlFortressesAllowed", true)
+                val selfControlFortressUnlockAllowed = json.optBoolean("selfControlFortressUnlockAllowed", true)
+                val selfControlOtherSettingsAllowed = json.optBoolean("selfControlOtherSettingsAllowed", true)
+                val remoteModeUnlockTarget = json.optNonBlankStringOrNull("remoteModeUnlockTarget")
+                val remoteModeUnlockRequestedAt = if (json.has("remoteModeUnlockRequestedAt") && !json.isNull("remoteModeUnlockRequestedAt")) {
+                    json.optLong("remoteModeUnlockRequestedAt")
+                } else {
+                    null
+                }
+                val wardActiveFortressId = json.optNonBlankStringOrNull("wardActiveFortressId")
+                val wardActiveFortressName = json.optNonBlankStringOrNull("wardActiveFortressName")
+                val wardActiveFortressIsEmergency = json.optBoolean("wardActiveFortressIsEmergency", false)
+                val wardActiveFortressEndsAtWall = json.optLong("wardActiveFortressEndsAtWall", 0L)
+                val wardIsCurfewActiveNow = json.optBoolean("wardIsCurfewActiveNow", false)
+                val wardActiveModesUpdatedAt = json.optLong("wardActiveModesUpdatedAt", 0L)
 
                 DevicePolicyBundle(
                     curfewStartHour = json.optInt("curfewStartHour", com.drmohammed.antiporn.curfew.CurfewConfig.START_HOUR).coerceIn(0, 23),
@@ -562,6 +672,7 @@ data class DevicePolicyBundle(
                     dnsHost = dns,
                     isYouTubeRestrictedModeEnabled = ytRestricted,
                     isAdBlockingEnabled = adBlocking,
+                    isLocalVpnFallbackEnabled = localVpnFallback,
                     isTelegramWebBlocked = tgBlocked,
                     isBlockExternalVpnEnabled = blockExternalVpn,
                     guardianUid = gUid, guardianName = gName,
@@ -594,7 +705,19 @@ data class DevicePolicyBundle(
                     wardCanWriteSecureSettings = wardCanWriteSecureSettings,
                     wardCapabilitiesUpdatedAt = wardCapabilitiesUpdatedAt,
                     wardA11yTamperAt = wardA11yTamperAt,
-                    wardSdkInt = wardSdkInt
+                    wardSdkInt = wardSdkInt,
+                    fortressesConfig = fortressesConfig,
+                    selfControlFortressesAllowed = selfControlFortressesAllowed,
+                    selfControlFortressUnlockAllowed = selfControlFortressUnlockAllowed,
+                    selfControlOtherSettingsAllowed = selfControlOtherSettingsAllowed,
+                    remoteModeUnlockTarget = remoteModeUnlockTarget,
+                    remoteModeUnlockRequestedAt = remoteModeUnlockRequestedAt,
+                    wardActiveFortressId = wardActiveFortressId,
+                    wardActiveFortressName = wardActiveFortressName,
+                    wardActiveFortressIsEmergency = wardActiveFortressIsEmergency,
+                    wardActiveFortressEndsAtWall = wardActiveFortressEndsAtWall,
+                    wardIsCurfewActiveNow = wardIsCurfewActiveNow,
+                    wardActiveModesUpdatedAt = wardActiveModesUpdatedAt
                 )
             } catch (e: Exception) {
                 try {

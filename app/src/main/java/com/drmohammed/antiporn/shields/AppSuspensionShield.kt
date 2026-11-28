@@ -14,9 +14,8 @@ import com.drmohammed.antiporn.core.model.ShieldStatus
 import com.drmohammed.antiporn.core.policy.AppPolicyRegistry
 
 /**
- * Pluggable security shield targeting unauthorized and unrestricted applications:
- * Suspends Telegram clients, open social networks, proxy/bypass browsers,
- * and random/anonymous chat applications.
+ * Pluggable security shield that enforces OS-level suspension on custom-blacklisted
+ * applications and pending/rejected Zero-Trust installs.
  */
 object AppSuspensionShield : ProtectionShield {
 

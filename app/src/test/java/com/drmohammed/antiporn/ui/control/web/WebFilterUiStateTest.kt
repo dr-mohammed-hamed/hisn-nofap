@@ -25,6 +25,19 @@ class WebFilterUiStateTest {
         assertTrue(adOnly.isLocalVpnNeeded)
         assertEquals(LocalVpnReason.AD_BLOCKING, adOnly.localVpnReason)
 
+        val fallbackOnly = WebFilterUiState(isLocalVpnFallbackEnabled = true)
+        assertFalse(fallbackOnly.isLocalVpnNeeded)
+        assertNull(fallbackOnly.localVpnReason)
+        assertEquals(EngineMode.LIGHT_PRIVATE_DNS, fallbackOnly.engineMode)
+        assertFalse(WebFilterUiState().isLocalVpnFallbackEnabled)
+        assertTrue(
+            WebFilterUiState.fromPolicy(
+                isRemote = false,
+                wardId = "",
+                policy = DevicePolicyBundle.defaultPolicy().copy(isLocalVpnFallbackEnabled = true)
+            ).isLocalVpnFallbackEnabled
+        )
+
         val both = WebFilterUiState(isFullSystemFiltering = true, isAdBlocking = true)
         assertTrue(both.isLocalVpnNeeded)
         assertEquals(LocalVpnReason.BOTH, both.localVpnReason)
@@ -100,6 +113,7 @@ class WebFilterUiStateTest {
         assertTrue(baseState.copy(isYouTubeRestricted = !initial.isYouTubeRestrictedModeEnabled).hasUnsavedChanges())
         assertTrue(baseState.copy(isFullSystemFiltering = true).hasUnsavedChanges())
         assertTrue(baseState.copy(isAdBlocking = true).hasUnsavedChanges())
+        assertTrue(baseState.copy(isLocalVpnFallbackEnabled = true).hasUnsavedChanges())
         assertTrue(baseState.copy(isWhitelistOnlyMode = true).hasUnsavedChanges())
         assertTrue(baseState.copy(blockedUrls = setOf("example.com")).hasUnsavedChanges())
         assertTrue(baseState.copy(allowedUrls = setOf("safe.com")).hasUnsavedChanges())

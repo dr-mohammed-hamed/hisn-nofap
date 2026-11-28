@@ -7,7 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.text.format.DateFormat
-import timber.log.Timber
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.drmohammed.antiporn.MainActivity
@@ -18,17 +17,20 @@ import com.drmohammed.antiporn.curfew.CurfewConfig
 import com.drmohammed.antiporn.curfew.CurfewEnforcer
 import com.drmohammed.antiporn.curfew.CurfewScheduleExt
 import com.drmohammed.antiporn.curfew.CurfewVpnStateCoordinator
-import com.drmohammed.antiporn.curfew.NapController
+import com.drmohammed.antiporn.fortress.engine.EffectiveRestrictionResolver
+import com.drmohammed.antiporn.fortress.engine.FortressSessionController
+import com.drmohammed.antiporn.fortress.notification.FortressNotificationReceiver
 import com.drmohammed.antiporn.notification.manager.AppNotificationManager
 import com.drmohammed.antiporn.notification.model.NotificationActionType
 import com.drmohammed.antiporn.notification.model.NotificationCategory
 import com.drmohammed.antiporn.notification.registry.NotificationRegistry
+import timber.log.Timber
 import java.util.Calendar
 import java.util.TimeZone
 
 /**
- * Unified Central Coordinator for all Curfew, Nap, and Guardian Lockdown notifications.
- * Enforces Clean Architecture Single-Source-of-Truth and eliminates semantic mismatch.
+ * Unified Central Coordinator for all Curfew, Fortress, and Guardian Lockdown notifications.
+ * Enforces Clean Architecture Single-Source-of-Truth via [EffectiveRestrictionResolver].
  */
 object ProtectionNotificationCoordinator {
 
@@ -41,17 +43,16 @@ object ProtectionNotificationCoordinator {
     const val NOTIFICATION_ID_EVENTS = NotificationRegistry.EVENT_NAP_ENDED_ID
 
     sealed class ProtectionState {
-        data class GuardianLockdown(val isCurfewAlsoActive: Boolean, val isNapAlsoActive: Boolean) : ProtectionState()
-        data class NapActive(val endWallMs: Long, val remainingMs: Long) : ProtectionState()
+        data class GuardianLockdown(val isCurfewAlsoActive: Boolean, val activeFortressName: String?) : ProtectionState()
+        data class FortressActive(val fortressName: String, val isEmergency: Boolean, val endWallMs: Long, val remainingMs: Long) : ProtectionState()
         data class CurfewActive(val endHour: Int, val endMinute: Int) : ProtectionState()
-        data class AppsOnlyActive(val isNap: Boolean, val endHour: Int, val endMinute: Int, val endWallMs: Long) : ProtectionState()
+        data class AppsOnlyActive(val activeFortressName: String?, val endHour: Int, val endMinute: Int, val endWallMs: Long) : ProtectionState()
         object DnsFilteringActive : ProtectionState()
         object Inactive : ProtectionState()
     }
 
-    fun canPostNotification(context: Context): Boolean {
-        return NotificationManagerCompat.from(context).areNotificationsEnabled()
-    }
+    fun canPostNotification(context: Context): Boolean =
+        NotificationManagerCompat.from(context).areNotificationsEnabled()
 
     fun ensureChannels(context: Context) {
         AppNotificationManager.getInstance(context).createNotificationChannels()
@@ -81,45 +82,43 @@ object ProtectionNotificationCoordinator {
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }
-        return DateFormat.getTimeFormat(context).apply {
-            timeZone = tz
-        }.format(cal.time)
+        return DateFormat.getTimeFormat(context).apply { timeZone = tz }.format(cal.time)
     }
 
     fun resolveCurrentState(context: Context): ProtectionState {
-        val instantKill = CurfewConfig.isInstantInternetKillEnabled(context)
-        val napActive = NapController.isNapActive(context)
-        val curfewActive = CurfewEnforcer.isEffectiveCurfewActive(context)
-        val vpnEnabled = CurfewConfig.isVpnBlackholeEnabled(context)
+        val effective = EffectiveRestrictionResolver.resolve(context)
+        val activeFortress = effective.activeFortress
+        val fortressName = activeFortress?.resolveDisplayName(context)
 
         return when {
-            instantKill -> {
-                ProtectionState.GuardianLockdown(
-                    isCurfewAlsoActive = curfewActive,
-                    isNapAlsoActive = napActive
-                )
-            }
-            napActive -> {
-                val endWall = NapController.getEndWall(context)
-                val remaining = NapController.remainingMs(context)
-                if (vpnEnabled) {
-                    ProtectionState.NapActive(endWallMs = endWall, remainingMs = remaining)
+            effective.isInstantInternetKillActive -> ProtectionState.GuardianLockdown(
+                isCurfewAlsoActive = effective.isNightCurfewActive,
+                activeFortressName = fortressName
+            )
+            activeFortress != null -> {
+                if (effective.shouldCutInternet) {
+                    ProtectionState.FortressActive(
+                        fortressName = fortressName ?: activeFortress.fortressId,
+                        isEmergency = activeFortress.isEmergency,
+                        endWallMs = activeFortress.endWallMs,
+                        remainingMs = activeFortress.remainingMs
+                    )
                 } else {
                     ProtectionState.AppsOnlyActive(
-                        isNap = true,
+                        activeFortressName = fortressName,
                         endHour = 0,
                         endMinute = 0,
-                        endWallMs = endWall
+                        endWallMs = activeFortress.endWallMs
                     )
                 }
             }
-            curfewActive -> {
+            effective.isNightCurfewActive -> {
                 val (endH, endM) = getActiveCurfewEndHourAndMinute(context)
-                if (vpnEnabled) {
+                if (effective.shouldCutInternet) {
                     ProtectionState.CurfewActive(endHour = endH, endMinute = endM)
                 } else {
                     ProtectionState.AppsOnlyActive(
-                        isNap = false,
+                        activeFortressName = null,
                         endHour = endH,
                         endMinute = endM,
                         endWallMs = 0L
@@ -131,27 +130,22 @@ object ProtectionNotificationCoordinator {
         }
     }
 
-    private fun isLocalDnsVpnActive(context: Context): Boolean {
-        return CurfewBlackholeVpnService.evaluateRequiredMode(context) == CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY ||
+    private fun isLocalDnsVpnActive(context: Context): Boolean =
+        CurfewBlackholeVpnService.evaluateRequiredMode(context) == CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY ||
             (CurfewBlackholeVpnService.isServiceOrTunnelActive() &&
-             CurfewBlackholeVpnService.currentMode == CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY)
-    }
+                CurfewBlackholeVpnService.currentMode == CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY)
 
     fun buildProtectionNotification(
         context: Context,
         state: ProtectionState = resolveCurrentState(context)
     ): Notification {
         ensureChannels(context)
-
         val openAppIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
-        val contentPendingIntent = PendingIntent.getActivity(
-            context,
-            0,
-            openAppIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
-        )
+        val piFlags = PendingIntent.FLAG_UPDATE_CURRENT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
+        val contentPendingIntent = PendingIntent.getActivity(context, 0, openAppIntent, piFlags)
 
         val builder = NotificationCompat.Builder(context, CHANNEL_ID_PROTECTION)
             .setContentIntent(contentPendingIntent)
@@ -162,119 +156,87 @@ object ProtectionNotificationCoordinator {
 
         when (state) {
             is ProtectionState.GuardianLockdown -> {
-                val title = context.getString(R.string.notif_guardian_lockdown_title)
                 val desc = when {
-                    state.isNapAlsoActive -> context.getString(R.string.notif_guardian_lockdown_desc_nap)
-                    state.isCurfewAlsoActive -> context.getString(R.string.notif_guardian_lockdown_desc_curfew)
-                    else -> context.getString(R.string.notif_guardian_lockdown_desc)
+                    state.activeFortressName != null ->
+                        context.getString(R.string.notif_guardian_lockdown_desc_fortress_format, state.activeFortressName)
+                    state.isCurfewAlsoActive ->
+                        context.getString(R.string.notif_guardian_lockdown_desc_curfew)
+                    else ->
+                        context.getString(R.string.notif_guardian_lockdown_desc)
                 }
-                builder.setContentTitle(title)
+                builder.setContentTitle(context.getString(R.string.notif_guardian_lockdown_title))
                     .setContentText(desc)
                     .setStyle(NotificationCompat.BigTextStyle().bigText(desc))
                     .setSmallIcon(R.drawable.ic_shield_vpn)
                     .setCategory(NotificationCompat.CATEGORY_STATUS)
             }
-            is ProtectionState.NapActive -> {
-                val title = context.getString(R.string.notif_nap_active_title)
-                val desc = context.getString(R.string.notif_nap_active_desc)
-                builder.setContentTitle(title)
+            is ProtectionState.FortressActive -> {
+                val desc = context.getString(R.string.notif_fortress_active_desc_format, state.fortressName)
+                builder.setContentTitle(context.getString(R.string.notif_fortress_active_title))
                     .setContentText(desc)
                     .setStyle(NotificationCompat.BigTextStyle().bigText(desc))
                     .setSmallIcon(R.drawable.ic_shield_curfew)
                     .setCategory(NotificationCompat.CATEGORY_STOPWATCH)
-                    .setUsesChronometer(true)
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    builder.setChronometerCountDown(true)
-                }
-                val napRemainingMs = NapController.remainingMs(context).takeIf { it > 0L } ?: state.remainingMs
-                builder.setWhen(System.currentTimeMillis() + napRemainingMs)
-                builder.setShowWhen(true)
-
-                val extendIntent = Intent(context, NapNotificationReceiver::class.java).apply {
-                    action = NapNotificationReceiver.ACTION_EXTEND_NAP
-                }
-                val extendPendingIntent = PendingIntent.getBroadcast(
-                    context,
-                    101,
-                    extendIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
-                )
-                builder.addAction(
-                    R.drawable.ic_shield_curfew,
-                    context.getString(R.string.notif_action_extend_nap),
-                    extendPendingIntent
-                )
+                val remainingMs = FortressSessionController.remainingMs(context).takeIf { it > 0L } ?: state.remainingMs
+                attachFortressCountdownAndExtend(context, builder, remainingMs, R.drawable.ic_shield_curfew, piFlags)
             }
             is ProtectionState.CurfewActive -> {
-                val title = context.getString(R.string.notif_curfew_active_title)
                 val formattedEnd = formatTimeOfDay(context, state.endHour, state.endMinute)
                 val desc = context.getString(R.string.notif_curfew_active_desc_format, formattedEnd)
-                builder.setContentTitle(title)
+                builder.setContentTitle(context.getString(R.string.notif_curfew_active_title))
                     .setContentText(desc)
                     .setStyle(NotificationCompat.BigTextStyle().bigText(desc))
                     .setSmallIcon(R.drawable.ic_shield_curfew)
                     .setCategory(NotificationCompat.CATEGORY_STATUS)
             }
             is ProtectionState.AppsOnlyActive -> {
-                val title = context.getString(R.string.notif_apps_suspended_title)
-                val desc = if (state.isNap) {
-                    context.getString(R.string.notif_apps_suspended_nap_desc)
+                val desc = if (state.activeFortressName != null) {
+                    context.getString(R.string.notif_apps_suspended_fortress_desc_format, state.activeFortressName)
                 } else {
                     val formattedEnd = formatTimeOfDay(context, state.endHour, state.endMinute)
                     context.getString(R.string.notif_apps_suspended_curfew_desc_format, formattedEnd)
                 }
-                builder.setContentTitle(title)
+                builder.setContentTitle(context.getString(R.string.notif_apps_suspended_title))
                     .setContentText(desc)
                     .setStyle(NotificationCompat.BigTextStyle().bigText(desc))
                     .setSmallIcon(R.drawable.ic_shield_freeze)
                     .setCategory(NotificationCompat.CATEGORY_STATUS)
-
-                if (state.isNap && state.endWallMs > 0L) {
-                    builder.setUsesChronometer(true)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                        builder.setChronometerCountDown(true)
-                    }
-                    builder.setWhen(System.currentTimeMillis() + NapController.remainingMs(context))
-                    builder.setShowWhen(true)
-
-                    val extendIntent = Intent(context, NapNotificationReceiver::class.java).apply {
-                        action = NapNotificationReceiver.ACTION_EXTEND_NAP
-                    }
-                    val extendPendingIntent = PendingIntent.getBroadcast(
-                        context,
-                        101,
-                        extendIntent,
-                        PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
-                    )
-                    builder.addAction(
-                        R.drawable.ic_shield_freeze,
-                        context.getString(R.string.notif_action_extend_nap),
-                        extendPendingIntent
-                    )
+                if (state.activeFortressName != null && state.endWallMs > 0L) {
+                    val remainingMs = FortressSessionController.remainingMs(context)
+                    attachFortressCountdownAndExtend(context, builder, remainingMs, R.drawable.ic_shield_freeze, piFlags)
                 }
             }
-            is ProtectionState.DnsFilteringActive -> {
-                val title = context.getString(R.string.dns_vpn_notification_title)
+            is ProtectionState.DnsFilteringActive, is ProtectionState.Inactive -> {
                 val desc = context.getString(R.string.dns_vpn_notification_desc)
-                builder.setContentTitle(title)
-                    .setContentText(desc)
-                    .setStyle(NotificationCompat.BigTextStyle().bigText(desc))
-                    .setSmallIcon(R.drawable.ic_shield_dns)
-                    .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            }
-            is ProtectionState.Inactive -> {
-                val title = context.getString(R.string.dns_vpn_notification_title)
-                val desc = context.getString(R.string.dns_vpn_notification_desc)
-                builder.setContentTitle(title)
+                builder.setContentTitle(context.getString(R.string.dns_vpn_notification_title))
                     .setContentText(desc)
                     .setStyle(NotificationCompat.BigTextStyle().bigText(desc))
                     .setSmallIcon(R.drawable.ic_shield_dns)
                     .setCategory(NotificationCompat.CATEGORY_SERVICE)
             }
         }
-
         return builder.build()
+    }
+
+    private fun attachFortressCountdownAndExtend(
+        context: Context,
+        builder: NotificationCompat.Builder,
+        remainingMs: Long,
+        iconRes: Int,
+        piFlags: Int
+    ) {
+        builder.setUsesChronometer(true)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            builder.setChronometerCountDown(true)
+        }
+        builder.setWhen(System.currentTimeMillis() + remainingMs.coerceAtLeast(0L))
+        builder.setShowWhen(true)
+
+        val extendIntent = Intent(context, FortressNotificationReceiver::class.java).apply {
+            action = FortressNotificationReceiver.ACTION_EXTEND_FORTRESS
+        }
+        val extendPendingIntent = PendingIntent.getBroadcast(context, 101, extendIntent, piFlags)
+        builder.addAction(iconRes, context.getString(R.string.notif_action_extend_fortress), extendPendingIntent)
     }
 
     @Synchronized
@@ -308,7 +270,6 @@ object ProtectionNotificationCoordinator {
         onPost: (Int, ProtectionState) -> Unit
     ) {
         val state = resolveCurrentState(context)
-
         if (state is ProtectionState.Inactive) {
             val activeService = CurfewVpnStateCoordinator.activeService?.get()
             if (!CurfewBlackholeVpnService.isServiceOrTunnelActive() || activeService?.isForegroundActive != true) {
@@ -316,35 +277,32 @@ object ProtectionNotificationCoordinator {
             }
             return
         }
-
         if (state is ProtectionState.DnsFilteringActive && CurfewVpnStateCoordinator.canRunDnsVpnSilently(context)) {
             CurfewVpnStateCoordinator.syncForegroundPresentation()
             onCancel(NOTIFICATION_ID_PROTECTION)
             return
         }
-
         onPost(NOTIFICATION_ID_PROTECTION, state)
     }
 
-    fun postNapEndedNotification(context: Context) {
+    fun postFortressEndedNotification(context: Context, @Suppress("UNUSED_PARAMETER") lastFortressName: String? = null) {
         try {
             val descRes = if (CurfewEnforcer.isEffectiveBlockActive(context)) {
-                R.string.notif_nap_ended_desc_curfew_still_active
+                R.string.notif_fortress_ended_desc_curfew_still_active
             } else {
-                R.string.notif_nap_ended_desc
+                R.string.notif_fortress_ended_desc
             }
             AppNotificationManager.getInstance(context).postEventNotification(
                 category = NotificationCategory.CURFEW,
-                title = context.getString(R.string.notif_nap_ended_title),
+                title = context.getString(R.string.notif_fortress_ended_title),
                 message = context.getString(descRes),
-                dedupKey = "nap_ended_${TrustedTimeProvider.currentTimeMillis(context) / 60000}",
+                dedupKey = "fortress_ended_${TrustedTimeProvider.currentTimeMillis(context) / 60000}",
                 cooldownMs = 60_000L,
                 actionType = NotificationActionType.NONE,
                 postSystemNotification = false
             )
         } catch (e: Exception) {
-            Timber.tag(TAG).e(e, "Error recording nap ended in notification center")
+            Timber.tag(TAG).e(e, "Error recording fortress ended in notification center")
         }
     }
 }
-

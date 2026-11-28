@@ -138,4 +138,24 @@ object NotificationRegistry {
     /** High-priority prompt when a guardian-pushed policy requires Usage Access permission on the ward device. */
     const val EVENT_REMOTE_USAGE_ACCESS_REQUIRED_ID = 9104
 
+    /** High-priority recovery prompt when apps remain disabled after an interrupted freeze-based promotion. */
+    const val EVENT_FREEZE_RECOVERY_ID = 9105
+
+    /** High-priority prompt requesting one-time consent to activate Local DNS VPN fallback when Private DNS stalls. */
+    const val EVENT_DNS_FALLBACK_CONSENT_ID = 9106
+
+    // ==========================================
+    // Provisioning PendingIntent Request Codes (Isolated from 1002 AI Resume)
+    // ==========================================
+
+    const val REQUEST_CODE_PAIRING_REPLY = 9901
+    const val REQUEST_CODE_ACK_WIZARD = 9902
+    const val REQUEST_CODE_PROVISIONING_SUCCESS = 9903
+    const val REQUEST_CODE_BLOCKING_USERS = 9904
+    const val REQUEST_CODE_PROVISIONING_FAILURE = 9905
+    const val REQUEST_CODE_OEM_PERMISSION = 9906
+    const val REQUEST_CODE_FREEZE_RECOVERY = 9907
+    const val REQUEST_CODE_ACCOUNTS_BLOCKING = 9908
+    const val REQUEST_CODE_DNS_FALLBACK_CONSENT = 9909
+
 }

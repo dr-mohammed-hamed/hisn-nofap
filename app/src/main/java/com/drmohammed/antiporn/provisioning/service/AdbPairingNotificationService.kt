@@ -4,65 +4,61 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.database.ContentObserver
-import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
 import androidx.core.app.RemoteInput
-import com.drmohammed.antiporn.MainActivity
-import com.drmohammed.antiporn.R
+import androidx.core.content.ContextCompat
 import com.drmohammed.antiporn.notification.registry.NotificationRegistry
 import com.drmohammed.antiporn.provisioning.engine.AdbMdnsDiscovery
-import com.drmohammed.antiporn.provisioning.engine.BlockingSecondaryUser
 import com.drmohammed.antiporn.provisioning.engine.DeviceOwnerPromoter
 import com.drmohammed.antiporn.provisioning.engine.OemProvisioningHelper
-import com.drmohammed.antiporn.provisioning.engine.PromotionResult
 import com.drmohammed.antiporn.provisioning.engine.ProvisioningAckStore
+import com.drmohammed.antiporn.provisioning.engine.ProvisioningFreezeRecoveryStore
 import com.drmohammed.antiporn.provisioning.receiver.PairingCodeReceiver
 import com.drmohammed.antiporn.provisioning.ui.ProvisioningWizardActivity
-import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import timber.log.Timber
+import java.lang.ref.WeakReference
 
 /**
- * Foreground Service that manages mDNS auto-discovery, live settings step-by-step
- * guidance via ContentObserver, and surfaces the high-priority Heads-Up pairing prompt.
+ * Foreground Service managing mDNS discovery, live settings guidance via ContentObserver,
+ * and the high-priority Heads-Up pairing prompt notification.
  */
 class AdbPairingNotificationService : Service() {
 
     private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(Dispatchers.Main + serviceJob)
-    private val stateLock = Any()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val companionSyncLock = Any()
+    private val promptState = AdbPairingPromptState()
 
+    @Volatile
+    private var isServiceDestroyed = false
     private var mdnsDiscovery: AdbMdnsDiscovery? = null
-    @Volatile private var capturedPairingPort = 0
-    @Volatile private var capturedConnectPort = 0
     private var adbWifiObserver: ContentObserver? = null
-    @Volatile private var lastPromptedPairingPort = 0
-    @Volatile private var isPromoting = false
-    @Volatile private var isShowingStickyOutcome = false
 
     override fun onCreate() {
         super.onCreate()
+        isServiceDestroyed = false
+        activeInstance = WeakReference(this)
         AdbPairingNotificationFactory.createNotificationChannels(this)
         registerAdbWifiObserver()
-
         try {
             val initialNotification = AdbPairingNotificationFactory.buildGuideNotification(this, isWirelessAdbEnabled())
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                startForeground(
-                    NOTIFICATION_ID,
-                    initialNotification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                )
+                startForeground(NOTIFICATION_ID, initialNotification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
             } else {
                 startForeground(NOTIFICATION_ID, initialNotification)
             }
@@ -78,199 +74,114 @@ class AdbPairingNotificationService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_REFRESH_ACK_STATE -> {
-                val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-                if (capturedPairingPort > 0 && !isPromoting && !isShowingStickyOutcome && !DeviceOwnerPromoter.isPromotionActive) {
-                    nm?.notify(
-                        PAIRING_PROMPT_NOTIFICATION_ID,
-                        AdbPairingNotificationFactory.buildPairingPromptNotification(this, capturedPairingPort, capturedConnectPort)
-                    )
+                promptState.refreshPromptPorts(DeviceOwnerPromoter.isPromotionActive)?.let { (pairPort, connPort) ->
+                    AdbPairingOutcomeDispatcher.notifyPairingPrompt(this, pairPort, connPort)
                 }
+                return START_STICKY
+            }
+            ACTION_CLEAR_STICKY_OUTCOME -> {
+                handleClearStickyOutcome(refreshPrompt = !intent.getBooleanExtra(EXTRA_SUPPRESS_REPROMPT, false))
                 return START_STICKY
             }
             ACTION_SUBMIT_PAIRING_CODE -> {
-                val remoteInput = RemoteInput.getResultsFromIntent(intent)
-                val rawCode = remoteInput?.getCharSequence(PairingCodeReceiver.EXTRA_PAIRING_CODE)?.toString()
-                val code = PairingCodeReceiver.sanitizePairingCode(rawCode)
-                val port = intent.getIntExtra(EXTRA_PAIRING_PORT, 0).takeIf { it > 0 } ?: capturedPairingPort
-                val connectPort = capturedConnectPort.takeIf { it > 0 } ?: intent.getIntExtra(EXTRA_CONNECT_PORT, 0)
-
-                if (code.length == 6 && port > 0) {
-                    handlePairingCodeSubmission(code, port, connectPort)
-                } else {
-                    Timber.tag(TAG).w("ACTION_SUBMIT_PAIRING_CODE received with empty/invalid code. len=${code.length}, port=$port")
-                    BlackBoxRecorder.recordPairing(
-                        this,
-                        "REMOTE_INPUT_EMPTY_OR_INVALID",
-                        isSuccess = false,
-                        details = "rawCodeNull=${rawCode == null}, port=$port"
-                    )
-                    val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-                    notificationManager?.notify(
-                        PAIRING_PROMPT_NOTIFICATION_ID,
-                        AdbPairingNotificationFactory.buildPairingPromptNotification(this, capturedPairingPort, capturedConnectPort)
-                    )
-                }
+                handleSubmitPairingCodeIntent(intent)
                 return START_STICKY
             }
         }
-
         startMdnsRadar()
         return START_STICKY
     }
 
+    private fun handleSubmitPairingCodeIntent(intent: Intent) {
+        val rawCode = RemoteInput.getResultsFromIntent(intent)?.getCharSequence(PairingCodeReceiver.EXTRA_PAIRING_CODE)?.toString()
+        val code = PairingCodeReceiver.sanitizePairingCode(rawCode)
+        val ports = promptState.currentPorts()
+        val port = intent.getIntExtra(EXTRA_PAIRING_PORT, 0).takeIf { it > 0 } ?: ports.first
+        val connectPort = ports.second.takeIf { it > 0 } ?: intent.getIntExtra(EXTRA_CONNECT_PORT, 0)
+
+        if (code.length == 6 && port > 0) {
+            handlePairingCodeSubmission(code, port, connectPort)
+        } else {
+            AdbPairingOutcomeDispatcher.dispatchInvalidPairingInput(this, rawCode == null, code.length, port, ports)
+        }
+    }
+
     private fun handlePairingCodeSubmission(code: String, port: Int, connectPort: Int) {
         if (OemProvisioningHelper.requiresPreActivationDangerAck(this) && !ProvisioningAckStore.hasValidAck(this)) {
-            Timber.tag(TAG).w("Submission blocked: Danger acknowledgment required but missing or expired")
-            BlackBoxRecorder.recordPairing(this, "SUBMISSION_BLOCKED_NO_ACK", isSuccess = false, details = "port=$port")
-            val failIntent = Intent(PairingCodeReceiver.ACTION_PROVISIONING_RESULT).apply {
-                setPackage(packageName)
-                putExtra(PairingCodeReceiver.EXTRA_SUCCESS, false)
-                putExtra(PairingCodeReceiver.EXTRA_ERROR_MESSAGE, getString(R.string.provisioning_error_ack_required))
-            }
-            sendBroadcast(failIntent)
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-            nm?.notify(
-                PAIRING_PROMPT_NOTIFICATION_ID,
-                AdbPairingNotificationFactory.buildPairingPromptNotification(this, capturedPairingPort, capturedConnectPort)
-            )
+            AdbPairingOutcomeDispatcher.dispatchAckRequiredBlocked(this, port, promptState.currentPorts())
             return
         }
-
-        synchronized(stateLock) {
-            if (isPromoting || DeviceOwnerPromoter.isPromotionActive) {
-                Timber.tag(TAG).w("Promotion already in progress, ignoring duplicate submit")
-                return
-            }
-            isPromoting = true
-            isShowingStickyOutcome = false
+        if (!promptState.tryBeginPromotion(DeviceOwnerPromoter.isPromotionActive)) {
+            Timber.tag(TAG).w("Promotion already in progress, ignoring duplicate submit")
+            return
         }
+        (getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager)?.notify(
+            PAIRING_PROMPT_NOTIFICATION_ID,
+            AdbPairingNotificationFactory.buildInProgressNotification(this)
+        )
 
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-        nm?.notify(PAIRING_PROMPT_NOTIFICATION_ID, AdbPairingNotificationFactory.buildInProgressNotification(this))
-
+        val dispatchCtx = OutcomeDispatchContext(this, promptState, port, connectPort, ::stopForegroundAndSelf)
         serviceScope.launch {
             try {
-                val result = DeviceOwnerPromoter.pairAndPromote(
-                    context = this@AdbPairingNotificationService,
-                    pairingPort = port,
-                    connectPort = connectPort,
-                    pairingCode = code
-                )
-
-                when (result) {
-                    is PromotionResult.Success -> {
-                        isPromoting = false
-                        isShowingStickyOutcome = false
-                        Timber.tag(TAG).i("Promotion succeeded via service submission")
-                        ProvisioningAckStore.clearAck(this@AdbPairingNotificationService)
-
-                        val mainIntent = Intent(this@AdbPairingNotificationService, MainActivity::class.java).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                        }
-                        val optionsBundle = AdbPairingNotificationFactory.buildBalOptionsBundle()
-                        try {
-                            startActivity(mainIntent, optionsBundle)
-                        } catch (e: Exception) {
-                            Timber.tag(TAG).w(e, "Direct launch of MainActivity failed")
-                        }
-
-                        val successIntent = Intent(PairingCodeReceiver.ACTION_PROVISIONING_RESULT).apply {
-                            setPackage(packageName)
-                            putExtra(PairingCodeReceiver.EXTRA_SUCCESS, true)
-                        }
-                        sendBroadcast(successIntent)
-
-                        nm?.notify(
-                            SUCCESS_NOTIFICATION_ID,
-                            AdbPairingNotificationFactory.buildSuccessNotification(
-                                this@AdbPairingNotificationService,
-                                mainIntent,
-                                optionsBundle
-                            )
-                        )
-                        stopForegroundAndSelf()
-                    }
-                    is PromotionResult.SecondaryUsersBlocking -> {
-                        isShowingStickyOutcome = true
-                        isPromoting = false
-                        val usersJson = BlockingSecondaryUser.listToJson(result.users)
-                        Timber.tag(TAG).w("Promotion paused: ${result.users.size} blocking secondary user(s) detected")
-
-                        val pausedBroadcast = Intent(PairingCodeReceiver.ACTION_PROVISIONING_RESULT).apply {
-                            setPackage(packageName)
-                            putExtra(PairingCodeReceiver.EXTRA_SUCCESS, false)
-                            putExtra(PairingCodeReceiver.EXTRA_BLOCKING_USERS_JSON, usersJson)
-                            putExtra(EXTRA_CONNECT_PORT, connectPort.takeIf { it > 0 } ?: capturedConnectPort)
-                        }
-                        sendBroadcast(pausedBroadcast)
-
-                        val wizardIntent = Intent(this@AdbPairingNotificationService, ProvisioningWizardActivity::class.java).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                            putExtra(ProvisioningWizardActivity.EXTRA_BLOCKING_USERS_JSON, usersJson)
-                            putExtra(ProvisioningWizardActivity.EXTRA_CONNECT_PORT, connectPort.takeIf { it > 0 } ?: capturedConnectPort)
-                        }
-                        val optionsBundle = AdbPairingNotificationFactory.buildBalOptionsBundle()
-                        try {
-                            startActivity(wizardIntent, optionsBundle)
-                        } catch (e: Exception) {
-                            Timber.tag(TAG).w(e, "Direct launch of ProvisioningWizardActivity for blocking users failed")
-                        }
-
-                        nm?.notify(
-                            PAIRING_PROMPT_NOTIFICATION_ID,
-                            AdbPairingNotificationFactory.buildBlockingUsersNotification(
-                                this@AdbPairingNotificationService,
-                                wizardIntent,
-                                optionsBundle
-                            )
-                        )
-                    }
-                    is PromotionResult.Failure -> {
-                        isPromoting = false
-                        val alreadyInProgressMsg = getString(R.string.provisioning_error_already_in_progress)
-                        if (DeviceOwnerPromoter.isPromotionActive && result.message == alreadyInProgressMsg) {
-                            Timber.tag(TAG).i("Ignoring concurrent lock rejection because another promotion is active")
-                            return@launch
-                        }
-                        isShowingStickyOutcome = true
-                        Timber.tag(TAG).e("Promotion failed: ${result.message}")
-
-                        val failIntent = Intent(PairingCodeReceiver.ACTION_PROVISIONING_RESULT).apply {
-                            setPackage(packageName)
-                            putExtra(PairingCodeReceiver.EXTRA_SUCCESS, false)
-                            putExtra(PairingCodeReceiver.EXTRA_ERROR_MESSAGE, result.message)
-                        }
-                        sendBroadcast(failIntent)
-
-                        nm?.notify(
-                            PAIRING_PROMPT_NOTIFICATION_ID,
-                            AdbPairingNotificationFactory.buildFailureNotification(
-                                this@AdbPairingNotificationService,
-                                result.message
-                            )
-                        )
-                    }
-                }
+                val result = DeviceOwnerPromoter.pairAndPromote(this@AdbPairingNotificationService, port, connectPort, code)
+                AdbPairingOutcomeDispatcher.dispatchResult(dispatchCtx, result)
             } catch (t: Throwable) {
-                if (t is CancellationException) throw t
-                isPromoting = false
-                Timber.tag(TAG).e(t, "Exception during handlePairingCodeSubmission")
+                if (t is CancellationException) {
+                    val lastKnownConnectPort = connectPort.takeIf { it > 0 } ?: capturedConnectPort
+                    promptState.cancelPromotionWithoutStickyOutcome()
+                    withContext(NonCancellable + Dispatchers.IO) {
+                        notifyRecoveryOnCancellationIfNeeded(lastKnownConnectPort)
+                    }
+                    throw t
+                }
+                AdbPairingOutcomeDispatcher.dispatchUnexpectedError(dispatchCtx, t)
             }
         }
     }
 
+    private fun notifyRecoveryOnCancellationIfNeeded(connectPortSnapshot: Int) {
+        try {
+            val stranded = ProvisioningFreezeRecoveryStore.findStillDisabledTrackedPackages(this)
+            if (stranded.isEmpty()) return
+            val canNotify = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                ContextCompat.checkSelfPermission(
+                    this,
+                    android.Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED
+            if (!canNotify) return
+
+            val recoveryIntent = Intent(this, ProvisioningWizardActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(ProvisioningWizardActivity.EXTRA_SHOW_RECOVERY_DIALOG, true)
+                if (connectPortSnapshot > 0) putExtra(ProvisioningWizardActivity.EXTRA_CONNECT_PORT, connectPortSnapshot)
+            }
+            val optionsBundle = AdbPairingNotificationFactory.buildBalOptionsBundle()
+            val notif = AdbPairingNotificationFactory.buildFreezeRecoveryNotification(
+                context = this,
+                affectedCount = stranded.size,
+                wizardIntent = recoveryIntent,
+                optionsBundle = optionsBundle
+            )
+            (getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager)
+                ?.notify(NotificationRegistry.EVENT_FREEZE_RECOVERY_ID, notif)
+        } catch (e: Exception) {
+            Timber.tag(TAG).w(e, "Failed posting freeze recovery notification on cancellation")
+        }
+    }
+
+    private fun handleClearStickyOutcome(refreshPrompt: Boolean = true) {
+        val snapshot = promptState.clearStickyOutcome(DeviceOwnerPromoter.isPromotionActive, refreshPrompt)
+        AdbPairingOutcomeDispatcher.dispatchClearSticky(this, snapshot)
+    }
+
     private fun registerAdbWifiObserver() {
         try {
-            val uri: Uri = Settings.Global.getUriFor("adb_wifi_enabled")
+            val uri = Settings.Global.getUriFor("adb_wifi_enabled")
             val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
                 override fun onChange(selfChange: Boolean) {
                     val isEnabled = isWirelessAdbEnabled()
                     Timber.tag(TAG).i("Observed adb_wifi_enabled change: $isEnabled")
-                    val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-                    notificationManager?.notify(
-                        NOTIFICATION_ID,
-                        AdbPairingNotificationFactory.buildGuideNotification(this@AdbPairingNotificationService, isEnabled)
-                    )
+                    AdbPairingOutcomeDispatcher.notifyGuideStatus(this@AdbPairingNotificationService, isEnabled)
                 }
             }
             adbWifiObserver = observer
@@ -280,101 +191,68 @@ class AdbPairingNotificationService : Service() {
         }
     }
 
-    private fun isWirelessAdbEnabled(): Boolean {
-        return try {
-            Settings.Global.getInt(contentResolver, "adb_wifi_enabled", 0) == 1
-        } catch (_: Exception) {
-            false
-        }
+    private fun isWirelessAdbEnabled(): Boolean = try {
+        Settings.Global.getInt(contentResolver, "adb_wifi_enabled", 0) == 1
+    } catch (_: Exception) {
+        false
     }
 
     private fun startMdnsRadar() {
-        if (capturedPairingPort > 0 || capturedConnectPort > 0) {
-            notifyPortState()
+        val initialSnapshot = promptState.currentPortSnapshot()
+        if (initialSnapshot.pairingPort > 0 || initialSnapshot.connectPort > 0) {
+            AdbPairingOutcomeDispatcher.dispatchPortSnapshot(this, initialSnapshot, syncCompanionPortsFromState())
         }
         mdnsDiscovery?.stopDiscovery()
         mdnsDiscovery = AdbMdnsDiscovery(
             context = this,
             onPairingPortDiscovered = { port ->
-                synchronized(stateLock) {
-                    capturedPairingPort = port
+                postMdnsEventOnMain {
+                    val snapshot = promptState.onPairingPortDiscovered(port)
+                    AdbPairingOutcomeDispatcher.dispatchPortSnapshot(this, snapshot, syncCompanionPortsFromState())
                 }
-                notifyPortState()
             },
             onConnectPortDiscovered = { port ->
-                synchronized(stateLock) {
-                    capturedConnectPort = port
+                postMdnsEventOnMain {
+                    val snapshot = promptState.onConnectPortDiscovered(port)
+                    AdbPairingOutcomeDispatcher.dispatchPortSnapshot(this, snapshot, syncCompanionPortsFromState())
                 }
-                notifyPortState()
             },
             onPairingServiceLost = {
                 Timber.tag(TAG).i("Pairing service lost via mDNS. Resetting pairing port.")
-                val shouldCancelPrompt = synchronized(stateLock) {
-                    if (!isPromoting) {
-                        capturedPairingPort = 0
-                        Companion.capturedPairingPort = 0
-                        lastPromptedPairingPort = 0
-                        !isShowingStickyOutcome
-                    } else {
-                        false
-                    }
+                postMdnsEventOnMain {
+                    val snapshot = promptState.onPairingServiceLost()
+                    AdbPairingOutcomeDispatcher.dispatchServiceLost(this, snapshot, syncCompanionPortsFromState())
                 }
-                val broadcastIntent = Intent(ACTION_PORTS_DISCOVERED).apply {
-                    setPackage(packageName)
-                    putExtra(EXTRA_PAIRING_PORT, capturedPairingPort)
-                    putExtra(EXTRA_CONNECT_PORT, capturedConnectPort)
-                }
-                sendBroadcast(broadcastIntent)
-                if (shouldCancelPrompt) {
-                    val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-                    notificationManager?.cancel(PAIRING_PROMPT_NOTIFICATION_ID)
+            },
+            onConnectServiceLost = {
+                Timber.tag(TAG).i("Connect service lost via mDNS. Resetting connect port.")
+                postMdnsEventOnMain {
+                    val snapshot = promptState.onConnectServiceLost()
+                    AdbPairingOutcomeDispatcher.dispatchServiceLost(this, snapshot, syncCompanionPortsFromState())
                 }
             }
         ).also { it.startDiscovery() }
     }
 
-    private fun notifyPortState() {
-        val (pairPort, connPort, shouldPrompt) = synchronized(stateLock) {
-            Companion.capturedPairingPort = capturedPairingPort
-            Companion.capturedConnectPort = capturedConnectPort
-            val prompt = capturedPairingPort > 0 &&
-                capturedPairingPort != lastPromptedPairingPort &&
-                !isPromoting &&
-                !isShowingStickyOutcome
-            if (prompt) {
-                lastPromptedPairingPort = capturedPairingPort
-            }
-            Triple(capturedPairingPort, capturedConnectPort, prompt)
+    private inline fun postMdnsEventOnMain(crossinline block: () -> Unit) {
+        if (isServiceDestroyed) return
+        mainHandler.post {
+            if (isServiceDestroyed || activeInstance?.get() !== this) return@post
+            block()
         }
-        Timber.tag(TAG).i("Port state updated: pairing=$pairPort, connect=$connPort")
+    }
 
-        val broadcastIntent = Intent(ACTION_PORTS_DISCOVERED).apply {
-            setPackage(packageName)
-            putExtra(EXTRA_PAIRING_PORT, pairPort)
-            putExtra(EXTRA_CONNECT_PORT, connPort)
-        }
-        sendBroadcast(broadcastIntent)
-
-        if (shouldPrompt) {
-            BlackBoxRecorder.recordPairing(this, "PAIRING_PORT_CAPTURED", isSuccess = true, details = "port=$pairPort")
-            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-            notificationManager?.notify(
-                PAIRING_PROMPT_NOTIFICATION_ID,
-                AdbPairingNotificationFactory.buildPairingPromptNotification(this, pairPort, connPort)
-            )
-        }
+    private fun syncCompanionPortsFromState(): Pair<Int, Int> = synchronized(companionSyncLock) {
+        val ports = promptState.currentPorts()
+        capturedPairingPort = ports.first
+        capturedConnectPort = ports.second
+        ports
     }
 
     private fun stopForegroundAndSelf() {
         try {
-            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-            notificationManager?.cancel(PAIRING_PROMPT_NOTIFICATION_ID)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-            } else {
-                @Suppress("DEPRECATION")
-                stopForeground(true)
-            }
+            AdbPairingOutcomeDispatcher.cancelPairingPromptNotification(this)
+            stopForeground(STOP_FOREGROUND_REMOVE)
         } catch (e: Exception) {
             Timber.tag(TAG).w(e, "Error stopping foreground on ACTION_STOP_SERVICE")
         }
@@ -384,76 +262,86 @@ class AdbPairingNotificationService : Service() {
     }
 
     override fun onDestroy() {
+        isServiceDestroyed = true
+        mainHandler.removeCallbacksAndMessages(null)
+        if (activeInstance?.get() === this) activeInstance = null
         serviceJob.cancel()
         adbWifiObserver?.let {
-            try {
-                contentResolver.unregisterContentObserver(it)
-            } catch (e: Exception) {
+            try { contentResolver.unregisterContentObserver(it) } catch (e: Exception) {
                 Timber.tag(TAG).w(e, "Error unregistering adbWifiObserver on destroy")
             }
             adbWifiObserver = null
         }
         mdnsDiscovery?.stopDiscovery()
         mdnsDiscovery = null
-        synchronized(stateLock) {
-            capturedPairingPort = 0
-            capturedConnectPort = 0
-            Companion.capturedPairingPort = 0
-            Companion.capturedConnectPort = 0
-            lastPromptedPairingPort = 0
-            isShowingStickyOutcome = false
-            isPromoting = false
-        }
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-        notificationManager?.cancel(PAIRING_PROMPT_NOTIFICATION_ID)
+        promptState.reset()
+        syncCompanionPortsFromState()
+        AdbPairingOutcomeDispatcher.cancelPairingPromptNotification(this)
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    sealed class StickyOutcomePayload {
+        data class BlockingUsers(val usersJson: String, val connectPort: Int) : StickyOutcomePayload()
+        data class OemPermission(val oemTypeName: String, val connectPort: Int) : StickyOutcomePayload()
+        data class AccountsBlocking(val accountsJson: String, val connectPort: Int) : StickyOutcomePayload()
+    }
+
     companion object {
         private const val TAG = "AntiPorn_PairingSvc"
         const val CHANNEL_ID_GUIDE = "provisioning_guide_silent_v1"
         const val CHANNEL_ID_HEADS_UP = "provisioning_pairing_heads_up_v2"
-
         const val NOTIFICATION_ID = NotificationRegistry.ADB_PAIRING_ID
         const val PAIRING_PROMPT_NOTIFICATION_ID = 9902
         const val SUCCESS_NOTIFICATION_ID = 9903
 
         @Volatile var capturedPairingPort: Int = 0
         @Volatile var capturedConnectPort: Int = 0
+        @Volatile var pendingStickyOutcome: StickyOutcomePayload? = null
+        @Volatile private var activeInstance: WeakReference<AdbPairingNotificationService>? = null
 
         const val ACTION_START_SERVICE = "com.drmohammed.antiporn.START_PAIRING_SERVICE"
         const val ACTION_STOP_SERVICE = "com.drmohammed.antiporn.STOP_PAIRING_SERVICE"
         const val ACTION_REFRESH_ACK_STATE = "com.drmohammed.antiporn.ACTION_REFRESH_ACK_STATE"
+        const val ACTION_CLEAR_STICKY_OUTCOME = "com.drmohammed.antiporn.ACTION_CLEAR_STICKY_OUTCOME"
         const val ACTION_SUBMIT_PAIRING_CODE = "com.drmohammed.antiporn.ACTION_SUBMIT_PAIRING_CODE"
-
         const val ACTION_PORTS_DISCOVERED = "com.drmohammed.antiporn.PORTS_DISCOVERED"
         const val EXTRA_PAIRING_PORT = "extra_pairing_port"
         const val EXTRA_CONNECT_PORT = "extra_connect_port"
+        const val EXTRA_SUPPRESS_REPROMPT = "extra_suppress_reprompt"
 
         fun refreshNotificationState(context: Context) {
             if (capturedPairingPort <= 0) return
-            val intent = Intent(context, AdbPairingNotificationService::class.java).apply {
-                action = ACTION_REFRESH_ACK_STATE
-            }
             try {
-                context.startService(intent)
+                context.startService(Intent(context, AdbPairingNotificationService::class.java).apply { action = ACTION_REFRESH_ACK_STATE })
             } catch (e: Exception) {
                 Timber.tag(TAG).w(e, "Failed starting service for ACTION_REFRESH_ACK_STATE")
             }
         }
 
-        fun start(context: Context) {
-            val intent = Intent(context, AdbPairingNotificationService::class.java).apply {
-                action = ACTION_START_SERVICE
+        fun clearStickyOutcome(context: Context, suppressReprompt: Boolean = false) {
+            pendingStickyOutcome = null
+            activeInstance?.get()?.let { it.handleClearStickyOutcome(refreshPrompt = !suppressReprompt); return }
+            if (!DeviceOwnerPromoter.isPromotionActive) {
+                AdbPairingOutcomeDispatcher.cancelPairingPromptNotification(context)
             }
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(intent)
-                } else {
-                    context.startService(intent)
+            if (capturedPairingPort > 0) {
+                try {
+                    context.startService(Intent(context, AdbPairingNotificationService::class.java).apply {
+                        action = ACTION_CLEAR_STICKY_OUTCOME
+                        putExtra(EXTRA_SUPPRESS_REPROMPT, suppressReprompt)
+                    })
+                } catch (e: Exception) {
+                    Timber.tag(TAG).w(e, "Failed starting service for ACTION_CLEAR_STICKY_OUTCOME")
                 }
+            }
+        }
+
+        fun start(context: Context) {
+            val intent = Intent(context, AdbPairingNotificationService::class.java).apply { action = ACTION_START_SERVICE }
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
             } catch (e: Exception) {
                 Timber.tag(TAG).w(e, "Failed starting AdbPairingNotificationService")
             }

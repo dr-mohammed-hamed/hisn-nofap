@@ -60,3 +60,8 @@ uncommitted_changes.patch
 
 # AI Review & Changes Pack (Guaranteed Zero GitHub Leakage)
 AI_CHANGES_REVIEW.md
+
+# Waqf Support Remote Config (Zero Personal Phone Number Leakage)
+waqf_config.json
+scripts/waqf_config.json
+**/waqf_config.json

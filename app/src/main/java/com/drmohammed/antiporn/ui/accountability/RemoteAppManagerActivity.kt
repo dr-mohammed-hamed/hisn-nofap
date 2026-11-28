@@ -1,4 +1,4 @@
-package com.drmohammed.antiporn.ui.accountability
+﻿package com.drmohammed.antiporn.ui.accountability
 
 import android.os.Bundle
 import android.text.Editable
@@ -253,7 +253,13 @@ class RemoteAppManagerActivity : AppCompatActivity() {
                 launch {
                     PolicyRepository.getInstance(applicationContext).currentPolicyFlow.collect {
                         if (isFinishing || isDestroyed) return@collect
-                        if (isLocalMode && !SelfControlAccessGateRegistry.getActiveGate().canAccess(this@RemoteAppManagerActivity)) {
+                        // main's section-level permission check, alongside dev's active-gate guard.
+                        if (isLocalMode && (!SelfControlAccessGateRegistry.getActiveGate().canAccess(this@RemoteAppManagerActivity) ||
+                                !SelfControlAccessGateRegistry.isSectionPermitted(
+                                    this@RemoteAppManagerActivity,
+                                    com.drmohammed.antiporn.ui.control.gate.SelfControlSection.APP_MANAGER
+                                ))
+                        ) {
                             Toast.makeText(this@RemoteAppManagerActivity, R.string.gate_access_denied_by_guardian, Toast.LENGTH_SHORT).show()
                             finish()
                         }

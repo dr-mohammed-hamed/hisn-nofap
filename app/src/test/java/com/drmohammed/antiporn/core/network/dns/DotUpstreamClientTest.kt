@@ -15,6 +15,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.EOFException
 import java.io.IOException
+import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.util.concurrent.CopyOnWriteArrayList
@@ -298,6 +299,86 @@ class DotUpstreamClientTest {
             timedOut = true
         }
         assertTrue("Trickling TLS peer exceeding deadline must throw SocketTimeoutException", timedOut)
+    }
+
+    @Test
+    fun testNoRouteEnetunreachDuringRestoringPrimary_doesNotTripCircuitBreaker() = runBlocking {
+        val fakeClock = AtomicLong(1_000L)
+        val rawQuery = buildMinimalQuery(0x9001.toShort())
+        val client = DotUpstreamClient(
+            vpnService = object : VpnService() {},
+            clockMs = { fakeClock.get() },
+            connectionFactory = { _, _, _ ->
+                throw ConnectException("failed to connect to /94.140.14.15 (port 853): connect failed: ENETUNREACH (Network is unreachable)")
+            }
+        ) { _, _, _ -> null }
+
+        val stateLockField = DnsResilienceManager.javaClass.getDeclaredField("stateLock")
+        stateLockField.isAccessible = true
+        val lock = requireNotNull(stateLockField.get(DnsResilienceManager))
+        val restoringField = DnsResilienceManager.javaClass.getDeclaredField("isRestoringPrimary")
+        restoringField.isAccessible = true
+
+        synchronized(lock) {
+            restoringField.setBoolean(DnsResilienceManager, true)
+        }
+        try {
+            repeat(5) {
+                assertNull(client.query(DevicePolicyBundle.ADGUARD_FAMILY_DNS_HOST, rawQuery, 300))
+            }
+            assertFalse(
+                "ENETUNREACH during primary teardown fence must not trip DoT circuit breaker",
+                client.isCircuitOpen()
+            )
+        } finally {
+            synchronized(lock) {
+                restoringField.setBoolean(DnsResilienceManager, false)
+            }
+        }
+    }
+
+    @Test
+    fun testConsecutiveCircuitTripsSameGeneration_appliesExponentialCooldownBackoff_andResetsOnNetworkChange() = runBlocking {
+        val fakeClock = AtomicLong(1_000L)
+        val rawQuery = buildMinimalQuery(0x9002.toShort())
+        val client = DotUpstreamClient(
+            vpnService = object : VpnService() {},
+            clockMs = { fakeClock.get() },
+            connectionFactory = { _, _, _ -> throw IOException("TLS handshake timeout") }
+        ) { _, _, _ -> null }
+
+        // Trip 1 (3 failures at t=1_000) -> 30s cooldown (open until t=31_000)
+        repeat(3) { assertNull(client.query("custom-backoff.example.org", rawQuery, 300)) }
+        assertTrue(client.isCircuitOpen())
+        fakeClock.addAndGet(29_999L)
+        assertTrue(client.isCircuitOpen())
+        fakeClock.addAndGet(1L) // t=31_000
+        assertFalse(client.isCircuitOpen())
+
+        // Trip 2 in same generation (3 failures at t=31_000) -> 120s cooldown (open until t=151_000)
+        repeat(3) { assertNull(client.query("custom-backoff.example.org", rawQuery, 300)) }
+        assertTrue(client.isCircuitOpen())
+        fakeClock.addAndGet(30_000L) // t=61_000
+        assertTrue("2nd same-generation trip must exceed 30s (120s cooldown)", client.isCircuitOpen())
+        fakeClock.addAndGet(89_999L) // t=150_999
+        assertTrue(client.isCircuitOpen())
+        fakeClock.addAndGet(1L) // t=151_000
+        assertFalse(client.isCircuitOpen())
+
+        // Trip 3 in same generation (3 failures at t=151_000) -> 300s cooldown (open until t=451_000)
+        repeat(3) { assertNull(client.query("custom-backoff.example.org", rawQuery, 300)) }
+        assertTrue(client.isCircuitOpen())
+        fakeClock.addAndGet(299_999L) // t=450_999
+        assertTrue("3rd same-generation trip must hold 300s cooldown", client.isCircuitOpen())
+        fakeClock.addAndGet(1L) // t=451_000
+        assertFalse(client.isCircuitOpen())
+
+        // Reset generation (network switch) clears escalation back to 30s
+        client.resetState()
+        repeat(3) { assertNull(client.query("custom-backoff.example.org", rawQuery, 300)) }
+        assertTrue(client.isCircuitOpen())
+        fakeClock.addAndGet(30_000L)
+        assertFalse("After resetState(), backoff must start cleanly at 30s again", client.isCircuitOpen())
     }
 
     private fun readTxId(bytes: ByteArray, offset: Int): Short =

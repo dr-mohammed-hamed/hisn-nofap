@@ -27,6 +27,7 @@ import com.drmohammed.antiporn.ui.accountability.RemoteTeardownDialogFragment
 import com.drmohammed.antiporn.ui.common.ConfirmActionDialogFragment
 import com.drmohammed.antiporn.ui.common.showSafely
 import com.drmohammed.antiporn.ui.control.gate.SelfControlAccessGateRegistry
+import com.drmohammed.antiporn.ui.control.gate.SelfControlSection
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.materialswitch.MaterialSwitch
@@ -96,11 +97,7 @@ class OtherSettingsActivity : AppCompatActivity() {
             .ifBlank { getString(R.string.status_ward_badge) }
         val policyJson = intent.getStringExtra(EXTRA_POLICY_JSON)
 
-        if (!isRemote && !SelfControlAccessGateRegistry.getActiveGate().canAccess(this)) {
-            Toast.makeText(this, R.string.gate_access_denied_by_guardian, Toast.LENGTH_SHORT).show()
-            finish()
-            return
-        }
+        if (!ensureLocalAccessPermitted()) return
 
         if (isRemote) {
             if (wardId.isBlank() || policyJson.isNullOrBlank()) {
@@ -208,14 +205,39 @@ class OtherSettingsActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (!isRemote && !SelfControlAccessGateRegistry.getActiveGate().canAccess(this)) {
-            Toast.makeText(this, R.string.gate_access_denied_by_guardian, Toast.LENGTH_SHORT).show()
-            finish()
-        } else if (isRemote) {
+        if (!isRemote) {
+            ensureLocalAccessPermitted()
+        } else {
             teardownUiHelper.syncRemoteCompletionStateOnResume(this, wardId, wardName) {
                 handleRemoteTeardownCompleted()
             }
         }
+    }
+
+    private fun ensureLocalAccessPermitted(): Boolean {
+        if (isRemote) return true
+        if (!SelfControlAccessGateRegistry.getActiveGate().canAccess(this)) {
+            Toast.makeText(this, R.string.gate_access_denied_by_guardian, Toast.LENGTH_SHORT).show()
+            finish()
+            return false
+        }
+        if (!SelfControlAccessGateRegistry.isSectionPermitted(this, SelfControlSection.OTHER_SETTINGS)) {
+            Toast.makeText(this, R.string.self_control_section_locked_by_guardian, Toast.LENGTH_SHORT).show()
+            finish()
+            return false
+        }
+        return true
+    }
+
+    private fun isTotalInternetKillLockedBySupervisor(): Boolean {
+        val isSupervised = initialPolicy.isSupervised || !initialPolicy.guardianUid.isNullOrBlank()
+        return !isRemote && isSupervised && !initialPolicy.selfControlCurfewAllowed
+    }
+
+    private fun updateTotalInternetKillLockState() {
+        val locked = isTotalInternetKillLockedBySupervisor()
+        switchTotalInternetKill.isEnabled = !locked
+        switchTotalInternetKill.alpha = if (locked) 0.45f else 1.0f
     }
 
     private fun handleRemoteTeardownCompleted() {
@@ -267,6 +289,7 @@ class OtherSettingsActivity : AppCompatActivity() {
         switchLockDateTime.isChecked = isDateTimeLocked
         switchAllowAppsDataClearing.isChecked = isClearAppDataAllowed
         switchTotalInternetKill.isChecked = isTotalInternetKillEnabled
+        updateTotalInternetKillLockState()
         updateTimezoneViews()
         isProgrammaticUpdate = false
     }
@@ -357,6 +380,7 @@ class OtherSettingsActivity : AppCompatActivity() {
     }
 
     private fun updateSaveButtonState() {
+        updateTotalInternetKillLockState()
         val dirty = hasUnsavedChanges()
         val canSave = dirty && !isSaving && !isDangerZoneBusy
         btnSaveOtherSettingsChanges.isEnabled = canSave

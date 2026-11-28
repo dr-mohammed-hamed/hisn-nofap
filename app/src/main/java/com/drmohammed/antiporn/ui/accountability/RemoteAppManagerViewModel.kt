@@ -1,4 +1,4 @@
-package com.drmohammed.antiporn.ui.accountability
+﻿package com.drmohammed.antiporn.ui.accountability
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
@@ -25,6 +25,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -57,6 +59,8 @@ class RemoteAppManagerViewModel(
 
     private var inventoryListener: ListenerRegistration? = null
     private var isInitialized = false
+    // main: serialize policy/approval mutations so quick-unsuspend and save cannot interleave.
+    private val mutationMutex = Mutex()
 
     fun initialize(isLocalMode: Boolean, wardId: String, wardName: String) {
         if (isInitialized) return
@@ -444,10 +448,11 @@ class RemoteAppManagerViewModel(
         _uiState.update { it.copy(isLoading = true) }
 
         viewModelScope.launch(Dispatchers.IO) {
+            mutationMutex.withLock {
             val context = getApplication<Application>()
             try {
                 if (state.isLocalMode) {
-                    val decision = approvalRepository.unsuspendAndApprove(pkg, decidedBy = "SELF")
+                    val decision = approvalRepository.unsuspendAndApprove(pkg, decidedBy = "SELF", overrideRejected = true)
                     when (decision) {
                         ApprovalDecisionResult.APPROVED -> {
                             _uiState.update { current ->
@@ -577,6 +582,7 @@ class RemoteAppManagerViewModel(
             } finally {
                 _uiState.update { it.copy(isLoading = false) }
             }
+            }
         }
     }
 
@@ -618,82 +624,112 @@ class RemoteAppManagerViewModel(
     }
 
     fun saveChanges() {
-        val state = _uiState.value
-        if (state.isSaving || !state.hasUnsavedChanges) return
+        val snapshot = _uiState.value
+        if (snapshot.isSaving || snapshot.isLoading || snapshot.isRepairing || !snapshot.hasUnsavedChanges) return
 
         _uiState.update { it.copy(isSaving = true) }
 
         viewModelScope.launch(Dispatchers.IO) {
-            val context = getApplication<Application>()
-            val myUid = if (!state.isLocalMode) accountabilityRepository.getCachedUid() else null
-            val myName = if (!state.isLocalMode) accountabilityRepository.getMyDisplayName() else null
+            mutationMutex.withLock {
+                val context = getApplication<Application>()
+                try {
+                    val state = _uiState.value
+                    val myUid = if (!state.isLocalMode) accountabilityRepository.getCachedUid() else null
+                    val myName = if (!state.isLocalMode) accountabilityRepository.getMyDisplayName() else null
+                    val unFrozenPackages = state.initialBlacklist - state.customBlacklist
 
-            val updatedPolicy = state.currentPolicy.copy(
-                guardianUid = if (!state.isLocalMode) (state.currentPolicy.guardianUid?.takeIf { it.isNotBlank() } ?: myUid) else state.currentPolicy.guardianUid,
-                guardianName = if (!state.isLocalMode) (state.currentPolicy.guardianName?.takeIf { it.isNotBlank() } ?: myName) else state.currentPolicy.guardianName,
-                isSupervised = if (!state.isLocalMode) true else state.currentPolicy.isSupervised,
-                customBlacklistPackages = state.customBlacklist,
-                customCurfewWhitelistPackages = state.customCurfewWhitelist,
-                customAiScanPackages = state.customAiScanPackages,
-                excludedAiScanPackages = state.excludedAiScanPackages,
-                curfewVpnBypassPackages = state.curfewVpnBypass,
-                protectedAppPackages = state.protectedApps,
-                lockNewInstallsUntilApproved = state.lockNewInstallsUntilApproved,
-                version = state.currentPolicy.version + 1,
-                updatedAt = TrustedTimeProvider.currentTimeMillis(context)
-            )
-
-            try {
-                val success = withContext(NonCancellable) {
-                    val saved = if (state.isLocalMode) {
-                        policyRepository.saveAndEnforceSelfPolicy(updatedPolicy)
-                    } else {
-                        policyRepository.pushPolicyToWard(state.wardId, updatedPolicy)
-                    }
-
-                    if (saved) {
-                        // Auto-resolve Zero-Trust approvals for any packages removed from 24/7 blacklist AFTER policy push succeeds
-                        val unFrozenPackages = state.initialBlacklist - state.customBlacklist
-                        for (pkg in unFrozenPackages) {
-                            try {
-                                if (state.isLocalMode) {
-                                    approvalRepository.unsuspendAndApprove(pkg, decidedBy = "SELF")
-                                } else {
-                                    approvalRepository.resolveWardApproval(state.wardId, pkg, approve = true, guardianName = myName ?: "GUARDIAN")
-                                }
-                                Timber.tag(TAG).i("saveChanges: Auto-approved un-frozen package '%s'", pkg)
-                            } catch (e: Exception) {
-                                Timber.tag(TAG).e(e, "saveChanges: Error auto-approving package '%s'", pkg)
+                    // main: local mode merges into the latest policy so guardian-managed flags
+                    // (Fortresses, app-manager permission, etc.) are never clobbered.
+                    val updatedPolicy = if (state.isLocalMode) {
+                        withContext(NonCancellable) {
+                            policyRepository.mergeAndSaveSelfPolicyPatch(
+                                awaitCloudSync = unFrozenPackages.isNotEmpty()
+                            ) { current ->
+                                current.copy(
+                                    customBlacklistPackages = state.customBlacklist,
+                                    customCurfewWhitelistPackages = state.customCurfewWhitelist,
+                                    customAiScanPackages = state.customAiScanPackages,
+                                    excludedAiScanPackages = state.excludedAiScanPackages,
+                                    curfewVpnBypassPackages = state.curfewVpnBypass,
+                                    protectedAppPackages = state.protectedApps,
+                                    lockNewInstallsUntilApproved = state.lockNewInstallsUntilApproved
+                                )
                             }
                         }
-                    }
-                    saved
-                }
-
-                if (success) {
-                    _uiState.update {
-                        it.copy(
-                            isSaving = false,
-                            initialBlacklist = state.customBlacklist,
-                            initialCurfewWhitelist = state.customCurfewWhitelist,
-                            initialAiScanPackages = state.customAiScanPackages,
-                            initialExcludedAiScanPackages = state.excludedAiScanPackages,
-                            initialCurfewVpnBypass = state.curfewVpnBypass,
-                            initialProtectedApps = state.protectedApps,
-                            initialLockNewInstalls = state.lockNewInstallsUntilApproved
+                    } else {
+                        val candidate = state.currentPolicy.copy(
+                            guardianUid = state.currentPolicy.guardianUid?.takeIf { it.isNotBlank() } ?: myUid,
+                            guardianName = state.currentPolicy.guardianName?.takeIf { it.isNotBlank() } ?: myName,
+                            isSupervised = true,
+                            customBlacklistPackages = state.customBlacklist,
+                            customCurfewWhitelistPackages = state.customCurfewWhitelist,
+                            customAiScanPackages = state.customAiScanPackages,
+                            excludedAiScanPackages = state.excludedAiScanPackages,
+                            curfewVpnBypassPackages = state.curfewVpnBypass,
+                            protectedAppPackages = state.protectedApps,
+                            lockNewInstallsUntilApproved = state.lockNewInstallsUntilApproved,
+                            version = state.currentPolicy.version + 1,
+                            updatedAt = TrustedTimeProvider.currentTimeMillis(context)
                         )
+                        withContext(NonCancellable) {
+                            if (policyRepository.pushPolicyToWard(state.wardId, candidate)) candidate else null
+                        }
                     }
-                    _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.toast_app_manager_saved))
-                    _events.send(RemoteAppManagerEvent.SaveSuccess)
-                } else {
+
+                    if (updatedPolicy != null) {
+                        // main: only report success when every un-frozen package's approval resolved.
+                        var allResolved = true
+                        for (pkg in unFrozenPackages) {
+                            try {
+                                val resolved = if (state.isLocalMode) {
+                                    val res = approvalRepository.unsuspendAndApprove(
+                                        pkg, decidedBy = "SELF", overrideRejected = true
+                                    )
+                                    res == ApprovalDecisionResult.APPROVED ||
+                                        res == ApprovalDecisionResult.APPROVED_CURFEW_DEFERRED
+                                } else {
+                                    approvalRepository.resolveWardApproval(
+                                        state.wardId, pkg, approve = true, guardianName = myName ?: "GUARDIAN"
+                                    )
+                                }
+                                if (!resolved) allResolved = false
+                                Timber.tag(TAG).i("saveChanges: auto-approved '%s' (resolved=%s)", pkg, resolved)
+                            } catch (e: Exception) {
+                                if (e is CancellationException) throw e
+                                allResolved = false
+                                Timber.tag(TAG).e(e, "saveChanges: error auto-approving '%s'", pkg)
+                            }
+                        }
+
+                        _uiState.update {
+                            it.copy(
+                                isSaving = false,
+                                currentPolicy = updatedPolicy,
+                                initialBlacklist = updatedPolicy.customBlacklistPackages.toSet(),
+                                initialCurfewWhitelist = updatedPolicy.customCurfewWhitelistPackages.toSet(),
+                                initialAiScanPackages = updatedPolicy.customAiScanPackages.toSet(),
+                                initialExcludedAiScanPackages = updatedPolicy.excludedAiScanPackages.toSet(),
+                                initialCurfewVpnBypass = updatedPolicy.curfewVpnBypassPackages.toSet(),
+                                initialProtectedApps = updatedPolicy.protectedAppPackages.toSet(),
+                                initialLockNewInstalls = updatedPolicy.lockNewInstallsUntilApproved
+                            )
+                        }
+                        if (allResolved) {
+                            _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.toast_app_manager_saved))
+                            _events.send(RemoteAppManagerEvent.SaveSuccess)
+                        } else {
+                            _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.toast_app_manager_save_failed, isLong = true))
+                        }
+                    } else {
+                        _uiState.update { it.copy(isSaving = false) }
+                        _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.toast_app_manager_save_failed, isLong = true))
+                    }
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    Timber.tag(TAG).e(e, "Error pushing updated policies from RemoteAppManagerViewModel")
                     _uiState.update { it.copy(isSaving = false) }
                     _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.toast_app_manager_save_failed, isLong = true))
                 }
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                Timber.tag(TAG).e(e, "Error pushing updated policies from RemoteAppManagerViewModel")
-                _uiState.update { it.copy(isSaving = false) }
-                _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.toast_app_manager_save_failed, isLong = true))
             }
         }
     }

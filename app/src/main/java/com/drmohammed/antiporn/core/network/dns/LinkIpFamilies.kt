@@ -1,9 +1,8 @@
 package com.drmohammed.antiporn.core.network.dns
 
 import android.content.Context
-import android.net.ConnectivityManager
 import android.net.LinkProperties
-import android.net.NetworkCapabilities
+import com.drmohammed.antiporn.core.network.PhysicalNetworkResolver
 import java.net.Inet4Address
 import java.net.Inet6Address
 
@@ -26,20 +25,5 @@ fun LinkProperties?.toLinkIpFamilies(): LinkIpFamilies {
     return if (!hasV4 && !hasV6) LinkIpFamilies() else LinkIpFamilies(hasIpv4 = hasV4, hasIpv6 = hasV6)
 }
 
-@Suppress("DEPRECATION")
-fun resolveActivePhysicalLinkIpFamilies(context: Context): LinkIpFamilies {
-    return try {
-        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-            ?: return LinkIpFamilies()
-        for (net in cm.allNetworks) {
-            val caps = cm.getNetworkCapabilities(net) ?: continue
-            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue
-            if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) continue
-            val props = cm.getLinkProperties(net) ?: continue
-            return props.toLinkIpFamilies()
-        }
-        LinkIpFamilies()
-    } catch (_: Throwable) {
-        LinkIpFamilies()
-    }
-}
+fun resolveActivePhysicalLinkIpFamilies(context: Context): LinkIpFamilies =
+    PhysicalNetworkResolver.detectActivePhysicalLinkFamilies(context)

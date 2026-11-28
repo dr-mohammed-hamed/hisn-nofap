@@ -45,7 +45,7 @@ data class RemoteAppManagerUiState(
                 lockNewInstallsUntilApproved != initialLockNewInstalls
 
     val isSaveEnabled: Boolean
-        get() = hasUnsavedChanges && !isSaving
+        get() = hasUnsavedChanges && !isSaving && !isLoading && !isRepairing
 
     val isEmptyState: Boolean
         get() = !isLoading && displayedApps.isEmpty()

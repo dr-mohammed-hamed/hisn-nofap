@@ -168,21 +168,30 @@ internal class PolicyCloudSyncBridge(
             }
 
             val current = currentPolicyProvider()
-            val isFromGuardian = cloudPolicy.isSupervised && !cloudPolicy.guardianUid.isNullOrBlank()
-            val supervisoryChanged = isFromGuardian && hasSupervisoryDiff(cloudPolicy, current)
-            val statusChanged = cloudPolicy.breakoutStatus != current.breakoutStatus ||
-                cloudPolicy.deactivationStatus != current.deactivationStatus
-            val supervisionChanged = current.isSupervised != cloudPolicy.isSupervised
-            val isTimeNewer = cloudPolicy.updatedAt > current.updatedAt
-            val isVersionNewer = cloudPolicy.version > current.version
+            // Preserve offline 1-tap local VPN fallback approval until cloud reflects a newer/equal version
+            val preservedOfflineLocalFallback = current.isLocalVpnFallbackEnabled &&
+                !cloudPolicy.isLocalVpnFallbackEnabled &&
+                cloudPolicy.version < current.version
+            val candidateCloudPolicy = if (preservedOfflineLocalFallback) {
+                cloudPolicy.copy(isLocalVpnFallbackEnabled = true)
+            } else {
+                cloudPolicy
+            }
+            val isFromGuardian = candidateCloudPolicy.isSupervised && !candidateCloudPolicy.guardianUid.isNullOrBlank()
+            val supervisoryChanged = isFromGuardian && hasSupervisoryDiff(candidateCloudPolicy, current)
+            val statusChanged = candidateCloudPolicy.breakoutStatus != current.breakoutStatus ||
+                candidateCloudPolicy.deactivationStatus != current.deactivationStatus
+            val supervisionChanged = current.isSupervised != candidateCloudPolicy.isSupervised
+            val isTimeNewer = candidateCloudPolicy.updatedAt > current.updatedAt
+            val isVersionNewer = candidateCloudPolicy.version > current.version
 
-            val maskedGuardianUid = AiTelemetryReporter.maskIdentifier(cloudPolicy.guardianUid)
+            val maskedGuardianUid = AiTelemetryReporter.maskIdentifier(candidateCloudPolicy.guardianUid)
             Timber.tag(TAG).i(
                 "[SelfControlDiag] Cloud policy received on ward /policies/%s: cloudPolicy(v%d, supervised=%b, allowed=%b, guardian='%s') vs local(v%d, supervised=%b, allowed=%b), isVersionNewer=%b, isTimeNewer=%b, supervisoryChanged=%b, statusChanged=%b",
                 maskedUid,
-                cloudPolicy.version,
-                cloudPolicy.isSupervised,
-                cloudPolicy.isSelfControlAllowed,
+                candidateCloudPolicy.version,
+                candidateCloudPolicy.isSupervised,
+                candidateCloudPolicy.isSelfControlAllowed,
                 maskedGuardianUid,
                 current.version,
                 current.isSupervised,
@@ -195,7 +204,10 @@ internal class PolicyCloudSyncBridge(
 
             val isUnchanged = !(isVersionNewer || isTimeNewer || supervisoryChanged || statusChanged || supervisionChanged)
             if (isUnchanged) {
-                val sig = "${cloudPolicy.version}:${cloudPolicy.updatedAt}:${cloudPolicy.hashCode()}:${current.version}"
+                if (preservedOfflineLocalFallback) {
+                    syncPolicyToCloudAsync(uid, current)
+                }
+                val sig = "${candidateCloudPolicy.version}:${candidateCloudPolicy.updatedAt}:${candidateCloudPolicy.hashCode()}:${current.version}"
                 if (lastUnchangedLoggedSignature == sig) {
                     return
                 }
@@ -208,15 +220,15 @@ internal class PolicyCloudSyncBridge(
                 appContext,
                 "POLICY_RECEIVED",
                 isSuccess = true,
-                details = "uid=$maskedUid, v${cloudPolicy.version}, isSupervised=${cloudPolicy.isSupervised}, curfew=${cloudPolicy.isCurfewEnabled}(${cloudPolicy.curfewStartHour}:${cloudPolicy.curfewStartMinute}), isVersionNewer=$isVersionNewer, isTimeNewer=$isTimeNewer"
+                details = "uid=$maskedUid, v${candidateCloudPolicy.version}, isSupervised=${candidateCloudPolicy.isSupervised}, curfew=${candidateCloudPolicy.isCurfewEnabled}(${candidateCloudPolicy.curfewStartHour}:${candidateCloudPolicy.curfewStartMinute}), isVersionNewer=$isVersionNewer, isTimeNewer=$isTimeNewer"
             )
 
             if (isUnchanged) {
                 return
             }
 
-            val isTransitionToSupervised = !current.isSupervised && cloudPolicy.isSupervised
-            val effectiveCloudPolicy = reconcileTransitionRules(current, cloudPolicy, isTransitionToSupervised)
+            val isTransitionToSupervised = !current.isSupervised && candidateCloudPolicy.isSupervised
+            val effectiveCloudPolicy = reconcileTransitionRules(current, candidateCloudPolicy, isTransitionToSupervised)
             val forceOverride = isFromGuardian && (supervisoryChanged || statusChanged || supervisionChanged)
             val enforcedPolicy = if (forceOverride) {
                 effectiveCloudPolicy.copy(version = maxOf(effectiveCloudPolicy.version, current.version + 1))
@@ -241,7 +253,7 @@ internal class PolicyCloudSyncBridge(
             }
 
             if (adopted && isFromGuardian) {
-                acknowledgeCloudPolicyAsync(uid, maskedUid, cloudPolicy, enforcedPolicy, isTransitionToSupervised, effectiveCloudPolicy != cloudPolicy)
+                acknowledgeCloudPolicyAsync(uid, maskedUid, candidateCloudPolicy, enforcedPolicy, isTransitionToSupervised, effectiveCloudPolicy != candidateCloudPolicy || preservedOfflineLocalFallback)
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -285,6 +297,7 @@ internal class PolicyCloudSyncBridge(
             cloudPolicy.isFullSystemFilteringEnabled != current.isFullSystemFilteringEnabled ||
             cloudPolicy.isYouTubeRestrictedModeEnabled != current.isYouTubeRestrictedModeEnabled ||
             cloudPolicy.isAdBlockingEnabled != current.isAdBlockingEnabled ||
+            cloudPolicy.isLocalVpnFallbackEnabled != current.isLocalVpnFallbackEnabled ||
             cloudPolicy.isTelegramWebBlocked != current.isTelegramWebBlocked ||
             cloudPolicy.isBlockExternalVpnEnabled != current.isBlockExternalVpnEnabled ||
             cloudPolicy.customBlockedUrls != current.customBlockedUrls ||
@@ -293,6 +306,12 @@ internal class PolicyCloudSyncBridge(
             cloudPolicy.waqfaConfig != current.waqfaConfig ||
             cloudPolicy.pageShieldConfig != current.pageShieldConfig ||
             cloudPolicy.selfControlPageShieldAllowed != current.selfControlPageShieldAllowed ||
+            cloudPolicy.selfControlFortressesAllowed != current.selfControlFortressesAllowed ||
+            cloudPolicy.selfControlFortressUnlockAllowed != current.selfControlFortressUnlockAllowed ||
+            cloudPolicy.selfControlOtherSettingsAllowed != current.selfControlOtherSettingsAllowed ||
+            cloudPolicy.fortressesConfig != current.fortressesConfig ||
+            cloudPolicy.remoteModeUnlockTarget != current.remoteModeUnlockTarget ||
+            cloudPolicy.remoteModeUnlockRequestedAt != current.remoteModeUnlockRequestedAt ||
             cloudPolicy.remoteSelfControlResetRequestedAt != current.remoteSelfControlResetRequestedAt ||
             cloudPolicy.remoteTeardownRequestedAt != current.remoteTeardownRequestedAt
     }
@@ -324,17 +343,40 @@ internal class PolicyCloudSyncBridge(
         )
     }
 
+    private fun safeLog(priority: Int, message: String, throwable: Throwable? = null) {
+        try {
+            when (priority) {
+                Log.DEBUG -> Log.d(TAG, message, throwable)
+                Log.INFO -> Log.i(TAG, message, throwable)
+                Log.WARN -> Log.w(TAG, message, throwable)
+                else -> Log.e(TAG, message, throwable)
+            }
+        } catch (_: Throwable) {
+            // JVM unit test fallback when android.util.Log is not mocked
+        }
+    }
+
     private fun saveDetectedGuardianPartner(adoptedPolicy: DevicePolicyBundle, maskedGuardianUid: String) {
         val guardianUid = adoptedPolicy.guardianUid ?: return
-        Log.i(TAG, "Guardian detected from cloud snapshot: ${AiTelemetryReporter.maskIdentifier(adoptedPolicy.guardianName)} ($maskedGuardianUid)")
+        safeLog(
+            Log.INFO,
+            "Guardian detected from cloud snapshot: ${AiTelemetryReporter.maskIdentifier(adoptedPolicy.guardianName)} ($maskedGuardianUid)"
+        )
+        partnerDao.getPartnersByRoleBlocking(PartnerEntity.ROLE_GUARDIAN)
+            .filter { it.id != guardianUid }
+            .forEach { partnerDao.deletePartnerByIdAndRoleBlocking(it.id, PartnerEntity.ROLE_GUARDIAN) }
+        val existingGuardian = partnerDao.getPartnerByIdAndRoleBlocking(guardianUid, PartnerEntity.ROLE_GUARDIAN)
         val now = TrustedTimeProvider.currentTimeMillis(appContext)
+        val displayName = existingGuardian?.displayName?.takeIf { it.isNotBlank() }
+            ?: adoptedPolicy.guardianName?.takeIf { it.isNotBlank() }
+            ?: runCatching { appContext.getString(R.string.guardian_default_name) }.getOrDefault("Guardian")
         val partner = PartnerEntity(
             id = guardianUid,
             pairingCode = AccountabilityRepository.CODE_LOCKED,
-            displayName = adoptedPolicy.guardianName ?: appContext.getString(R.string.guardian_default_name),
+            displayName = displayName,
             role = PartnerEntity.ROLE_GUARDIAN,
             status = PartnerEntity.STATUS_ACTIVE,
-            createdAt = now,
+            createdAt = existingGuardian?.createdAt ?: now,
             lastSyncAt = now
         )
         partnerDao.savePartnerBlocking(partner)
@@ -356,7 +398,7 @@ internal class PolicyCloudSyncBridge(
                         "lastAcknowledgedAt" to TrustedTimeProvider.currentTimeMillis(appContext)
                     )
                 ).await()
-                Log.i(TAG, "[SelfControlDiag] Acknowledged policy v${cloudPolicy.version} back to Firestore /policies/$maskedUid")
+                safeLog(Log.INFO, "[SelfControlDiag] Acknowledged policy v${cloudPolicy.version} back to Firestore /policies/$maskedUid")
                 BlackBoxRecorder.recordCloudSync(
                     appContext,
                     "POLICY_ACKNOWLEDGED",
@@ -365,7 +407,7 @@ internal class PolicyCloudSyncBridge(
                 )
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                Log.w(TAG, "Failed writing policy acknowledgment: ${e.message}")
+                safeLog(Log.WARN, "Failed writing policy acknowledgment: ${e.message}")
             }
             if (isTransitionToSupervised && wasReconciled) {
                 try {
@@ -494,14 +536,14 @@ internal class PolicyCloudSyncBridge(
         }
     }
 
-    fun syncPolicyToCloudAsync(uid: String, bundle: DevicePolicyBundle) {
-        if (uid.isBlank()) return
+    fun syncPolicyToCloudAsync(uid: String, bundle: DevicePolicyBundle): kotlinx.coroutines.Job? {
+        if (uid.isBlank()) return null
         if (!isCloudSyncEnabledProvider()) {
-            Log.d(TAG, "Cloud sync is disabled; skipping syncPolicyToCloudAsync (offline mode)")
-            return
+            Timber.tag(TAG).d("Cloud sync is disabled; skipping syncPolicyToCloudAsync (offline mode)")
+            return null
         }
         val maskedUid = AiTelemetryReporter.maskIdentifier(uid)
-        repositoryScope.launch {
+        return repositoryScope.launch {
             firestoreSyncMutex.withLock {
                 try {
                     if (bundle.version >= lastSyncedCloudVersion) {
@@ -509,13 +551,13 @@ internal class PolicyCloudSyncBridge(
                             .set(bundle.toMap(), SetOptions.merge())
                             .await()
                         lastSyncedCloudVersion = bundle.version
-                        Log.i(TAG, "Successfully synced policy v${bundle.version} to cloud ($maskedUid)")
+                        Timber.tag(TAG).i("Successfully synced policy v${bundle.version} to cloud ($maskedUid)")
                     } else {
-                        Log.d(TAG, "Skipping cloud sync for stale policy v${bundle.version} (already at v$lastSyncedCloudVersion)")
+                        Timber.tag(TAG).d("Skipping cloud sync for stale policy v${bundle.version} (already at v$lastSyncedCloudVersion)")
                     }
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
-                    Log.w(TAG, "Policy cloud sync deferred (offline or error): ${e.message}")
+                    Timber.tag(TAG).w("Policy cloud sync deferred (offline or error): ${e.message}")
                 }
             }
         }

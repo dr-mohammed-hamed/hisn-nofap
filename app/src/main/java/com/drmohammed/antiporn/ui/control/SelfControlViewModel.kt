@@ -1,15 +1,15 @@
 package com.drmohammed.antiporn.ui.control
 
 import android.app.Application
-import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.drmohammed.antiporn.core.engine.ProtectionEngine
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.curfew.CurfewEnforcer
 import com.drmohammed.antiporn.curfew.CurfewScheduler
 import com.drmohammed.antiporn.data.repository.ApprovalRepository
 import com.drmohammed.antiporn.data.repository.PolicyRepository
+import com.drmohammed.antiporn.fortress.engine.EffectiveRestrictionResolver
+import com.drmohammed.antiporn.fortress.engine.FortressSessionController
 import com.drmohammed.antiporn.ui.control.gate.SelfControlAccessGateRegistry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,10 +18,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import timber.log.Timber
 
 /**
- * ViewModel for SelfControlFragment policy editor and gate access management.
- * Tracks draft modifications against baseline snapshot and persists updates safely.
+ * ViewModel for SelfControlFragment policy editor, gate access, and active-mode unlocking.
  */
 class SelfControlViewModel(
     application: Application,
@@ -40,6 +40,7 @@ class SelfControlViewModel(
     init {
         checkGateAndRefresh()
         observePolicyFlow()
+        observeActiveFortressFlow()
     }
 
     private fun observePolicyFlow() {
@@ -50,7 +51,6 @@ class SelfControlViewModel(
                 val isLocked = !gate.canAccess(app)
 
                 _uiState.update { current ->
-                    // If we haven't modified the draft or have no initial snapshot, sync draft to incoming
                     val newInitial = current.initialSnapshot ?: freshPolicy
                     val hasChanges = current.hasUnsavedChanges && (current.policy != newInitial)
                     val activePolicy = if (hasChanges) current.policy else freshPolicy
@@ -62,13 +62,31 @@ class SelfControlViewModel(
                         hasUnsavedChanges = hasChanges
                     )
                 }
+                refreshActiveModesSnapshot()
             }
         }
     }
 
-    /**
-     * Re-checks the active access gate and loads current policy if accessible.
-     */
+    private fun observeActiveFortressFlow() {
+        viewModelScope.launch {
+            FortressSessionController.activeSessionFlow.collect {
+                refreshActiveModesSnapshot()
+            }
+        }
+    }
+
+    fun refreshActiveModesSnapshot() {
+        val app = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            val policy = policyRepository.getCurrentPolicy()
+            val snapshot = EffectiveRestrictionResolver.getActiveModesSnapshot(
+                context = app,
+                policy = policy
+            )
+            _uiState.update { it.copy(activeModesSnapshot = snapshot) }
+        }
+    }
+
     fun checkGateAndRefresh() {
         val app = getApplication<Application>()
         val gate = SelfControlAccessGateRegistry.getActiveGate()
@@ -79,20 +97,23 @@ class SelfControlViewModel(
         if (!isLocked) {
             loadCurrentPolicy()
             loadPendingApprovals()
+            refreshActiveModesSnapshot()
         }
     }
 
-    /**
-     * Loads the current saved policy from repository as baseline snapshot.
-     */
     fun loadCurrentPolicy() {
         viewModelScope.launch(Dispatchers.IO) {
             val policy = policyRepository.getCurrentPolicy()
+            val snapshot = EffectiveRestrictionResolver.getActiveModesSnapshot(
+                context = getApplication(),
+                policy = policy
+            )
             withContext(Dispatchers.Main) {
                 _uiState.update { current ->
                     current.copy(
                         policy = policy,
                         initialSnapshot = policy,
+                        activeModesSnapshot = snapshot,
                         hasUnsavedChanges = false
                     )
                 }
@@ -100,9 +121,6 @@ class SelfControlViewModel(
         }
     }
 
-    /**
-     * Updates draft policy and compares with baseline snapshot to determine unsaved state.
-     */
     fun updateDraftPolicy(newDraft: DevicePolicyBundle) {
         _uiState.update { current ->
             val hasChanges = current.initialSnapshot?.let { snapshot ->
@@ -116,14 +134,10 @@ class SelfControlViewModel(
         }
     }
 
-    /**
-     * Saves the modified policy, schedules curfews, and reapplies active shields.
-     */
     fun savePolicy(
         policyToSave: DevicePolicyBundle,
         onComplete: ((Result<Unit>) -> Unit)? = null
     ) {
-        val app = getApplication<Application>()
         _uiState.update { it.copy(isSaving = true) }
 
         viewModelScope.launch(Dispatchers.IO) {
@@ -147,7 +161,7 @@ class SelfControlViewModel(
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to persist policy bundle", e)
+                Timber.tag(TAG).e(e, "Failed to persist policy bundle")
                 withContext(Dispatchers.Main) {
                     _uiState.update { it.copy(isSaving = false, errorMessage = e.message) }
                     onComplete?.invoke(Result.failure(e))
@@ -156,9 +170,80 @@ class SelfControlViewModel(
         }
     }
 
-    /**
-     * Refreshes count of pending app approvals.
-     */
+    fun unlockNightCurfewDirect(onResult: (Boolean) -> Unit) {
+        executeModeUnlock(isFortress = false, onResult = onResult) { app ->
+            CurfewEnforcer.unlockCurfewForCurrentWindowDirect(app)
+        }
+    }
+
+    fun unlockNightCurfewWithQr(
+        rawScannedToken: String,
+        isEmergencyBypassCompleted: Boolean,
+        onResult: (Boolean) -> Unit
+    ) {
+        executeModeUnlock(isFortress = false, onResult = onResult) { app ->
+            CurfewEnforcer.unlockCurfewForCurrentWindowWithQr(
+                context = app,
+                rawScannedToken = rawScannedToken,
+                isEmergencyBypassCompleted = isEmergencyBypassCompleted
+            )
+        }
+    }
+
+    fun unlockActiveFortressDirect(onResult: (Boolean) -> Unit) {
+        executeModeUnlock(isFortress = true, onResult = onResult) { app ->
+            FortressSessionController.unlockActiveFortressDirectWhenAllowed(app)
+        }
+    }
+
+    fun unlockActiveFortressWithQr(
+        rawScannedToken: String,
+        isEmergencyBypassCompleted: Boolean,
+        onResult: (Boolean) -> Unit
+    ) {
+        executeModeUnlock(isFortress = true, onResult = onResult) { app ->
+            if (isEmergencyBypassCompleted) {
+                FortressSessionController.unlockActiveFortressViaEmergencyBypass(app)
+            } else {
+                FortressSessionController.unlockActiveFortressWithQrToken(
+                    context = app,
+                    rawScannedToken = rawScannedToken,
+                    isEmergencyBypassCompleted = false
+                )
+            }
+        }
+    }
+
+    private fun executeModeUnlock(
+        isFortress: Boolean,
+        onResult: (Boolean) -> Unit,
+        action: (Application) -> Boolean
+    ) = viewModelScope.launch(Dispatchers.IO) {
+        val app = getApplication<Application>()
+        val unlocked = try {
+            action(app).also { ok ->
+                if (ok) {
+                    if (isFortress) {
+                        CurfewScheduler.cancelFortressEndAlarm(app)
+                    }
+                    CurfewEnforcer.syncBlockState(app)
+                    CurfewScheduler.scheduleNextAlarms(app)
+                }
+            }
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "Failed unlocking active mode (isFortress=%b)", isFortress)
+            false
+        }
+        val snapshot = EffectiveRestrictionResolver.getActiveModesSnapshot(
+            context = app,
+            policy = policyRepository.getCurrentPolicy()
+        )
+        withContext(Dispatchers.Main) {
+            _uiState.update { it.copy(activeModesSnapshot = snapshot) }
+            onResult(unlocked)
+        }
+    }
+
     fun loadPendingApprovals() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -167,7 +252,7 @@ class SelfControlViewModel(
                     _uiState.update { it.copy(pendingApprovalsCount = pending.size) }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error fetching pending approvals", e)
+                Timber.tag(TAG).e(e, "Error fetching pending approvals")
             }
         }
     }

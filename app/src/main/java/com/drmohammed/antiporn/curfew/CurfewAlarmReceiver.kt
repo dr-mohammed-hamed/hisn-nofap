@@ -7,6 +7,8 @@ import android.util.Log
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
 import com.drmohammed.antiporn.curfew.notification.ProtectionNotificationCoordinator
+import com.drmohammed.antiporn.data.repository.WardActiveModesTelemetrySyncer
+import com.drmohammed.antiporn.fortress.engine.FortressSessionController
 import com.drmohammed.antiporn.notification.manager.AppNotificationManager
 import com.drmohammed.antiporn.notification.model.NotificationActionType
 import com.drmohammed.antiporn.notification.model.NotificationCategory
@@ -46,19 +48,21 @@ class CurfewAlarmReceiver : BroadcastReceiver() {
                 }
                 if (action == CurfewConfig.ACTION_CURFEW_SNOOZE_END) {
                     CurfewEnforcer.clearSnooze(appContext)
+                    CurfewAppResolver.invalidateCache()
                     CurfewEnforcer.syncBlockState(appContext)
                     CurfewScheduler.scheduleNextAlarms(appContext)
+                    WardActiveModesTelemetrySyncer.syncAsync(appContext)
                     return@launch
                 }
-                if (action == NapConfig.ACTION_NAP_END) {
-                    // Nap end: merge block state (curfew OR nap), keep night alarms scheduled,
-                    // then reschedule nap alarm if still active (extended), else cancel.
+                if (action == CurfewScheduler.ACTION_FORTRESS_END || action == CurfewScheduler.LEGACY_ACTION_NAP_END) {
+                    CurfewAppResolver.invalidateCache()
                     CurfewEnforcer.syncBlockState(appContext)
                     CurfewScheduler.scheduleNextAlarms(appContext)
-                    rescheduleNapIfNeeded(appContext)
-                    if (!NapController.isNapActive(appContext)) {
-                        ProtectionNotificationCoordinator.postNapEndedNotification(appContext)
+                    rescheduleFortressIfNeeded(appContext)
+                    if (!FortressSessionController.isFortressActive(appContext)) {
+                        ProtectionNotificationCoordinator.postFortressEndedNotification(appContext)
                     }
+                    WardActiveModesTelemetrySyncer.syncAsync(appContext)
                     return@launch
                 }
 
@@ -99,8 +103,10 @@ class CurfewAlarmReceiver : BroadcastReceiver() {
                 }
 
                 // Curfew Start / End actions:
+                CurfewAppResolver.invalidateCache()
                 CurfewEnforcer.syncBlockState(appContext)
                 CurfewScheduler.scheduleNextAlarms(appContext)
+                WardActiveModesTelemetrySyncer.syncAsync(appContext)
 
                 if (!CurfewConfig.isCurfewEnabled(appContext)) {
                     Log.i(TAG, "Night curfew is disabled in policy; skipping notification for $action")
@@ -170,15 +176,17 @@ class CurfewAlarmReceiver : BroadcastReceiver() {
             }.format(java.util.Date(TrustedTimeProvider.currentTimeMillis(appContext)))
         }
 
-        private fun rescheduleNapIfNeeded(appContext: Context) {
+        private fun rescheduleFortressIfNeeded(appContext: Context) {
             try {
-                if (NapController.isNapActive(appContext) && NapController.remainingMs(appContext) > 0L) {
-                    CurfewScheduler.scheduleNapEndAlarm(appContext, NapController.getEndWall(appContext))
+                if (FortressSessionController.isFortressActive(appContext) &&
+                    FortressSessionController.remainingMs(appContext) > 0L
+                ) {
+                    CurfewScheduler.scheduleFortressEndAlarm(appContext, FortressSessionController.getEndWall(appContext))
                 } else {
-                    CurfewScheduler.cancelNapEndAlarm(appContext)
+                    CurfewScheduler.cancelFortressEndAlarm(appContext)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error rescheduling nap alarm", e)
+                Log.e(TAG, "Error rescheduling fortress alarm", e)
             }
         }
     }

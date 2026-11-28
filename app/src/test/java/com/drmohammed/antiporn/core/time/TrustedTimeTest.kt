@@ -1,5 +1,6 @@
 package com.drmohammed.antiporn.core.time
 
+import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -20,12 +21,17 @@ class TrustedTimeTest {
         fakeWall = 1_700_000_000_000L
         TrustedTimeProvider.elapsedRealtimeProvider = { fakeElapsed }
         TrustedTimeProvider.wallTimeProvider = { fakeWall }
-        TrustedTimeProvider.resetForTesting()
+        resetTrustedTimeForTest()
     }
 
     @After
     fun tearDown() {
-        TrustedTimeProvider.resetForTesting()
+        resetTrustedTimeForTest()
+    }
+
+    private fun resetTrustedTimeForTest() {
+        BlackBoxRecorder.awaitPendingWritesBlocking()
+        TrustedTimeProvider.resetForTesting() // direct reset after flushing BlackBoxRecorder
     }
 
     @Test
@@ -413,7 +419,7 @@ class TrustedTimeTest {
         TrustedTimeProvider.elapsedRealtimeProvider = { fakeElapsed }
         TrustedTimeProvider.wallTimeProvider = { fakeWall }
 
-        TrustedTimeProvider.resetForTesting()
+        resetTrustedTimeForTest()
         TrustedTimeProvider.sntpRequester = {
             SntpResult(
                 timeMs = initialSyncTime,
@@ -473,7 +479,7 @@ class TrustedTimeTest {
         fakeElapsed = 100_000L
         fakeWall = syncTime
 
-        TrustedTimeProvider.resetForTesting()
+        resetTrustedTimeForTest()
         TrustedTimeProvider.sntpRequester = {
             SntpResult(
                 timeMs = syncTime,
@@ -485,7 +491,7 @@ class TrustedTimeTest {
         assertTrue(TrustedTimeProvider.syncNow(fakeCtx, force = true))
 
         // Offline reboot #1: +6h sleep, run for 1h offline, then shut down
-        TrustedTimeProvider.resetForTesting()
+        resetTrustedTimeForTest()
         fakeWall = syncTime + (6L * 3600L * 1000L)
         fakeElapsed = 10_000L
         assertEquals(syncTime + (6L * 3600L * 1000L), TrustedTimeProvider.currentTimeMillis(fakeCtx))
@@ -496,7 +502,7 @@ class TrustedTimeTest {
         assertEquals(syncTime, inMemoryPrefs.getLong(TrustedTimeProvider.KEY_LAST_SAVED_WALL_TIME, 0L))
 
         // Offline reboot #2: wall rolled backwards — offline floor prevents regression below reboot #1 shutdown
-        TrustedTimeProvider.resetForTesting()
+        resetTrustedTimeForTest()
         fakeWall = syncTime - 3600_000L
         fakeElapsed = 5_000L
         val reboot2Time = TrustedTimeProvider.currentTimeMillis(fakeCtx)
@@ -513,7 +519,7 @@ class TrustedTimeTest {
         fakeElapsed = 100_000L
         fakeWall = syncTime
 
-        TrustedTimeProvider.resetForTesting()
+        resetTrustedTimeForTest()
         TrustedTimeProvider.sntpRequester = {
             SntpResult(
                 timeMs = syncTime,
@@ -548,7 +554,7 @@ class TrustedTimeTest {
         fakeElapsed = 100_000L
         fakeWall = inflatedTime
 
-        TrustedTimeProvider.resetForTesting()
+        resetTrustedTimeForTest()
         TrustedTimeProvider.sntpRequester = {
             SntpResult(
                 timeMs = inflatedTime,

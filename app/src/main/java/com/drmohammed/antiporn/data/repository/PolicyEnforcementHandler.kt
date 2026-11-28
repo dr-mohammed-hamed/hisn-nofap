@@ -29,7 +29,9 @@ import com.drmohammed.antiporn.curfew.CurfewForegroundWatcher
 import com.drmohammed.antiporn.curfew.CurfewScheduler
 import com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge
 import com.drmohammed.antiporn.curfew.ZeroTrustForegroundWatcher
+import com.drmohammed.antiporn.curfew.notification.ProtectionNotificationCoordinator
 import com.drmohammed.antiporn.data.local.db.entity.PendingApprovalEntity
+import com.drmohammed.antiporn.fortress.engine.EffectiveRestrictionResolver
 import com.drmohammed.antiporn.notification.registry.NotificationRegistry
 import com.drmohammed.antiporn.shields.BrowserShield
 import com.drmohammed.antiporn.shields.DnsShield
@@ -120,12 +122,32 @@ internal class PolicyEnforcementHandler(
                     enforceTimeAndDatePolicy(bundle)
                 }
 
-                // Reschedule curfew alarms (using the updated timezone) and sync curfew/VPN state
+                // Reschedule curfew alarms (using the updated timezone), invalidate resolver cache, and sync state
+                val scheduleChanged = bundle.isCurfewEnabled != effectivePreviousPolicy.isCurfewEnabled ||
+                    bundle.curfewStartHour != effectivePreviousPolicy.curfewStartHour ||
+                    bundle.curfewStartMinute != effectivePreviousPolicy.curfewStartMinute ||
+                    bundle.curfewEndHour != effectivePreviousPolicy.curfewEndHour ||
+                    bundle.curfewEndMinute != effectivePreviousPolicy.curfewEndMinute ||
+                    bundle.isWeekendCurfewEnabled != effectivePreviousPolicy.isWeekendCurfewEnabled ||
+                    bundle.weekendCurfewStartHour != effectivePreviousPolicy.weekendCurfewStartHour ||
+                    bundle.weekendCurfewStartMinute != effectivePreviousPolicy.weekendCurfewStartMinute ||
+                    bundle.weekendCurfewEndHour != effectivePreviousPolicy.weekendCurfewEndHour ||
+                    bundle.weekendCurfewEndMinute != effectivePreviousPolicy.weekendCurfewEndMinute
+                if (scheduleChanged) {
+                    com.drmohammed.antiporn.fortress.engine.CurfewWindowOverrideStore.clearOverride(appContext)
+                }
+                CurfewAppResolver.invalidateCache()
                 CurfewScheduler.scheduleNextAlarms(appContext)
                 CurfewConfig.setVpnBypassedPackages(appContext, bundle.curfewVpnBypassPackages)
                 CurfewEnforcer.syncBlockState(appContext)
-                if (bundle.dnsHost != effectivePreviousPolicy.dnsHost) {
-                    com.drmohammed.antiporn.core.network.dns.DnsResilienceManager.resetStateSync()
+                val fallbackToggled = bundle.isLocalVpnFallbackEnabled != effectivePreviousPolicy.isLocalVpnFallbackEnabled
+                if (bundle.dnsHost != effectivePreviousPolicy.dnsHost ||
+                    (fallbackToggled && !bundle.isLocalVpnFallbackEnabled)
+                ) {
+                    com.drmohammed.antiporn.core.network.dns.DnsResilienceManager.resetStateSync(appContext)
+                } else if (fallbackToggled && bundle.isLocalVpnFallbackEnabled) {
+                    com.drmohammed.antiporn.core.network.dns.DnsFallbackConsentNotifier.cancelNotification(appContext)
+                    com.drmohammed.antiporn.core.network.dns.DnsResilienceManager.triggerImmediateEvaluationForActiveNetwork(appContext)
                 }
                 if (isDeviceOwner) {
                     val requiredVpnMode = CurfewBlackholeVpnService.evaluateRequiredMode(appContext)
@@ -136,16 +158,34 @@ internal class PolicyEnforcementHandler(
                     )
                     if (targetAlwaysOnPkg != null && !CurfewVpnDnsBridge.isVpnConsentGranted(appContext)) {
                         val lockdown = (requiredVpnMode == CurfewBlackholeVpnService.VpnMode.CURFEW_BLACKHOLE)
-                        val bypassed = if (lockdown) CurfewConfig.getVpnBypassedPackages(appContext) else null
-                        SafeDpmGateway.setAlwaysOnVpnPackageBlocking(
+                        val bypassed = if (lockdown) EffectiveRestrictionResolver.resolve(appContext).effectiveVpnBypassPackages else null
+                        val res = SafeDpmGateway.setAlwaysOnVpnPackageBlocking(
                             context = appContext,
                             vpnPackage = targetAlwaysOnPkg,
                             lockdown = lockdown,
                             bypassedPackages = bypassed
                         )
+                        if (res.isSuccess) {
+                            com.drmohammed.antiporn.curfew.AlwaysOnVpnPolicyBridge.updateCachedBypassedPackages(bypassed)
+                        }
+                    } else if (targetAlwaysOnPkg == null) {
+                        val currentAlwaysOn = SafeDpmGateway.getAlwaysOnVpnPackageBlocking(appContext, recordSuccess = false).getOrNull()
+                        val isLockdown = SafeDpmGateway.isAlwaysOnVpnLockdownEnabledBlocking(appContext, recordSuccess = false).getOrNull() == true
+                        if (currentAlwaysOn == appContext.packageName || isLockdown) {
+                            val res = SafeDpmGateway.setAlwaysOnVpnPackageBlocking(appContext, null, false)
+                            if (res.isSuccess) {
+                                com.drmohammed.antiporn.curfew.AlwaysOnVpnPolicyBridge.updateCachedBypassedPackages(null)
+                            }
+                        }
                     }
                 }
                 CurfewBlackholeVpnService.syncPolicy(appContext)
+                if (isDeviceOwner &&
+                    CurfewBlackholeVpnService.evaluateRequiredMode(appContext) == CurfewBlackholeVpnService.VpnMode.IDLE &&
+                    CurfewBlackholeVpnService.isServiceOrTunnelActive()
+                ) {
+                    CurfewBlackholeVpnService.forceReleaseVpnAndAwait(appContext, 2000L)
+                }
 
                 if (isDeviceOwner) {
                     SafeDpmGateway.executeRaw(
@@ -178,6 +218,8 @@ internal class PolicyEnforcementHandler(
                 WaqfaSessionManager.getInstance(appContext).updateConfig(bundle.waqfaConfig)
                 com.drmohammed.antiporn.pageshield.engine.PageShieldAccessibilityHook.getInstance().updateConfig(bundle.pageShieldConfig)
                 reconcileAccessibilityAndCapabilities(bundle)
+                ProtectionNotificationCoordinator.syncProtectionNotification(appContext)
+                WardActiveModesTelemetrySyncer.syncAsync(appContext)
 
                 synchronized(baselineLock) {
                     lastAppliedPolicyBundle = bundle
@@ -305,13 +347,11 @@ internal class PolicyEnforcementHandler(
     ) {
         val currentBlacklist = bundle.customBlacklistPackages
         val initialApprovals = queryApprovalsSafely(approvalRepo, "applyPolicyToSystem")
-        val nonBaselineApprovedPackages = nonBaselineApprovedSet(initialApprovals)
         val localPendingSet = initialApprovals.filter { it.isPending }.map { it.packageName }.toSet()
 
         val removedFromBlacklist = (effectivePreviousPolicy.customBlacklistPackages - currentBlacklist).filter { pkg ->
             pkg != appContext.packageName &&
-                !AppPolicyRegistry.isImmune(pkg) &&
-                (!AppPolicyRegistry.isHighRisk(pkg) || nonBaselineApprovedPackages.contains(pkg))
+                !AppPolicyRegistry.isImmune(pkg)
         }
 
         val guardianName = bundle.guardianName ?: "GUARDIAN_POLICY"
@@ -321,10 +361,15 @@ internal class PolicyEnforcementHandler(
                 unsuspendAndApproveSafely(approvalRepo, pkg, guardianName, "removed blacklist package")
             }
         }
-        for (pkg in bundle.customCurfewWhitelistPackages) {
-            if (localPendingSet.contains(pkg) && (!AppPolicyRegistry.isHighRisk(pkg) || nonBaselineApprovedPackages.contains(pkg))) {
-                Log.i(TAG, "Self-healing bridge: auto-approving whitelisted package '$pkg' by supervisor")
-                unsuspendAndApproveSafely(approvalRepo, pkg, guardianName, "whitelisted package")
+        val allowWhitelistAutoApprove = !bundle.isSupervised ||
+            bundle.lastSelfModifiedAt == null ||
+            bundle.selfControlNewAppsAllowed
+        if (allowWhitelistAutoApprove) {
+            for (pkg in bundle.customCurfewWhitelistPackages) {
+                if (localPendingSet.contains(pkg)) {
+                    Log.i(TAG, "Self-healing bridge: auto-approving whitelisted package '$pkg' by supervisor")
+                    unsuspendAndApproveSafely(approvalRepo, pkg, guardianName, "whitelisted package")
+                }
             }
         }
 
@@ -337,8 +382,7 @@ internal class PolicyEnforcementHandler(
             }.map { it.packageName }.toSet()
             val packagesToUnsuspend = removedFromBlacklist.filter { pkg ->
                 (!isBlockActive || immunePackages.contains(pkg)) &&
-                    !blockedByZeroTrust.contains(pkg) &&
-                    (!AppPolicyRegistry.isHighRisk(pkg) || nonBaselineApprovedPackages.contains(pkg))
+                    !blockedByZeroTrust.contains(pkg)
             }.toTypedArray()
             if (packagesToUnsuspend.isNotEmpty()) {
                 try {
@@ -362,13 +406,16 @@ internal class PolicyEnforcementHandler(
         val isZeroTrustActive = bundle.lockNewInstallsUntilApproved
         val updatedApprovals = queryApprovalsSafely(approvalRepo, "curfew whitelist release")
         val zeroTrustApproved = updatedApprovals.filter { it.isApproved }.map { it.packageName }.toSet()
-        val updatedNonBaselineApproved = nonBaselineApprovedSet(updatedApprovals)
+        val zeroTrustRejected = updatedApprovals.filter { it.isRejected }.map { it.packageName }.toSet()
+        val zeroTrustPending = updatedApprovals.filter { it.isPending }.map { it.packageName }.toSet()
         val immunePackages = if (isZeroTrustActive) CurfewAppResolver.resolveImmunePackages(appContext) else emptySet()
         val pm = appContext.packageManager
 
         val whitelistedToUnsuspend = newlyWhitelisted.filter { pkg ->
-            val isHighRisk = AppPolicyRegistry.isHighRisk(pkg)
-            if (bundle.customBlacklistPackages.contains(pkg) || (isHighRisk && !updatedNonBaselineApproved.contains(pkg))) {
+            if (bundle.customBlacklistPackages.contains(pkg) ||
+                zeroTrustRejected.contains(pkg) ||
+                (isZeroTrustActive && zeroTrustPending.contains(pkg))
+            ) {
                 return@filter false
             }
             val isSystemOrUpdatedApp = try {
@@ -387,7 +434,7 @@ internal class PolicyEnforcementHandler(
                 false
             }
             val hasApproval = !isZeroTrustActive ||
-                (if (isHighRisk) updatedNonBaselineApproved.contains(pkg) else zeroTrustApproved.contains(pkg)) ||
+                zeroTrustApproved.contains(pkg) ||
                 immunePackages.contains(pkg) ||
                 isSystemOrUpdatedApp ||
                 pkg == CurfewConfig.GOOGLE_PLAY_STORE_PACKAGE ||
@@ -481,21 +528,18 @@ internal class PolicyEnforcementHandler(
         label: String
     ) {
         try {
-            approvalRepo.unsuspendAndApprove(
+            val result = approvalRepo.unsuspendAndApprove(
                 packageName = pkg,
                 decidedBy = guardianName,
                 syncToCloud = false
             )
+            if (result != ApprovalDecisionResult.APPROVED && result != ApprovalDecisionResult.APPROVED_CURFEW_DEFERRED) {
+                Log.w(TAG, "Auto-approve $label '$pkg' returned non-approved outcome: $result")
+            }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             Log.e(TAG, "Failed auto-approving $label '$pkg'", e)
         }
-    }
-
-    private fun nonBaselineApprovedSet(approvals: List<PendingApprovalEntity>): Set<String> {
-        return approvals.filter {
-            it.isApproved
-        }.map { it.packageName }.toSet()
     }
 
     private fun logPackageSuspensionResult(

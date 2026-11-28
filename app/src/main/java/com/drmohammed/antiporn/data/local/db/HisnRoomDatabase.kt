@@ -35,7 +35,7 @@ import com.drmohammed.antiporn.waqfa.data.WaqfaSessionEntity
         InAppNotificationEntity::class,
         WaqfaSessionEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class HisnRoomDatabase : RoomDatabase() {
@@ -316,6 +316,26 @@ abstract class HisnRoomDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Migration from Room version 6 to Room version 7.
+         * Upgrades [partners] table from single primary key (`id`) to composite primary key (`id`, `role`)
+         * using Room's SQLite table-swap pattern with zero data loss, and adds `idx_partners_id`.
+         */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `partners_new` (`id` TEXT NOT NULL, `pairing_code` TEXT NOT NULL, `display_name` TEXT NOT NULL, `role` TEXT NOT NULL, `status` TEXT NOT NULL, `created_at` INTEGER NOT NULL, `last_sync_at` INTEGER NOT NULL, PRIMARY KEY(`id`, `role`))"
+                )
+                db.execSQL(
+                    "INSERT OR REPLACE INTO `partners_new` (`id`, `pairing_code`, `display_name`, `role`, `status`, `created_at`, `last_sync_at`) SELECT `id`, `pairing_code`, `display_name`, `role`, `status`, `created_at`, `last_sync_at` FROM `partners`"
+                )
+                db.execSQL("DROP TABLE IF EXISTS `partners`")
+                db.execSQL("ALTER TABLE `partners_new` RENAME TO `partners`")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `idx_partners_role` ON `partners` (`role`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `idx_partners_id` ON `partners` (`id`)")
+            }
+        }
+
         fun getInstance(context: Context): HisnRoomDatabase {
             return instance ?: synchronized(this) {
                 instance ?: try {
@@ -335,7 +355,7 @@ abstract class HisnRoomDatabase : RoomDatabase() {
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
             .allowMainThreadQueries()
             .fallbackToDestructiveMigrationOnDowngrade(true)
-            .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_3_5, MIGRATION_5_6)
+            .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_3_5, MIGRATION_5_6, MIGRATION_6_7)
             .fallbackToDestructiveMigrationFrom(true, 1, 2)
             .addCallback(object : Callback() {
                 override fun onCreate(db: SupportSQLiteDatabase) {

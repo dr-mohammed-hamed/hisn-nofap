@@ -212,7 +212,8 @@ class CurfewTest {
         try {
             // Real fail-secure release guard must reject deactivation when PolicyRepository is unavailable
             val isolatedContext = object : ContextWrapper(null) {
-                override fun getApplicationContext(): Context = this
+                override fun getApplicationContext(): Context =
+                    throw IllegalStateException("PolicyRepository unavailable in isolated context")
             }
             assertFalse(
                 "Fail-open check returns false when repository is unavailable",

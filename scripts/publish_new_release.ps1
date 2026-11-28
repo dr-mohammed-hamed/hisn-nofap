@@ -19,7 +19,13 @@ param(
     [string]$NewVersionName,
 
     [Parameter(Mandatory = $false)]
-    [string]$ReleaseNotes = "Performance improvements and stability fixes"
+    [string]$ReleaseNotes = "Performance improvements and stability fixes",
+
+    [Parameter(Mandatory = $false)]
+    [switch]$PublishToGitHub,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$IncludeCanonicalAsset
 )
 
 $ErrorActionPreference = "Stop"
@@ -126,3 +132,17 @@ Write-Host "APK Size:    $apkSizeMb MB" -ForegroundColor White
 Write-Host "Public Link: $r2BaseUrl/antiporn-release.apk" -ForegroundColor Cyan
 Write-Host "OTA Meta:    $r2BaseUrl/version.json" -ForegroundColor Cyan
 Write-Host "Note: Existing users will download this update, and the QR code points to it automatically!" -ForegroundColor Yellow
+
+if ($PublishToGitHub) {
+    Write-Host "`n[6/6] Publishing GitHub Release via publish_github_release.ps1..." -ForegroundColor Green
+    $ghReleaseScript = Join-Path $PSScriptRoot "publish_github_release.ps1"
+    $ghParams = @{}
+    if ($IncludeCanonicalAsset) {
+        $ghParams["IncludeCanonicalAsset"] = $true
+    }
+    & $ghReleaseScript @ghParams
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "GitHub Release publishing failed!" -ForegroundColor Red
+        exit 1
+    }
+}

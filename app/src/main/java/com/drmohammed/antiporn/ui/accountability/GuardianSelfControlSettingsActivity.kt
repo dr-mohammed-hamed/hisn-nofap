@@ -15,6 +15,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.databinding.ActivityGuardianSelfControlSettingsBinding
+import com.drmohammed.antiporn.fortress.ui.FortressesListActivity
 import com.drmohammed.antiporn.ui.common.ConfirmActionDialogFragment
 import com.drmohammed.antiporn.ui.common.showSafely
 import kotlinx.coroutines.launch
@@ -157,6 +158,9 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
         binding.switchPermWaqfa.isChecked = policy.selfControlWaqfaAllowed
         binding.switchPermPageShield.isChecked = policy.selfControlPageShieldAllowed
         binding.switchPermNewApps.isChecked = policy.selfControlNewAppsAllowed
+        binding.switchPermFortresses.isChecked = policy.selfControlFortressesAllowed
+        binding.switchPermFortressUnlock.isChecked = policy.selfControlFortressUnlockAllowed
+        binding.switchPermOtherSettings.isChecked = policy.selfControlOtherSettingsAllowed
 
         updateGranularContainerState(policy.isSelfControlAllowed)
         isBinding = false
@@ -170,6 +174,9 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
         binding.switchPermWaqfa.isEnabled = isMasterAllowed
         binding.switchPermPageShield.isEnabled = isMasterAllowed
         binding.switchPermNewApps.isEnabled = isMasterAllowed
+        binding.switchPermFortresses.isEnabled = isMasterAllowed
+        binding.switchPermFortressUnlock.isEnabled = isMasterAllowed
+        binding.switchPermOtherSettings.isEnabled = isMasterAllowed
 
         binding.cardPermCurfew.isEnabled = isMasterAllowed
         binding.cardPermWeb.isEnabled = isMasterAllowed
@@ -177,6 +184,9 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
         binding.cardPermWaqfa.isEnabled = isMasterAllowed
         binding.cardPermPageShield.isEnabled = isMasterAllowed
         binding.cardPermNewApps.isEnabled = isMasterAllowed
+        binding.cardPermFortresses.isEnabled = isMasterAllowed
+        binding.cardPermFortressUnlock.isEnabled = isMasterAllowed
+        binding.cardPermOtherSettings.isEnabled = isMasterAllowed
     }
 
     private fun setControlsEnabled(enabled: Boolean) {
@@ -191,6 +201,9 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
             binding.switchPermWaqfa.isEnabled = false
             binding.switchPermPageShield.isEnabled = false
             binding.switchPermNewApps.isEnabled = false
+            binding.switchPermFortresses.isEnabled = false
+            binding.switchPermFortressUnlock.isEnabled = false
+            binding.switchPermOtherSettings.isEnabled = false
 
             binding.cardPermCurfew.isEnabled = false
             binding.cardPermWeb.isEnabled = false
@@ -198,6 +211,9 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
             binding.cardPermWaqfa.isEnabled = false
             binding.cardPermPageShield.isEnabled = false
             binding.cardPermNewApps.isEnabled = false
+            binding.cardPermFortresses.isEnabled = false
+            binding.cardPermFortressUnlock.isEnabled = false
+            binding.cardPermOtherSettings.isEnabled = false
         }
         binding.btnResetWardQrLock.isEnabled = enabled
     }
@@ -243,6 +259,18 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
             }
         }
 
+        binding.cardPermFortresses.setOnClickListener {
+            if (!viewModel.uiState.value.isPushing && binding.switchPermFortresses.isEnabled) binding.switchPermFortresses.performClick()
+        }
+
+        binding.cardPermFortressUnlock.setOnClickListener {
+            if (!viewModel.uiState.value.isPushing && binding.switchPermFortressUnlock.isEnabled) binding.switchPermFortressUnlock.performClick()
+        }
+
+        binding.cardPermOtherSettings.setOnClickListener {
+            if (!viewModel.uiState.value.isPushing && binding.switchPermOtherSettings.isEnabled) binding.switchPermOtherSettings.performClick()
+        }
+
         binding.switchMasterSelfControl.setOnCheckedChangeListener { _, isChecked ->
             if (isBinding) return@setOnCheckedChangeListener
             updateGranularContainerState(isChecked)
@@ -279,13 +307,34 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
             viewModel.pushPolicyChange { it.copy(selfControlNewAppsAllowed = isChecked) }
         }
 
+        binding.switchPermFortresses.setOnCheckedChangeListener { _, isChecked ->
+            if (isBinding) return@setOnCheckedChangeListener
+            pushUpdatedPolicy { it.copy(selfControlFortressesAllowed = isChecked) }
+        }
+
+        binding.switchPermFortressUnlock.setOnCheckedChangeListener { _, isChecked ->
+            if (isBinding) return@setOnCheckedChangeListener
+            pushUpdatedPolicy { it.copy(selfControlFortressUnlockAllowed = isChecked) }
+        }
+
+        binding.switchPermOtherSettings.setOnCheckedChangeListener { _, isChecked ->
+            if (isBinding) return@setOnCheckedChangeListener
+            pushUpdatedPolicy { it.copy(selfControlOtherSettingsAllowed = isChecked) }
+        }
+
         binding.btnResetWardQrLock.setOnClickListener {
             showResetWardQrConfirmationDialog()
         }
     }
 
+    /** main's entry point, backed by dev's mutex/NonCancellable ViewModel implementation. */
+    private fun pushUpdatedPolicy(updater: (DevicePolicyBundle) -> DevicePolicyBundle) {
+        viewModel.pushPolicyChange(updater)
+    }
+
     private fun showResetWardQrConfirmationDialog() {
         if (isFinishing || isDestroyed) return
+        // dev's rotation-safe path: the Fragment Result listener calls viewModel.executeRemoteQrReset.
         supportFragmentManager.showSafely(TAG_RESET_WARD_QR) {
             ConfirmActionDialogFragment.newInstance(
                 requestKey = REQ_RESET_WARD_QR,
@@ -298,8 +347,11 @@ class GuardianSelfControlSettingsActivity : AppCompatActivity() {
     }
 
     private fun navigateBackWithResult() {
+        val json = viewModel.uiState.value.currentPolicy.toJson()
         val resultIntent = Intent().apply {
-            putExtra(EXTRA_POLICY_JSON, viewModel.uiState.value.currentPolicy.toJson())
+            putExtra(EXTRA_POLICY_JSON, json)
+            // main's Fortress-related key, carried alongside dev's ViewModel-backed policy.
+            putExtra(FortressesListActivity.EXTRA_UPDATED_POLICY_JSON, json)
         }
         setResult(Activity.RESULT_OK, resultIntent)
         finish()

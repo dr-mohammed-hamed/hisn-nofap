@@ -1,11 +1,16 @@
 package com.drmohammed.antiporn.curfew
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard
+import com.drmohammed.antiporn.core.network.PhysicalNetworkResolver
+import com.drmohammed.antiporn.core.network.dns.LinkIpFamilies
 import com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService.VpnMode
+import com.drmohammed.antiporn.fortress.engine.EffectiveRestrictionResolver
 import com.drmohammed.antiporn.telemetry.SafeDpmGateway
 import timber.log.Timber
 
@@ -19,14 +24,18 @@ internal object CurfewVpnTunnelHandler {
 
     data class TunnelConfigResult(
         val builder: VpnService.Builder,
-        val appliedBypassedPackages: Set<String>?
+        val appliedBypassedPackages: Set<String>?,
+        val hasIpv6: Boolean = false
     )
+
+    internal fun shouldConfigureIpv6Tunnel(hasIpv6: Boolean): Boolean = hasIpv6
 
     fun prepareTunnelConfig(
         service: CurfewBlackholeVpnService,
         appContext: Context,
         targetMode: VpnMode,
-        lastBypassedPackages: Set<String>?
+        lastBypassedPackages: Set<String>?,
+        linkFamilies: LinkIpFamilies = PhysicalNetworkResolver.detectActivePhysicalLinkFamilies(appContext)
     ): TunnelConfigResult {
         val sessionName = if (targetMode == VpnMode.CURFEW_BLACKHOLE) {
             service.getString(R.string.curfew_vpn_session_name)
@@ -40,9 +49,26 @@ internal object CurfewVpnTunnelHandler {
             .setMtu(1500)
             .setBlocking(true)
 
+        val hasIpv6: Boolean
         if (targetMode == VpnMode.DNS_FILTERING_ONLY) {
-            configureDnsSinkholeRoutes(builder)
+            hasIpv6 = shouldConfigureIpv6Tunnel(linkFamilies.hasIpv6)
+            builder.allowBypass()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
+                try {
+                    PhysicalNetworkResolver.resolveActivePhysicalNetwork(appContext)?.let { activeNet ->
+                        builder.setUnderlyingNetworks(arrayOf(activeNet))
+                    }
+                } catch (e: Exception) {
+                    Timber.tag(TAG).w(e, "Failed setting underlying networks on VPN builder")
+                }
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val isMetered = resolveActiveNetworkMetered(appContext)
+                builder.setMetered(isMetered)
+            }
+            configureDnsSinkholeRoutes(builder, hasIpv6)
         } else {
+            hasIpv6 = true
             builder.addDnsServer("10.255.255.1")
             builder.addAddress("fd00::1", 126)
             builder.addDnsServer("fd00::1")
@@ -54,7 +80,7 @@ internal object CurfewVpnTunnelHandler {
 
         var appliedBypassedPackages: Set<String>? = null
         if (targetMode == VpnMode.CURFEW_BLACKHOLE) {
-            val bypassedPackages = CurfewConfig.getVpnBypassedPackages(appContext)
+            val bypassedPackages = EffectiveRestrictionResolver.resolve(appContext).effectiveVpnBypassPackages
             appliedBypassedPackages = bypassedPackages
             syncAlwaysOnBlackhole(appContext, service.packageName, bypassedPackages, lastBypassedPackages)
             for (pkg in bypassedPackages) {
@@ -69,13 +95,22 @@ internal object CurfewVpnTunnelHandler {
             syncAlwaysOnDnsMode(appContext, targetMode)
         }
 
-        return TunnelConfigResult(builder, appliedBypassedPackages)
+        return TunnelConfigResult(builder, appliedBypassedPackages, hasIpv6 = hasIpv6)
     }
 
-    private fun configureDnsSinkholeRoutes(builder: VpnService.Builder) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            builder.setMetered(false)
+    private fun resolveActiveNetworkMetered(appContext: Context): Boolean {
+        val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return false
+        val activeNet = PhysicalNetworkResolver.resolveActivePhysicalNetwork(cm)
+        val activeCaps = if (activeNet != null) cm.getNetworkCapabilities(activeNet) else null
+        return if (activeCaps != null) {
+            !activeCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+        } else {
+            cm.isActiveNetworkMetered
         }
+    }
+
+    internal fun configureDnsSinkholeRoutes(builder: VpnService.Builder, hasIpv6: Boolean) {
         builder.addDnsServer("10.255.255.2")
         builder.addRoute("10.255.255.2", 32)
         // Sinkhole hardcoded public IPv4 DNS/DoH resolvers (Hisn is excluded via addDisallowedApplication + protect())
@@ -118,6 +153,10 @@ internal object CurfewVpnTunnelHandler {
         // Level3
         builder.addRoute("4.2.2.1", 32)
         builder.addRoute("4.2.2.2", 32)
+
+        if (!shouldConfigureIpv6Tunnel(hasIpv6)) {
+            return
+        }
 
         builder.addAddress("fd00::1", 126)
         builder.addDnsServer("fd00::2")
@@ -168,12 +207,15 @@ internal object CurfewVpnTunnelHandler {
             val alwaysOnPkg = SafeDpmGateway.getAlwaysOnVpnPackageBlocking(appContext, recordSuccess = false).getOrNull()
             val isLockdown = SafeDpmGateway.isAlwaysOnVpnLockdownEnabledBlocking(appContext, recordSuccess = false).getOrNull() == true
             if (alwaysOnPkg != selfPackage || !isLockdown || lastBypassedPackages != bypassedPackages) {
-                SafeDpmGateway.setAlwaysOnVpnPackageBlocking(
+                val res = SafeDpmGateway.setAlwaysOnVpnPackageBlocking(
                     context = appContext,
                     vpnPackage = selfPackage,
                     lockdown = true,
                     bypassedPackages = bypassedPackages
                 )
+                if (res.isSuccess) {
+                    AlwaysOnVpnPolicyBridge.updateCachedBypassedPackages(bypassedPackages)
+                }
             }
         } catch (e: Exception) {
             Timber.tag(TAG).w(e, "Could not update Always-On VPN lockdown bypassed packages")
@@ -187,11 +229,14 @@ internal object CurfewVpnTunnelHandler {
             val isLockdown = SafeDpmGateway.isAlwaysOnVpnLockdownEnabledBlocking(appContext, recordSuccess = false).getOrNull() == true
             val targetAlwaysOnPkg = CurfewVpnDnsBridge.resolveTargetAlwaysOnPackage(appContext, targetMode)
             if (alwaysOnPkg != targetAlwaysOnPkg || isLockdown) {
-                SafeDpmGateway.setAlwaysOnVpnPackageBlocking(
+                val res = SafeDpmGateway.setAlwaysOnVpnPackageBlocking(
                     context = appContext,
                     vpnPackage = targetAlwaysOnPkg,
                     lockdown = false
                 )
+                if (res.isSuccess) {
+                    AlwaysOnVpnPolicyBridge.updateCachedBypassedPackages(null)
+                }
                 Timber.tag(TAG).i("Always-On VPN configured to target=$targetAlwaysOnPkg with lockdown=false for daytime DNS mode")
             }
         } catch (e: Exception) {

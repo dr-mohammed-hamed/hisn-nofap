@@ -1,4 +1,4 @@
-package com.drmohammed.antiporn.provisioning.ui
+﻿package com.drmohammed.antiporn.provisioning.ui
 
 import android.content.BroadcastReceiver
 import android.content.ClipData
@@ -32,10 +32,13 @@ import com.drmohammed.antiporn.MainActivity
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.engine.ProtectionEngine
 import com.drmohammed.antiporn.provisioning.engine.AdbSecondaryUserInspector
+import com.drmohammed.antiporn.provisioning.engine.AdbShellValidation
 import com.drmohammed.antiporn.provisioning.engine.BlockingSecondaryUser
 import com.drmohammed.antiporn.provisioning.engine.DeviceOwnerPromoter
+import com.drmohammed.antiporn.provisioning.engine.OemPermissionType
 import com.drmohammed.antiporn.provisioning.engine.OemProvisioningHelper
 import com.drmohammed.antiporn.provisioning.engine.ProvisioningAckStore
+import com.drmohammed.antiporn.provisioning.engine.ProvisioningFreezeRecoveryStore
 import com.drmohammed.antiporn.provisioning.engine.ProvisioningWifiWatcher
 import com.drmohammed.antiporn.provisioning.receiver.PairingCodeReceiver
 import com.drmohammed.antiporn.provisioning.service.AdbPairingNotificationService
@@ -111,6 +114,11 @@ class ProvisioningWizardActivity : AppCompatActivity() {
 
     private val viewModel: ProvisioningWizardViewModel by viewModel()
 
+    // main's outcome flows are coordinated here; promotion decisions stay in the ViewModel.
+    private val outcomeDialogs = ProvisioningOutcomeDialogCoordinator()
+    private val recoveryCoordinator = ProvisioningRecoveryCoordinator()
+    private val dangerDialogHelper = ProvisioningDangerDialogHelper { setupOemGuidance() }
+
     private var isWifiValid = false
     private var hasAutoLaunchedAdjacent = false
 
@@ -142,8 +150,15 @@ class ProvisioningWizardActivity : AppCompatActivity() {
                         val connPort = intent.getIntExtra(AdbPairingNotificationService.EXTRA_CONNECT_PORT, 0)
                         viewModel.updateConnectPort(connPort)
                         val blockingUsers = BlockingSecondaryUser.listFromJson(blockingJson)
+                        val oemType = intent.getStringExtra(PairingCodeReceiver.EXTRA_OEM_PERMISSION_TYPE)
+                            ?.let { runCatching { OemPermissionType.valueOf(it) }.getOrNull() }
+                        val accountsPayload = BlockingAccountsPayload.fromJson(
+                            intent.getStringExtra(PairingCodeReceiver.EXTRA_BLOCKING_ACCOUNTS_JSON)
+                        )
                         val error = intent.getStringExtra(PairingCodeReceiver.EXTRA_ERROR_MESSAGE)
-                        viewModel.onExternalBroadcastFailure(blockingUsers, error)
+                        viewModel.onExternalBroadcastFailureWithOutcome(
+                            blockingUsers, oemType, accountsPayload, error
+                        )
                     }
                 }
             }
@@ -172,6 +187,13 @@ class ProvisioningWizardActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInMultiWindowMode) {
             updateMultiWindowUi(true)
         }
+        if (savedInstanceState != null) {
+            val restoredConnPort = savedInstanceState.getInt(KEY_DISCOVERED_CONNECT_PORT, 0)
+            if (restoredConnPort > 0) viewModel.updateConnectPort(restoredConnPort)
+            recoveryCoordinator.restoreState(savedInstanceState)
+            outcomeDialogs.restoreState(savedInstanceState, this, ::executeRetryAlreadyPaired)
+        }
+
         val restoredJson = savedInstanceState?.getString(KEY_PENDING_BLOCKING_USERS_JSON)
             ?: viewModel.uiState.value.pendingBlockingUsersJson
         if (!restoredJson.isNullOrBlank()) {
@@ -179,13 +201,28 @@ class ProvisioningWizardActivity : AppCompatActivity() {
             if (restoredUsers.isNotEmpty()) {
                 showBlockingSecondaryUsersDialog(restoredUsers)
             }
-        } else if (savedInstanceState == null) {
+        }
+        if (savedInstanceState == null) {
             if (intent?.getBooleanExtra(EXTRA_REQUIRE_DANGER_ACK, false) == true) {
                 intent?.removeExtra(EXTRA_REQUIRE_DANGER_ACK)
                 ensureDangerAcknowledgedBeforeAction(DANGER_ACTION_NONE) {}
             }
             handleBlockingUsersIntentExtra(intent)
+            consumeOutcomeIntentExtras(intent)
         }
+    }
+
+    private fun consumeOutcomeIntentExtras(targetIntent: Intent?) {
+        outcomeDialogs.consumeIntentExtras(
+            targetIntent = targetIntent,
+            activity = this,
+            dangerDialogHelper = dangerDialogHelper,
+            onRetryAlreadyPaired = ::executeRetryAlreadyPaired,
+            onRecoveryRequested = {
+                recoveryCoordinator.markRequestedFromIntent()
+                checkAndShowRecoveryDialogIfNeeded()
+            }
+        )
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -193,6 +230,10 @@ class ProvisioningWizardActivity : AppCompatActivity() {
         viewModel.uiState.value.pendingBlockingUsersJson?.let {
             outState.putString(KEY_PENDING_BLOCKING_USERS_JSON, it)
         }
+        val connectPort = viewModel.uiState.value.discoveredConnectPort
+        if (connectPort > 0) outState.putInt(KEY_DISCOVERED_CONNECT_PORT, connectPort)
+        outcomeDialogs.saveState(outState)
+        recoveryCoordinator.saveState(outState)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -203,6 +244,7 @@ class ProvisioningWizardActivity : AppCompatActivity() {
             ensureDangerAcknowledgedBeforeAction(DANGER_ACTION_NONE) {}
         }
         handleBlockingUsersIntentExtra(intent)
+        consumeOutcomeIntentExtras(intent)
     }
 
     private fun handleBlockingUsersIntentExtra(targetIntent: Intent?) {
@@ -401,6 +443,12 @@ class ProvisioningWizardActivity : AppCompatActivity() {
                             is ProvisioningWizardEvent.SecondaryUsersBlocking -> {
                                 showBlockingSecondaryUsersDialog(event.users)
                             }
+                            is ProvisioningWizardEvent.OemPermissionRequired -> {
+                                outcomeDialogs.showOemPermission(this@ProvisioningWizardActivity, event.oemType, ::executeRetryAlreadyPaired)
+                            }
+                            is ProvisioningWizardEvent.AccountsBlocking -> {
+                                outcomeDialogs.showAccountsBlocking(this@ProvisioningWizardActivity, event.payload, ::executeRetryAlreadyPaired)
+                            }
                             is ProvisioningWizardEvent.PromotionFailed -> {
                                 Toast.makeText(
                                     this@ProvisioningWizardActivity,
@@ -520,6 +568,8 @@ class ProvisioningWizardActivity : AppCompatActivity() {
 
     private fun showBlockingSecondaryUsersDialog(users: List<BlockingSecondaryUser>) {
         if (isFinishing || isDestroyed || users.isEmpty()) return
+        // main's isShowing guard, expressed through the rotation-safe DialogFragment path.
+        if (supportFragmentManager.findFragmentByTag(BlockingSecondaryUsersDialogFragment.TAG) != null) return
         viewModel.setPendingBlockingUsersJson(BlockingSecondaryUser.listToJson(users))
         supportFragmentManager.showSafely(BlockingSecondaryUsersDialogFragment.TAG) {
             BlockingSecondaryUsersDialogFragment.newInstance(users)
@@ -527,8 +577,52 @@ class ProvisioningWizardActivity : AppCompatActivity() {
     }
 
     private fun executeRemoveSecondaryUsersAndPromote(approvedUserIds: Set<Int>) {
+        AdbPairingNotificationService.clearStickyOutcome(this, suppressReprompt = true)
         viewModel.startRemoveSecondaryUsersAndPromote(approvedUserIds)
     }
+
+    private fun executeRetryAlreadyPaired() {
+        if (viewModel.uiState.value.isPromoting || recoveryCoordinator.isHealing ||
+            DeviceOwnerPromoter.isPromotionActive
+        ) {
+            Toast.makeText(this, R.string.provisioning_error_already_in_progress, Toast.LENGTH_SHORT).show()
+            return
+        }
+        outcomeDialogs.clearAll()
+        AdbPairingNotificationService.clearStickyOutcome(this, suppressReprompt = true)
+        viewModel.retryAlreadyPaired()
+    }
+
+    /** Mirrors main's viewBinder.setPromotionButtonsBusy without abandoning dev's direct binding. */
+    private fun setPromotionButtonsBusy(textRes: Int?) {
+        if (textRes != null) {
+            btnPairAndActivate.setText(textRes)
+            btnSplitPairAndActivate.setText(textRes)
+            btnPairAndActivate.isEnabled = false
+            btnSplitPairAndActivate.isEnabled = false
+        } else {
+            validateInputs()
+        }
+    }
+
+    private fun checkAndShowRecoveryDialogIfNeeded() {
+        recoveryCoordinator.checkAndShowIfNeeded(
+            activity = this,
+            canShowDialog = ::canShowRecoveryDialog,
+            discoveredConnectPort = { viewModel.uiState.value.discoveredConnectPort },
+            onBusyChanged = ::setPromotionButtonsBusy,
+            onValidationNeeded = ::validateInputs,
+            onDeviceOwnerConfirmed = ::onProvisioningSuccessful
+        )
+    }
+
+    private fun canShowRecoveryDialog(): Boolean =
+        !viewModel.uiState.value.isPromoting &&
+            !recoveryCoordinator.isHealing &&
+            !DeviceOwnerPromoter.isPromotionActive &&
+            !outcomeDialogs.isAnyShowing() &&
+            !dangerDialogHelper.isAnyDialogShowing() &&
+            !recoveryCoordinator.recoveryDialogDismissedByUser
 
     private fun ensureDangerAcknowledgedBeforeAction(
         actionType: String,
@@ -649,7 +743,11 @@ class ProvisioningWizardActivity : AppCompatActivity() {
             addAction(PairingCodeReceiver.ACTION_PROVISIONING_RESULT)
         }
         ContextCompat.registerReceiver(this, provisioningReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !ProtectionEngine.isDeviceOwner(this)) {
+        val needsRecoveryAdb = recoveryCoordinator.hasPendingFreezeRecovery ||
+            ProvisioningFreezeRecoveryStore.getPendingLedger(this) != null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            (!ProtectionEngine.isDeviceOwner(this) || needsRecoveryAdb)
+        ) {
             checkNotificationPermission()
             AdbPairingNotificationService.start(this)
         }
@@ -658,8 +756,20 @@ class ProvisioningWizardActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (ProtectionEngine.isDeviceOwner(this)) {
-            onProvisioningSuccessful()
+        // main's post-Device-Owner verification gate: never declare success while a freeze
+        // recovery ledger still tracks disabled packages.
+        if (ProtectionEngine.isDeviceOwner(this) && !DeviceOwnerPromoter.isPromotionActive &&
+            !viewModel.uiState.value.isPromoting && !recoveryCoordinator.isHealing
+        ) {
+            recoveryCoordinator.reconcileOnDeviceOwnerResume(
+                activity = this,
+                canShowDialog = ::canShowRecoveryDialog,
+                discoveredConnectPort = { viewModel.uiState.value.discoveredConnectPort },
+                onConnectPortDiscovered = { viewModel.updateConnectPort(it) },
+                onBusyChanged = ::setPromotionButtonsBusy,
+                onValidationNeeded = ::validateInputs,
+                onDeviceOwnerConfirmed = ::onProvisioningSuccessful
+            )
             return
         }
         viewModel.updateDiscoveredPorts(
@@ -673,6 +783,14 @@ class ProvisioningWizardActivity : AppCompatActivity() {
             updateMultiWindowUi(true)
         }
         validateInputs()
+        outcomeDialogs.reconcilePendingStickyOutcome(
+            activity = this,
+            isLocalPromoting = viewModel.uiState.value.isPromoting,
+            dangerDialogHelper = dangerDialogHelper,
+            onConnectPortDiscovered = { viewModel.updateConnectPort(it) },
+            onRetryAlreadyPaired = ::executeRetryAlreadyPaired
+        )
+        checkAndShowRecoveryDialogIfNeeded()
     }
 
     override fun onMultiWindowModeChanged(isInMultiWindowMode: Boolean, newConfig: Configuration) {
@@ -741,7 +859,11 @@ class ProvisioningWizardActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        val promoting = viewModel.uiState.value.isPromoting || DeviceOwnerPromoter.isPromotionActive
+        outcomeDialogs.dismissAll()
+        recoveryCoordinator.dismiss()
+        dangerDialogHelper.dismiss()
+        val promoting = viewModel.uiState.value.isPromoting || DeviceOwnerPromoter.isPromotionActive ||
+            recoveryCoordinator.isHealing
         if (!isChangingConfigurations && !ProtectionEngine.isDeviceOwner(this) && !promoting) {
             AdbPairingNotificationService.stop(this)
         }
@@ -829,7 +951,7 @@ class ProvisioningWizardActivity : AppCompatActivity() {
 
     private fun validateInputs() {
         val state = viewModel.uiState.value
-        if (state.isPromoting) {
+        if (state.isPromoting || recoveryCoordinator.isHealing) {
             btnPairAndActivate.isEnabled = false
             btnSplitPairAndActivate.isEnabled = false
             return
@@ -845,7 +967,10 @@ class ProvisioningWizardActivity : AppCompatActivity() {
 
     private fun onProvisioningSuccessful() {
         if (isFinishing || isDestroyed) return
+        outcomeDialogs.clearAll()
+        AdbPairingNotificationService.pendingStickyOutcome = null
         ProvisioningAckStore.clearAck(this)
+        AdbShellValidation.cancelFreezeRecoveryNotification(this)
         AdbPairingNotificationService.stop(this)
         Toast.makeText(this, R.string.toast_provisioning_success, Toast.LENGTH_LONG).show()
         startActivity(Intent(this, MainActivity::class.java).apply {
@@ -857,6 +982,7 @@ class ProvisioningWizardActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "AntiPorn_WizardAct"
         private const val KEY_PENDING_BLOCKING_USERS_JSON = "key_pending_blocking_users_json"
+        private const val KEY_DISCOVERED_CONNECT_PORT = "key_discovered_connect_port"
         private const val DANGER_ACTION_NONE = "danger_action_none"
         private const val DANGER_ACTION_DEV_OPTIONS = "danger_action_dev_options"
         private const val DANGER_ACTION_ADJACENT = "danger_action_adjacent"
@@ -865,6 +991,9 @@ class ProvisioningWizardActivity : AppCompatActivity() {
         private const val TAG_ENABLE_DEV_OPTIONS = "tag_wizard_enable_dev_options"
         const val EXTRA_REQUIRE_DANGER_ACK = "extra_require_danger_ack"
         const val EXTRA_BLOCKING_USERS_JSON = "extra_blocking_users_json"
+        const val EXTRA_OEM_PERMISSION_TYPE = "extra_oem_permission_type"
+        const val EXTRA_BLOCKING_ACCOUNTS_JSON = "extra_blocking_accounts_json"
+        const val EXTRA_SHOW_RECOVERY_DIALOG = "extra_show_recovery_dialog"
         const val EXTRA_CONNECT_PORT = "extra_connect_port"
     }
 }

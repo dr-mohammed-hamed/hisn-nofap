@@ -16,6 +16,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
@@ -29,6 +30,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * ViewModel for AccountabilityFragment.
@@ -43,10 +45,10 @@ open class AccountabilityViewModel(
 ) : AndroidViewModel(application) {
 
     @VisibleForTesting
-    internal var ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    internal var ioDispatcher: CoroutineDispatcher = createIoDispatcher()
 
     @VisibleForTesting
-    internal var mainDispatcher: CoroutineDispatcher = Dispatchers.Main
+    internal var mainDispatcher: CoroutineDispatcher = createMainDispatcher()
 
     @VisibleForTesting
     internal var policyProvider: suspend () -> DevicePolicyBundle = {
@@ -67,8 +69,10 @@ open class AccountabilityViewModel(
     val uiState: StateFlow<AccountabilityUiState> = _uiState.asStateFlow()
 
     private val pairingSessionMutex = Mutex()
-    private var loadPairingCodeJob: Job? = null
+    private val wardsFlowRevision = AtomicLong(0L)
+    private val guardiansFlowRevision = AtomicLong(0L)
     private var loadPartnersJob: Job? = null
+    private var loadPairingCodeJob: Job? = null
     private var loadPendingApprovalsJob: Job? = null
     private var breakoutCountdownJob: Job? = null
     private var pairingCountdownJob: Job? = null
@@ -78,6 +82,7 @@ open class AccountabilityViewModel(
         if (shouldAutoObserveOnInit()) {
             observePolicyFlow()
             observeCloudSyncFlow()
+            observePartnersFlows()
             refreshAll()
         }
     }
@@ -85,8 +90,54 @@ open class AccountabilityViewModel(
     @VisibleForTesting
     protected open fun shouldAutoObserveOnInit(): Boolean = true
 
+    @VisibleForTesting
+    protected open fun createIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
+
+    @VisibleForTesting
+    protected open fun createMainDispatcher(): CoroutineDispatcher = Dispatchers.Main
+
+    private fun observePartnersFlows() {
+        viewModelScope.launch(ioDispatcher) {
+            try {
+                accountabilityRepo.wardsFlow.collect { wards ->
+                    wardsFlowRevision.incrementAndGet()
+                    withContext(mainDispatcher) {
+                        _uiState.update { it.copy(wards = wards) }
+                    }
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                safeLogError("Failed observing wardsFlow", e)
+            }
+        }
+        viewModelScope.launch(ioDispatcher) {
+            try {
+                accountabilityRepo.guardiansFlow.collect { guardians ->
+                    val resolvedGuardians = if (guardians.isNotEmpty()) {
+                        guardians
+                    } else {
+                        try {
+                            accountabilityRepo.getGuardians()
+                        } catch (e: Exception) {
+                            if (e is CancellationException) throw e
+                            safeLogError("Failed self-healing guardians on empty flow emission", e)
+                            emptyList()
+                        }
+                    }
+                    guardiansFlowRevision.incrementAndGet()
+                    withContext(mainDispatcher) {
+                        _uiState.update { it.copy(guardians = resolvedGuardians) }
+                    }
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                safeLogError("Failed observing guardiansFlow", e)
+            }
+        }
+    }
+
     private fun observeCloudSyncFlow() {
-        viewModelScope.launch {
+        viewModelScope.launch(mainDispatcher) {
             com.drmohammed.antiporn.cloud.CloudSyncManager.isCloudSyncEnabledFlow.collect { enabled ->
                 _uiState.update { it.copy(isCloudSyncEnabled = enabled) }
                 if (enabled) {
@@ -252,44 +303,62 @@ open class AccountabilityViewModel(
 
     fun startTemporaryPairingSession(onComplete: (Result<String>) -> Unit) {
         loadPairingCodeJob?.cancel()
+        _uiState.update { it.copy(isGeneratingPairingCode = true) }
         viewModelScope.launch(ioDispatcher) {
-            pairingSessionMutex.withLock {
-                val app = getApplication<Application>()
-                try {
-                    com.drmohammed.antiporn.cloud.CloudSyncManager.setCloudSyncEnabled(app, true)
-                    startFirestoreSyncAction()
-                    val code = accountabilityRepo.getOrCreateMyPairingCode()
-                    val session = com.drmohammed.antiporn.cloud.CloudSyncManager.getActivePairingSession(app)
-                    val expiresAt = session?.expiresAt ?: (TrustedTimeProvider.currentTimeMillis(app) + 15 * 60 * 1000L)
-                    withContext(mainDispatcher) {
-                        _uiState.update {
-                            it.copy(
-                                isCloudSyncEnabled = true,
-                                isTemporaryPairingActive = true,
-                                myPairingCode = code,
-                                pairingExpiresAt = expiresAt
-                            )
+            var callbackResult: Result<String>? = null
+            try {
+                pairingSessionMutex.withLock {
+                    val app = getApplication<Application>()
+                    try {
+                        val wasCloudEnabled = com.drmohammed.antiporn.cloud.CloudSyncManager.isCloudSyncEnabled(app)
+                        if (!wasCloudEnabled) {
+                            com.drmohammed.antiporn.cloud.CloudSyncManager.setCloudSyncEnabled(app, true)
+                            startFirestoreSyncAction()
                         }
-                        startPairingTicker(expiresAt)
-                        onComplete(Result.success(code))
-                    }
-                } catch (e: Exception) {
-                    if (e is CancellationException) throw e
-                    safeLogError("Failed starting temporary pairing session", e)
-                    rollbackCloudSyncAction(app)
-                    val cloudStillEnabled = com.drmohammed.antiporn.cloud.CloudSyncManager.isCloudSyncEnabled(app)
-                    withContext(mainDispatcher) {
-                        _uiState.update {
-                            it.copy(
-                                isTemporaryPairingActive = false,
-                                myPairingCode = "",
-                                pairingExpiresAt = 0L,
-                                pairingRemainingMs = 0L,
-                                isCloudSyncEnabled = cloudStillEnabled
-                            )
+                        val code = accountabilityRepo.getOrCreateMyPairingCode()
+                        val session = com.drmohammed.antiporn.cloud.CloudSyncManager.getActivePairingSession(app)
+                        val expiresAt = session?.expiresAt ?: (TrustedTimeProvider.currentTimeMillis(app) + 15 * 60 * 1000L)
+                        withContext(mainDispatcher) {
+                            _uiState.update {
+                                it.copy(
+                                    isCloudSyncEnabled = true,
+                                    isTemporaryPairingActive = true,
+                                    myPairingCode = code,
+                                    pairingExpiresAt = expiresAt,
+                                    isGeneratingPairingCode = false
+                                )
+                            }
+                            startPairingTicker(expiresAt)
                         }
-                        onComplete(Result.failure(e))
+                        callbackResult = Result.success(code)
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        safeLogError("Failed starting temporary pairing session", e)
+                        rollbackCloudSyncAction(app)
+                        val cloudStillEnabled = com.drmohammed.antiporn.cloud.CloudSyncManager.isCloudSyncEnabled(app)
+                        withContext(mainDispatcher) {
+                            _uiState.update {
+                                it.copy(
+                                    isTemporaryPairingActive = false,
+                                    myPairingCode = "",
+                                    pairingExpiresAt = 0L,
+                                    pairingRemainingMs = 0L,
+                                    isCloudSyncEnabled = cloudStillEnabled,
+                                    isGeneratingPairingCode = false
+                                )
+                            }
+                        }
+                        callbackResult = Result.failure(e)
                     }
+                }
+            } finally {
+                withContext(NonCancellable + mainDispatcher) {
+                    _uiState.update { it.copy(isGeneratingPairingCode = false) }
+                }
+            }
+            callbackResult?.let { result ->
+                withContext(mainDispatcher) {
+                    onComplete(result)
                 }
             }
         }
@@ -345,13 +414,15 @@ open class AccountabilityViewModel(
         loadPartnersJob?.cancel()
         loadPartnersJob = viewModelScope.launch(ioDispatcher) {
             try {
+                val wardsRev = wardsFlowRevision.get()
+                val guardiansRev = guardiansFlowRevision.get()
                 val wards = accountabilityRepo.getWards()
                 val guardians = accountabilityRepo.getGuardians()
                 withContext(mainDispatcher) {
                     _uiState.update { current ->
                         current.copy(
-                            wards = wards,
-                            guardians = guardians
+                            wards = if (wardsFlowRevision.get() == wardsRev) wards else current.wards,
+                            guardians = if (guardiansFlowRevision.get() == guardiansRev) guardians else current.guardians
                         )
                     }
                 }
@@ -400,7 +471,7 @@ open class AccountabilityViewModel(
                             snap.size()
                         } catch (e: Exception) {
                             if (e is CancellationException) throw e
-                            safeLogError("Failed loading pending approvals count for ward $wardId", e)
+                            safeLogWarn("Failed loading pending approvals count for ward ${com.drmohammed.antiporn.telemetry.AiTelemetryReporter.maskIdentifier(wardId)}", e)
                             0
                         }
                     }
@@ -426,7 +497,7 @@ open class AccountabilityViewModel(
         val app = getApplication<Application>()
 
         if (policy.breakoutStatus == DevicePolicyBundle.BREAKOUT_STATUS_PENDING && policy.breakoutUnlockAt != null) {
-            breakoutCountdownJob = viewModelScope.launch {
+            breakoutCountdownJob = viewModelScope.launch(mainDispatcher) {
                 while (isActive) {
                     val remainingMs = (policy.breakoutUnlockAt - TrustedTimeProvider.currentTimeMillis(app)).coerceAtLeast(0L)
                     _uiState.update { it.copy(breakoutRemainingMs = remainingMs) }
@@ -446,27 +517,27 @@ open class AccountabilityViewModel(
     }
 
     fun requestEmergencyBreakout(onResult: (Result<Long>) -> Unit) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(ioDispatcher) {
             val result = accountabilityRepo.requestEmergencyBreakout()
-            withContext(Dispatchers.Main) {
+            withContext(mainDispatcher) {
                 onResult(result)
             }
         }
     }
 
     fun cancelEmergencyBreakout(onResult: (Result<Unit>) -> Unit) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(ioDispatcher) {
             val result = accountabilityRepo.cancelEmergencyBreakout()
-            withContext(Dispatchers.Main) {
+            withContext(mainDispatcher) {
                 onResult(result)
             }
         }
     }
 
     fun executeEmergencyBreakout(onResult: (Result<Unit>) -> Unit) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(ioDispatcher) {
             val result = accountabilityRepo.executeEmergencyBreakout()
-            withContext(Dispatchers.Main) {
+            withContext(mainDispatcher) {
                 loadPairingCode()
                 loadPartners()
                 onResult(result)
@@ -475,9 +546,9 @@ open class AccountabilityViewModel(
     }
 
     fun setMyDisplayName(name: String, onResult: ((Result<Unit>) -> Unit)? = null) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(ioDispatcher) {
             val result = accountabilityRepo.setMyDisplayName(name)
-            withContext(Dispatchers.Main) {
+            withContext(mainDispatcher) {
                 if (result.isSuccess) {
                     _uiState.update { it.copy(myDisplayName = name) }
                 }
@@ -491,9 +562,9 @@ open class AccountabilityViewModel(
     }
 
     fun revokeSupervision(wardUid: String, onResult: (Result<Unit>) -> Unit) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(ioDispatcher) {
             val result = accountabilityRepo.revokeSupervision(wardUid)
-            withContext(Dispatchers.Main) {
+            withContext(mainDispatcher) {
                 if (result.isSuccess) {
                     loadPartners()
                 }
@@ -503,9 +574,9 @@ open class AccountabilityViewModel(
     }
 
     fun pairWithCode(code: String, role: String, onResult: (Result<PartnerEntity>) -> Unit) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(ioDispatcher) {
             val result = accountabilityRepo.pairWithCode(code, role)
-            withContext(Dispatchers.Main) {
+            withContext(mainDispatcher) {
                 if (result.isSuccess) {
                     pairingCountdownJob?.cancel()
                     pairingCountdownJob = null
@@ -518,10 +589,15 @@ open class AccountabilityViewModel(
         }
     }
 
-    fun renamePartner(partnerId: String, newName: String, onResult: (Result<Unit>) -> Unit) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val result = accountabilityRepo.renamePartner(partnerId, newName)
-            withContext(Dispatchers.Main) {
+    fun renamePartner(
+        partnerId: String,
+        newName: String,
+        role: String = PartnerEntity.ROLE_WARD,
+        onResult: (Result<Unit>) -> Unit
+    ) {
+        viewModelScope.launch(ioDispatcher) {
+            val result = accountabilityRepo.renamePartner(partnerId, newName, role)
+            withContext(mainDispatcher) {
                 if (result.isSuccess) {
                     loadPartners()
                 }
@@ -532,6 +608,8 @@ open class AccountabilityViewModel(
 
     override fun onCleared() {
         stopBreakoutTicker()
+        loadPartnersJob?.cancel()
+        loadPartnersJob = null
         loadPairingCodeJob?.cancel()
         loadPairingCodeJob = null
         loadPartnersJob?.cancel()
@@ -541,6 +619,14 @@ open class AccountabilityViewModel(
         pairingCountdownJob?.cancel()
         pairingCountdownJob = null
         super.onCleared()
+    }
+
+    private fun safeLogWarn(message: String, throwable: Throwable? = null) {
+        try {
+            Log.w(TAG, message, throwable)
+        } catch (_: Throwable) {
+            // JVM unit test fallback when android.util.Log is not mocked
+        }
     }
 
     private fun safeLogError(message: String, throwable: Throwable? = null) {

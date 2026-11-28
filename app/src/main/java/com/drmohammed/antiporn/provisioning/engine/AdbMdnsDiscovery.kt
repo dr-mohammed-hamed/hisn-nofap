@@ -5,25 +5,24 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
-import android.util.Log
+import timber.log.Timber
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * mDNS Network Service Discovery for Android 11+ Wireless Debugging.
  *
- * Android OS advertises two local services:
- * 1. `_adb-tls-pairing._tcp`: Active when user opens "Pair device with pairing code".
- * 2. `_adb-tls-connect._tcp`: Active whenever "Wireless debugging" toggle is ON.
- *
- * This radar eliminates friction for non-technical users by capturing the dynamic ports
- * automatically in ~200ms without requiring split-screen or manual port entry.
+ * Monitors `_adb-tls-pairing._tcp` and `_adb-tls-connect._tcp` to capture dynamic ports
+ * automatically without requiring split-screen or manual port entry.
  */
 class AdbMdnsDiscovery(
     context: Context,
     private val onPairingPortDiscovered: (port: Int) -> Unit,
     private val onConnectPortDiscovered: (port: Int) -> Unit,
-    private val onPairingServiceLost: () -> Unit = {}
+    private val onPairingServiceLost: () -> Unit = {},
+    private val onConnectServiceLost: () -> Unit = {}
 ) {
 
     private val appContext = context.applicationContext
@@ -31,363 +30,306 @@ class AdbMdnsDiscovery(
     private val wifiManager = appContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
     private var multicastLock: WifiManager.MulticastLock? = null
 
-    private var isPairingDiscoveryActive = false
-    private var isConnectDiscoveryActive = false
-    private var pendingStopPairing = false
-    private var pendingStopConnect = false
+    @Volatile private var isPairingDiscoveryActive = false
+    @Volatile private var isConnectDiscoveryActive = false
+    @Volatile private var pendingStopPairing = false
+    @Volatile private var pendingStopConnect = false
+    @Volatile private var isStopped = false
 
     private val resolveQueue = ArrayDeque<Pair<NsdServiceInfo, (Int, String?) -> Unit>>()
     private var isResolving = false
-    private val probeExecutor = Executors.newSingleThreadExecutor()
+    private var probeExecutor: ExecutorService? = null
     private val serviceInfoCallbacks = ConcurrentHashMap<String, NsdManager.ServiceInfoCallback>()
+    private val lostReportedFlags = ConcurrentHashMap<NsdManager.ServiceInfoCallback, AtomicBoolean>()
 
-    private val pairingDiscoveryListener = object : NsdManager.DiscoveryListener {
-        override fun onDiscoveryStarted(regType: String) {
-            Log.d(TAG, "mDNS Pairing discovery started: $regType")
-            isPairingDiscoveryActive = true
-            if (pendingStopPairing) {
-                pendingStopPairing = false
-                try {
-                    nsdManager?.stopServiceDiscovery(this)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Error stopping pairing discovery on pending stop", e)
-                }
-            }
-        }
+    private val pairingDiscoveryListener = createDiscoveryListener(isPairing = true)
+    private val connectDiscoveryListener = createDiscoveryListener(isPairing = false)
 
-        override fun onServiceFound(serviceInfo: NsdServiceInfo) {
-            Log.d(TAG, "mDNS Service found: ${serviceInfo.serviceName} (${serviceInfo.serviceType})")
-            if (serviceInfo.serviceType.contains(SERVICE_TYPE_PAIRING)) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    registerModernServiceInfoCallback(serviceInfo, isPairing = true)
-                } else {
-                    resolveService(serviceInfo) { port, host ->
-                        handleDiscoveredPairingPort(port, host)
-                    }
-                }
-            }
-        }
-
-        override fun onServiceLost(serviceInfo: NsdServiceInfo) {
-            Log.d(TAG, "mDNS Pairing service lost: ${serviceInfo.serviceName}")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                val serviceKey = "${serviceInfo.serviceName}_${serviceInfo.serviceType}"
-                serviceInfoCallbacks.remove(serviceKey)?.let { cb ->
-                    try {
-                        nsdManager?.unregisterServiceInfoCallback(cb)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Failed unregistering ServiceInfoCallback on service lost: $serviceKey", e)
-                    }
-                }
-            }
-            onPairingServiceLost()
-        }
-
-        override fun onDiscoveryStopped(serviceType: String) {
-            Log.d(TAG, "mDNS Pairing discovery stopped")
-            isPairingDiscoveryActive = false
-            pendingStopPairing = false
-        }
-
-        override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
-            Log.e(TAG, "mDNS Pairing discovery start failed with error: $errorCode")
-            isPairingDiscoveryActive = false
-            pendingStopPairing = false
-        }
-
-        override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
-            Log.e(TAG, "mDNS Pairing discovery stop failed with error: $errorCode")
-            isPairingDiscoveryActive = false
-            pendingStopPairing = false
+    private inline fun safely(label: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (e: Exception) {
+            Timber.tag(TAG).w(e, label)
         }
     }
 
-    private val connectDiscoveryListener = object : NsdManager.DiscoveryListener {
-        override fun onDiscoveryStarted(regType: String) {
-            Log.d(TAG, "mDNS Connect discovery started: $regType")
-            isConnectDiscoveryActive = true
-            if (pendingStopConnect) {
-                pendingStopConnect = false
-                try {
+    private fun updateChannel(isPairing: Boolean, active: Boolean, pending: Boolean) {
+        if (isPairing) {
+            isPairingDiscoveryActive = active
+            pendingStopPairing = pending
+        } else {
+            isConnectDiscoveryActive = active
+            pendingStopConnect = pending
+        }
+    }
+
+    private fun createDiscoveryListener(isPairing: Boolean): NsdManager.DiscoveryListener {
+        val label = if (isPairing) "Pairing" else "Connect"
+        val marker = if (isPairing) SERVICE_TYPE_PAIRING else SERVICE_TYPE_CONNECT
+        return object : NsdManager.DiscoveryListener {
+            override fun onDiscoveryStarted(regType: String) {
+                Timber.tag(TAG).d("mDNS $label discovery started: $regType")
+                val pending = if (isPairing) pendingStopPairing else pendingStopConnect
+                updateChannel(isPairing, active = true, pending = false)
+                if (isStopped || pending) safely("Error stopping $label discovery") {
                     nsdManager?.stopServiceDiscovery(this)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Error stopping connect discovery on pending stop", e)
                 }
             }
-        }
 
-        override fun onServiceFound(serviceInfo: NsdServiceInfo) {
-            if (serviceInfo.serviceType.contains(SERVICE_TYPE_CONNECT)) {
+            override fun onServiceFound(serviceInfo: NsdServiceInfo) {
+                if (isStopped || !serviceInfo.serviceType.contains(marker)) return
+                if (isPairing) Timber.tag(TAG).d("mDNS Service found: ${serviceInfo.serviceName} (${serviceInfo.serviceType})")
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    registerModernServiceInfoCallback(serviceInfo, isPairing = false)
+                    registerModernServiceInfoCallback(serviceInfo, isPairing)
                 } else {
                     resolveService(serviceInfo) { port, host ->
-                        Log.i(TAG, "Captured dynamic Connect Port: $port (host=$host)")
-                        lastDiscoveredHost = host
-                        onConnectPortDiscovered(port)
+                        if (isPairing) handleDiscoveredPairingPort(port, host)
+                        else handleDiscoveredConnectPort(port, host, api34Plus = false)
                     }
                 }
             }
-        }
 
-        override fun onServiceLost(serviceInfo: NsdServiceInfo) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                val serviceKey = "${serviceInfo.serviceName}_${serviceInfo.serviceType}"
-                serviceInfoCallbacks.remove(serviceKey)?.let { cb ->
-                    try {
-                        nsdManager?.unregisterServiceInfoCallback(cb)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Failed unregistering ServiceInfoCallback on service lost: $serviceKey", e)
-                    }
+            override fun onServiceLost(serviceInfo: NsdServiceInfo) {
+                Timber.tag(TAG).d("mDNS $label service lost: ${serviceInfo.serviceName}")
+                val alreadyReported = unregisterCallbackByKey("${serviceInfo.serviceName}_${serviceInfo.serviceType}")
+                if (isStopped || alreadyReported) return
+                if (isPairing) onPairingServiceLost() else {
+                    lastDiscoveredHost = null
+                    onConnectServiceLost()
                 }
             }
-            lastDiscoveredHost = null
-        }
 
-        override fun onDiscoveryStopped(serviceType: String) {
-            isConnectDiscoveryActive = false
-            pendingStopConnect = false
-        }
+            override fun onDiscoveryStopped(serviceType: String) {
+                if (isPairing) Timber.tag(TAG).d("mDNS Pairing discovery stopped")
+                updateChannel(isPairing, active = false, pending = false)
+            }
 
-        override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
-            Log.e(TAG, "mDNS Connect discovery start failed with error: $errorCode")
-            isConnectDiscoveryActive = false
-            pendingStopConnect = false
-        }
+            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                Timber.tag(TAG).e("mDNS $label discovery start failed with error: $errorCode")
+                updateChannel(isPairing, active = false, pending = false)
+            }
 
-        override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
-            Log.e(TAG, "mDNS Connect discovery stop failed with error: $errorCode")
-            isConnectDiscoveryActive = false
-            pendingStopConnect = false
+            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
+                Timber.tag(TAG).e("mDNS $label discovery stop failed with error: $errorCode")
+                updateChannel(isPairing, active = false, pending = false)
+            }
         }
+    }
+
+    @Synchronized
+    private fun ensureProbeExecutor(): ExecutorService {
+        val existing = probeExecutor
+        if (existing != null && !existing.isShutdown) return existing
+        return Executors.newSingleThreadExecutor().also { probeExecutor = it }
     }
 
     private fun handleDiscoveredPairingPort(port: Int, host: String?) {
-        try {
-            probeExecutor.execute {
+        if (isStopped) return
+        safely("Failed submitting port probe task") {
+            val executor = synchronized(this) { if (isStopped) return; ensureProbeExecutor() }
+            executor.execute {
+                if (isStopped) return@execute
                 if (isPortActuallyListening(port)) {
-                    Log.i(TAG, "Captured verified active Pairing Port: $port (host=$host)")
-                    lastDiscoveredHost = host
+                    synchronized(this) {
+                        if (isStopped) return@execute
+                        Timber.tag(TAG).i("Captured verified active Pairing Port: $port (host=$host)")
+                        lastDiscoveredHost = host
+                    }
                     onPairingPortDiscovered(port)
                 } else {
-                    Log.w(TAG, "Discarded stale cached Pairing Port: $port (nothing listening)")
+                    Timber.tag(TAG).w("Discarded stale cached Pairing Port: $port (nothing listening)")
                 }
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed submitting port probe task", e)
         }
     }
 
-    private fun registerModernServiceInfoCallback(serviceInfo: NsdServiceInfo, isPairing: Boolean) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return
-        val serviceKey = "${serviceInfo.serviceName}_${serviceInfo.serviceType}"
-        serviceInfoCallbacks.remove(serviceKey)?.let { oldCallback ->
-            try {
-                nsdManager?.unregisterServiceInfoCallback(oldCallback)
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed unregistering superseded ServiceInfoCallback for $serviceKey", e)
-            }
+    private fun handleDiscoveredConnectPort(port: Int, host: String?, api34Plus: Boolean) {
+        if (isStopped) return
+        Timber.tag(TAG).i("Captured dynamic Connect Port${if (api34Plus) " (API 34+)" else ""}: $port (host=$host)")
+        lastDiscoveredHost = host
+        onConnectPortDiscovered(port)
+    }
+
+    private fun unregisterCallbackByKey(serviceKey: String): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return false
+        val cb = serviceInfoCallbacks.remove(serviceKey) ?: return false
+        val alreadyReported = lostReportedFlags.remove(cb)?.compareAndSet(false, true) == false
+        safely("Failed unregistering ServiceInfoCallback: $serviceKey") {
+            nsdManager?.unregisterServiceInfoCallback(cb)
         }
+        return alreadyReported
+    }
+
+    private fun unregisterAllCallbacks() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return
+        serviceInfoCallbacks.keys.toList().forEach { unregisterCallbackByKey(it) }
+        lostReportedFlags.clear()
+    }
+
+    private fun registerModernServiceInfoCallback(serviceInfo: NsdServiceInfo, isPairing: Boolean) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE || isStopped) return
+        val serviceKey = "${serviceInfo.serviceName}_${serviceInfo.serviceType}"
+        unregisterCallbackByKey(serviceKey)
+        val executor = synchronized(this) { if (isStopped) return; ensureProbeExecutor() }
+        val lostFlag = AtomicBoolean(false)
 
         val callback = object : NsdManager.ServiceInfoCallback {
             override fun onServiceUpdated(updatedInfo: NsdServiceInfo) {
+                if (isStopped) return
                 val port = updatedInfo.port
                 val host = updatedInfo.hostAddresses.firstOrNull()?.hostAddress ?: updatedInfo.host?.hostAddress
                 if (port > 0) {
-                    if (isPairing) {
-                        handleDiscoveredPairingPort(port, host)
-                    } else {
-                        Log.i(TAG, "Captured dynamic Connect Port (API 34+): $port (host=$host)")
-                        lastDiscoveredHost = host
-                        onConnectPortDiscovered(port)
-                    }
+                    if (isPairing) handleDiscoveredPairingPort(port, host)
+                    else handleDiscoveredConnectPort(port, host, api34Plus = true)
                 }
             }
 
             override fun onServiceLost() {
-                if (isPairing) {
-                    Log.d(TAG, "mDNS Pairing service lost (API 34+ callback): ${serviceInfo.serviceName}")
-                    onPairingServiceLost()
-                } else {
-                    Log.d(TAG, "mDNS Connect service lost (API 34+ callback): ${serviceInfo.serviceName}")
+                if (isStopped || !lostFlag.compareAndSet(false, true)) return
+                Timber.tag(TAG).d("mDNS ${if (isPairing) "Pairing" else "Connect"} service lost (API 34+): ${serviceInfo.serviceName}")
+                if (isPairing) onPairingServiceLost() else {
                     lastDiscoveredHost = null
+                    onConnectServiceLost()
                 }
             }
 
             override fun onServiceInfoCallbackRegistrationFailed(errorCode: Int) {
-                Log.w(TAG, "registerServiceInfoCallback failed for ${serviceInfo.serviceName}: error $errorCode")
+                Timber.tag(TAG).w("registerServiceInfoCallback failed for ${serviceInfo.serviceName}: error $errorCode")
+                detachCallback(serviceKey, this)
             }
 
             override fun onServiceInfoCallbackUnregistered() {
-                Log.d(TAG, "registerServiceInfoCallback unregistered for ${serviceInfo.serviceName}")
+                Timber.tag(TAG).d("registerServiceInfoCallback unregistered for ${serviceInfo.serviceName}")
+                detachCallback(serviceKey, this)
             }
         }
 
         serviceInfoCallbacks[serviceKey] = callback
+        lostReportedFlags[callback] = lostFlag
         try {
-            nsdManager?.registerServiceInfoCallback(serviceInfo, probeExecutor, callback)
+            nsdManager?.registerServiceInfoCallback(serviceInfo, executor, callback)
         } catch (e: Exception) {
-            Log.w(TAG, "Error registering ServiceInfoCallback for ${serviceInfo.serviceName}", e)
-            serviceInfoCallbacks.remove(serviceKey)
+            Timber.tag(TAG).w(e, "Error registering ServiceInfoCallback for ${serviceInfo.serviceName}")
+            detachCallback(serviceKey, callback)
         }
+    }
+
+    private fun detachCallback(serviceKey: String, callback: NsdManager.ServiceInfoCallback) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return
+        serviceInfoCallbacks.remove(serviceKey, callback)
+        lostReportedFlags.remove(callback)
     }
 
     /**
      * Starts monitoring for both pairing and connect mDNS services.
      */
     fun startDiscovery() {
-        if (nsdManager == null) {
-            Log.e(TAG, "NsdManager is not available on this device")
+        val manager = nsdManager ?: run {
+            Timber.tag(TAG).e("NsdManager is not available on this device")
             return
         }
+        isStopped = false
+        ensureProbeExecutor()
 
-        // Acquire MulticastLock to prevent kernel/Wi-Fi chip mDNS packet dropping
-        try {
+        safely("Failed acquiring WifiManager.MulticastLock") {
             if (multicastLock == null) {
-                multicastLock = wifiManager?.createMulticastLock("Hisn_AdbMdnsLock")?.apply {
-                    setReferenceCounted(false)
-                }
+                multicastLock = wifiManager?.createMulticastLock("Hisn_AdbMdnsLock")?.apply { setReferenceCounted(false) }
             }
-            multicastLock?.let {
-                if (!it.isHeld) {
-                    it.acquire()
-                    Log.d(TAG, "Acquired WifiManager.MulticastLock for mDNS discovery")
-                }
+            multicastLock?.takeIf { !it.isHeld }?.let {
+                it.acquire()
+                Timber.tag(TAG).d("Acquired WifiManager.MulticastLock for mDNS discovery")
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed acquiring WifiManager.MulticastLock", e)
         }
 
         pendingStopPairing = false
         pendingStopConnect = false
-        try {
-            if (!isPairingDiscoveryActive) {
-                nsdManager.discoverServices(
-                    "_adb-tls-pairing._tcp",
-                    NsdManager.PROTOCOL_DNS_SD,
-                    pairingDiscoveryListener
-                )
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error starting pairing discovery", e)
+        safely("Error starting pairing discovery") {
+            if (!isPairingDiscoveryActive) manager.discoverServices("$SERVICE_TYPE_PAIRING._tcp", NsdManager.PROTOCOL_DNS_SD, pairingDiscoveryListener)
         }
-
-        try {
-            if (!isConnectDiscoveryActive) {
-                nsdManager.discoverServices(
-                    "_adb-tls-connect._tcp",
-                    NsdManager.PROTOCOL_DNS_SD,
-                    connectDiscoveryListener
-                )
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error starting connect discovery", e)
+        safely("Error starting connect discovery") {
+            if (!isConnectDiscoveryActive) manager.discoverServices("$SERVICE_TYPE_CONNECT._tcp", NsdManager.PROTOCOL_DNS_SD, connectDiscoveryListener)
         }
     }
 
     /**
-     * Stops all active mDNS discovery listeners.
+     * Stops all active mDNS discovery listeners and shuts down background probing.
      */
     fun stopDiscovery() {
-        // Safely release MulticastLock
-        try {
+        isStopped = true
+        safely("Failed releasing WifiManager.MulticastLock") {
             if (multicastLock?.isHeld == true) {
                 multicastLock?.release()
-                Log.d(TAG, "Released WifiManager.MulticastLock")
+                Timber.tag(TAG).d("Released WifiManager.MulticastLock")
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed releasing WifiManager.MulticastLock", e)
         }
 
-        if (nsdManager == null) return
-        if (isPairingDiscoveryActive) {
-            try {
-                nsdManager.stopServiceDiscovery(pairingDiscoveryListener)
-            } catch (e: Exception) {
-                Log.w(TAG, "Error stopping pairing discovery", e)
-            }
-            isPairingDiscoveryActive = false
-        } else {
-            pendingStopPairing = true
-        }
-
-        if (isConnectDiscoveryActive) {
-            try {
-                nsdManager.stopServiceDiscovery(connectDiscoveryListener)
-            } catch (e: Exception) {
-                Log.w(TAG, "Error stopping connect discovery", e)
-            }
-            isConnectDiscoveryActive = false
-        } else {
-            pendingStopConnect = true
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            serviceInfoCallbacks.values.forEach { cb ->
-                try {
-                    nsdManager.unregisterServiceInfoCallback(cb)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed unregistering ServiceInfoCallback on stopDiscovery", e)
-                }
-            }
-            serviceInfoCallbacks.clear()
+        if (nsdManager != null) {
+            stopChannel(isPairingDiscoveryActive, pairingDiscoveryListener, isPairing = true, "pairing")
+            stopChannel(isConnectDiscoveryActive, connectDiscoveryListener, isPairing = false, "connect")
+            unregisterAllCallbacks()
         }
 
         synchronized(this) {
             resolveQueue.clear()
             isResolving = false
             lastDiscoveredHost = null
+            probeExecutor?.shutdownNow()
+            probeExecutor = null
+        }
+    }
+
+    private fun stopChannel(isActive: Boolean, listener: NsdManager.DiscoveryListener, isPairing: Boolean, label: String) {
+        if (isActive) {
+            safely("Error stopping $label discovery") { nsdManager?.stopServiceDiscovery(listener) }
+            updateChannel(isPairing, active = false, pending = false)
+        } else {
+            updateChannel(isPairing, active = false, pending = true)
         }
     }
 
     @Synchronized
     private fun resolveService(serviceInfo: NsdServiceInfo, onResolved: (Int, String?) -> Unit) {
+        if (isStopped) return
         resolveQueue.add(serviceInfo to onResolved)
         processNextResolveLocked()
     }
 
     @Synchronized
     private fun processNextResolveLocked() {
-        if (isResolving || resolveQueue.isEmpty()) return
-        val item = resolveQueue.removeFirstOrNull() ?: return
-        val serviceInfo = item.first
-        val onResolved = item.second
+        if (isStopped || isResolving || resolveQueue.isEmpty()) return
+        val (serviceInfo, onResolved) = resolveQueue.removeFirstOrNull() ?: return
         val manager = nsdManager ?: return
 
         isResolving = true
         try {
             manager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
-                override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-                    Log.w(TAG, "Failed to resolve service ${serviceInfo.serviceName}: error $errorCode")
-                    synchronized(this@AdbMdnsDiscovery) {
-                        isResolving = false
-                        processNextResolveLocked()
-                    }
+                override fun onResolveFailed(failedInfo: NsdServiceInfo, errorCode: Int) {
+                    Timber.tag(TAG).w("Failed to resolve service ${failedInfo.serviceName}: error $errorCode")
+                    finishResolveStep()
                 }
 
                 override fun onServiceResolved(resolvedInfo: NsdServiceInfo) {
                     try {
                         val port = resolvedInfo.port
                         val host = resolvedInfo.host?.hostAddress
-                        if (port > 0) {
-                            onResolved(port, host)
-                        }
+                        if (!isStopped && port > 0) onResolved(port, host)
                     } catch (e: Exception) {
-                        Log.w(TAG, "Exception in onResolved callback for ${serviceInfo.serviceName}", e)
+                        Timber.tag(TAG).w(e, "Exception in onResolved callback for ${serviceInfo.serviceName}")
                     } finally {
-                        synchronized(this@AdbMdnsDiscovery) {
-                            isResolving = false
-                            processNextResolveLocked()
-                        }
+                        finishResolveStep()
                     }
                 }
             })
         } catch (e: Exception) {
-            Log.w(TAG, "Exception resolving service: ${serviceInfo.serviceName}", e)
-            synchronized(this@AdbMdnsDiscovery) {
-                isResolving = false
-                processNextResolveLocked()
-            }
+            Timber.tag(TAG).w(e, "Exception resolving service: ${serviceInfo.serviceName}")
+            finishResolveStep()
+        }
+    }
+
+    private fun finishResolveStep() {
+        synchronized(this@AdbMdnsDiscovery) {
+            isResolving = false
+            processNextResolveLocked()
         }
     }
 
@@ -406,9 +348,9 @@ class AdbMdnsDiscovery(
                     socket.reuseAddress = true
                     socket.bind(java.net.InetSocketAddress("127.0.0.1", port))
                 }
-                false // Successfully bound => Nothing listening, stale dead cache!
+                false
             } catch (_: java.io.IOException) {
-                true // EADDRINUSE => adbd is actively listening!
+                true
             } catch (_: Exception) {
                 false
             }

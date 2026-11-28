@@ -160,7 +160,14 @@ class DnsUpstreamForwarder(
                 return@withPermit null
             }
 
-            fun isAborted(): Boolean = networkGeneration.get() != startGen || (deadlineMs - monotonicClockMs()) <= 0L
+            fun isAborted(): Boolean =
+                networkGeneration.get() != startGen ||
+                    (deadlineMs - monotonicClockMs()) <= 0L ||
+                    DnsResilienceManager.isRestoringPrimaryNow()
+
+            if (isAborted()) {
+                return@withPermit null
+            }
 
             val clampedPayload = DnsWireValidator.clampEdnsUdpPayloadSize(rawDnsPayload)
             var softFallback: ByteArray? = null
@@ -266,7 +273,10 @@ class DnsUpstreamForwarder(
         val cloudflareHost = DevicePolicyBundle.CLOUDFLARE_FAMILY_DNS_HOST.lowercase()
         val isDefaultCloudflarePreset = cleanHost == null || cleanHost == cloudflareHost
         val isSelfBootstrapQuery = cleanHost != null && normalizedQName == cleanHost
-        val isLocalVpnFallback = DnsResilienceManager.isLocalVpnFallbackActive()
+        if (DnsResilienceManager.isRestoringPrimaryNow()) {
+            return null
+        }
+        val isLocalVpnFallback = DnsResilienceManager.isDohFastPathOrTeardownActive()
         var softFallback: ByteArray? = null
 
         fun acceptOrSaveSoft(candidate: ByteArray?): ByteArray? {

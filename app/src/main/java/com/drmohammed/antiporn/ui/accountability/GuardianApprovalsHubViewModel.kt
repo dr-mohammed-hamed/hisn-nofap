@@ -170,7 +170,8 @@ class GuardianApprovalsHubViewModel(
                 val localWards = partnerDao.getPartnersByRoleBlocking(PartnerEntity.ROLE_WARD).toMutableList()
                 targetWardId?.let { twId ->
                     if (twId.isNotBlank() && localWards.none { it.id == twId }) {
-                        val specificPartner = partnerDao.getPartnerById(twId)
+                        // main's composite-key fix: only accept a partner that is actually a ward.
+                        val specificPartner = partnerDao.getPartnerByIdAndRole(twId, PartnerEntity.ROLE_WARD)
                         if (specificPartner != null) {
                             localWards.add(specificPartner)
                         } else {

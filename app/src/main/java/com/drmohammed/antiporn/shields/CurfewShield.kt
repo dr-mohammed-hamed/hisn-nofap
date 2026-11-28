@@ -14,6 +14,7 @@ import com.drmohammed.antiporn.curfew.CurfewConfig
 import com.drmohammed.antiporn.curfew.CurfewEnforcer
 import com.drmohammed.antiporn.curfew.CurfewScheduler
 import com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge
+import com.drmohammed.antiporn.fortress.engine.EffectiveRestrictionResolver
 
 /**
  * Isolated protection shield managing scheduled night curfew (8:00 PM - 7:00 AM)
@@ -90,7 +91,7 @@ object CurfewShield : ProtectionShield {
                     }
                 }
 
-                val isVpnBlackholeConfigured = CurfewConfig.isVpnBlackholeEnabled(context)
+                val isVpnBlackholeConfigured = EffectiveRestrictionResolver.resolve(context).shouldCutInternet
                 val isVpnEnforced = if (isVpnBlackholeConfigured) {
                     CurfewVpnDnsBridge.isBlackholeVpnLockdownEnforced(context, dpm, admin)
                 } else {

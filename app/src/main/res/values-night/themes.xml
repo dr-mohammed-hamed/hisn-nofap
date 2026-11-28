@@ -43,4 +43,11 @@
         <item name="windowSplashScreenAnimatedIcon">@drawable/ic_hisn_splash_logo</item>
         <item name="postSplashScreenTheme">@style/Theme.Antiporn</item>
     </style>
+
+    <style name="Theme.Antiporn.TranslucentDialog" parent="Theme.Antiporn">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+    </style>
 </resources>

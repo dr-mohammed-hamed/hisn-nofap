@@ -344,6 +344,7 @@
     <string name="pairing_session_cancelled">Pairing session cancelled; cloud connection closed.</string>
     <string name="pairing_session_expired">Pairing session expired (15 min limit); returned to local offline mode.</string>
     <string name="btn_generate_pairing_code_for_me">Generate Pairing Code for My Device</string>
+    <string name="btn_generating_pairing_code">Generating pairing code…</string>
     <string name="error_pairing_code_publish_failed">Unable to connect to the cloud to generate a pairing code. Check your internet connection and try again.</string>
     <string name="toast_partner_delete_failed">Failed to delete partner: %1$s</string>
     <string name="dialog_revoke_ward_title">Revoke Supervision &amp; Release Protection</string>
@@ -528,6 +529,7 @@
     <string name="card_device_owner_inactive">Not activated. (Tap to activate)</string>
     <string name="toast_device_owner_already_active">Device Owner is active and your shield is fully operational</string>
     <string name="card_dns_active">%1$s (Enforced &amp; Locked)</string>
+    <string name="card_dns_active_prearmed_pending_dpm">%1$s (Pre-armed locally; pending DPM sync on next network)</string>
     <string name="card_dns_pending">Current host: %1$s (Updating to %2$s)</string>
     <string name="card_dns_inactive">DNS server is not set.</string>
     <string name="card_dns_unlocked">DNS settings are unlocked.</string>
@@ -610,13 +612,13 @@
     <string name="btn_resolve_secondary_profile_now">Manage / Remove Secondary Profile</string>
     <string name="default_dns_text">Default Family DNS</string>
     <string name="card_app_suspension_title">App Suspension Shield</string>
-    <string name="card_app_suspension_active">Blacklisted applications are suspended.</string>
-    <string name="card_app_suspension_suspended">%1$d blacklisted app(s) suspended.</string>
-    <string name="card_app_suspension_pending">%1$d blacklisted app(s) pending suspension &amp; deletion</string>
+    <string name="card_app_suspension_active">App suspension shield is active for selected blocked apps.</string>
+    <string name="card_app_suspension_suspended">%1$d blocked app(s) suspended.</string>
+    <string name="card_app_suspension_pending">%1$d app(s) pending suspension.</string>
     <string name="card_app_suspension_inactive">App suspension is inactive.</string>
-    <string name="card_app_suspension_subtext">Harmful applications are locked.</string>
-    <string name="shield_app_suspension_none_found">No blacklisted apps found on device.</string>
-    <string name="shield_app_suspension_blocked_count">%1$d harmful app(s) suspended.</string>
+    <string name="card_app_suspension_subtext">Freezes applications placed in the blacklist or awaiting approval.</string>
+    <string name="shield_app_suspension_none_found">No blocked apps found on device.</string>
+    <string name="shield_app_suspension_blocked_count">%1$d blocked app(s) suspended.</string>
     <string name="card_curfew_title">Curfew &amp; Focus Shield</string>
     <string name="card_curfew_active_desc">Curfew is currently active. Apps are suspended.</string>
     <string name="card_curfew_active_desc_test">Curfew test mode active.</string>
@@ -1401,6 +1403,15 @@
     <string name="switch_full_system_filter_title">Apply Rules Across Entire Device</string>
     <string name="switch_full_system_filter_desc">Enforces site lists, Telegram Web, and YouTube Restricted across all apps</string>
     <string name="switch_block_ads_desc">Blocks ads and trackers via on-device local DNS filter</string>
+    <string name="switch_local_vpn_fallback_title">Local DNS VPN Backup Engine</string>
+    <string name="switch_local_vpn_fallback_desc">Stays off while Private DNS works, activates silently only when all Private DNS servers fail (useful on OPPO/Realme), and restores automatically when recovered</string>
+    <string name="notif_dns_fallback_consent_title">Action needed to resolve Private DNS issue</string>
+    <string name="notif_dns_fallback_consent_msg">Private DNS is stalling on this network. Tap to grant one-time approval for the silent Local DNS VPN backup engine when needed.</string>
+    <string name="dialog_dns_fallback_consent_title">Enable Local DNS VPN Backup?</string>
+    <string name="dialog_dns_fallback_consent_desc">Private DNS servers could not be reached on this network (common on some OPPO/Realme devices or restricted networks).\n\nWith one-time approval, the Local DNS VPN backup engine will run silently only when needed to keep protection and internet working, and automatically switch back to Private DNS when the network recovers.</string>
+    <string name="btn_dns_fallback_approve">Approve &amp; Enable</string>
+    <string name="btn_dns_fallback_not_now">Not Now</string>
+    <string name="toast_dns_fallback_enabled">Local DNS VPN backup enabled</string>
     <string name="web_ads_dns_confirmed_hint">Your selected DNS server already blocks ads without needing Local VPN.</string>
     <string name="web_ads_dns_custom_hint">If your custom DNS already blocks ads, you don\'t need Local VPN ad blocking.</string>
     <string name="web_unaffiliated_inline_warning">A secondary profile or dual app prevents Local VPN filtering. Core DNS protection remains active.</string>
@@ -1455,5 +1466,188 @@
     <string name="provisioning_error_not_paired">Device has not been paired yet.</string>
     <string name="provisioning_error_timeout_seconds">Promotion timed out after %1$d seconds.</string>
     <string name="provisioning_error_connect_port_timeout">Connect port discovery timed out after successful pairing.</string>
+    <string name="provisioning_error_post_verify_failed">Device Owner verification failed after activation. Wireless debugging was kept open for safety; please retry.</string>
+    <string name="provisioning_error_heal_failed">Could not re-enable stranded apps via Wireless ADB. Please retry or re-enable them manually.</string>
+    <string name="provisioning_error_accounts_blocked_generic">Active accounts on the device are preventing automatic Device Owner activation.</string>
+    <string name="provisioning_error_admin_removing">The system is finishing a previous cleanup. Please retry in a few seconds.</string>
     <string name="provisioning_error_unknown">Unknown error</string>
+
+    <!-- Blocking Accounts Guidance Dialog & Notification -->
+    <string name="provisioning_accounts_dialog_title">Temporarily Remove Accounts to Activate</string>
+    <string name="provisioning_accounts_dialog_intro">Your phone\'s system blocked automatic account bypass (common on Samsung Android 11 and protected OEM builds).\n\nRest assured: removing an account from Settings does NOT delete your photos, files, or chats—it is only a temporary sign-out and you can sign back in right after activation.</string>
+    <string name="provisioning_accounts_dialog_list_header">Detected accounts on this device:</string>
+    <string name="provisioning_accounts_dialog_steps">1. Tap \"Open Account Settings\" below.\n2. Select each listed account (such as Samsung or Google) and tap \"Remove account\".\n3. Press Back and tap \"Retry Now\" without re-entering a pairing code.</string>
+    <string name="provisioning_accounts_btn_open_settings">Open Account Settings</string>
+    <string name="provisioning_accounts_btn_retry_now">Retry Now</string>
+    <string name="provisioning_accounts_notif_title">Action Needed: Temporarily Remove Accounts</string>
+    <string name="provisioning_accounts_notif_desc">Tap here to open Account Settings (%1$s) and retry without re-pairing.</string>
+    <string name="provisioning_accounts_fallback_label">Registered device accounts (such as Google or OEM account)</string>
+    <string name="provisioning_accounts_list_item">• %1$s</string>
+    <string name="provisioning_account_label_google">Google</string>
+    <string name="provisioning_account_label_samsung">Samsung</string>
+    <string name="provisioning_account_label_xiaomi">Xiaomi</string>
+    <string name="provisioning_account_label_oppo_group">OPPO / Realme / OnePlus</string>
+    <string name="provisioning_account_label_huawei">Huawei</string>
+    <string name="provisioning_account_label_honor">Honor</string>
+    <string name="provisioning_account_label_vivo">Vivo</string>
+    <string name="provisioning_account_label_transsion">Transsion / Tecno / Infinix</string>
+    <string name="provisioning_account_label_whatsapp_business">WhatsApp Business</string>
+    <string name="provisioning_account_label_whatsapp">WhatsApp</string>
+    <string name="provisioning_account_label_telegram">Telegram</string>
+    <string name="provisioning_account_label_messenger">Messenger</string>
+    <string name="provisioning_account_label_facebook">Facebook</string>
+    <string name="provisioning_account_label_microsoft">Microsoft / Outlook</string>
+    <string name="provisioning_account_label_viber">Viber</string>
+
+    <!-- OEM Permission Guidance Dialog & Notification -->
+    <string name="provisioning_oem_dialog_title">Developer Permission Required to Continue</string>
+    <string name="provisioning_oem_dialog_xiaomi_desc">Good news: No apps were disabled or hidden on your device.\n\nXiaomi/Redmi/POCO blocks activation unless an extra toggle is enabled.\n\n1. Tap \"Open Developer Options\" below.\n2. Scroll down and enable \"USB debugging (Security settings)\".\n3. Accept any prompt, then press Back and tap \"Retry Now\".</string>
+    <string name="provisioning_oem_dialog_realme_desc">Good news: No apps were disabled or hidden on your device.\n\nRealme/Oppo/OnePlus blocks activation unless permission monitoring is disabled.\n\n1. Tap \"Open Developer Options\" below.\n2. Scroll to the bottom and enable \"Disable permission monitoring\".\n3. Press Back and tap \"Retry Now\".</string>
+    <string name="provisioning_oem_btn_retry_now">Retry Now</string>
+    <string name="provisioning_oem_btn_open_dev_options">Open Developer Options</string>
+    <string name="provisioning_oem_notif_title">Action Needed: Enable Developer Toggle</string>
+
+    <!-- Freeze Recovery Apology & Action Dialog -->
+    <string name="provisioning_recovery_dialog_title">Sorry: Some Apps Remained Temporarily Disabled</string>
+    <string name="provisioning_recovery_dialog_intro">We apologize for the inconvenience. The previous activation session did not finish cleanly, leaving these apps temporarily disabled or hidden:</string>
+    <string name="provisioning_recovery_dialog_outro">You can restore them immediately by tapping \"Quick Fix via ADB\" (while Wireless Debugging is on) or by enabling them manually from \"Open App Settings\".</string>
+    <string name="provisioning_recovery_package_line">• %1$s (%2$s)</string>
+    <string name="provisioning_recovery_btn_quick_adb">Quick Fix via ADB</string>
+    <string name="provisioning_recovery_btn_open_settings">Open App Settings</string>
+    <string name="provisioning_recovery_adb_unavailable_hint">Note: Quick ADB fix requires Wireless Debugging to be active and paired. You can enable Wireless Debugging first or tap \"Open App Settings\" to re-enable your apps immediately.</string>
+    <string name="provisioning_recovery_toast_healed">Restored %1$d app(s) successfully.</string>
+    <string name="provisioning_recovery_toast_already_restored">All previously paused apps are already active.</string>
+    <string name="provisioning_recovery_toast_not_paired">No active Wireless ADB pairing found. Enable Wireless Debugging or use Open App Settings.</string>
+    <string name="provisioning_recovery_notif_title">Restore Temporarily Disabled Apps</string>
+    <string name="provisioning_recovery_notif_desc">Tap here to restore %1$d app(s) left disabled after an interrupted setup session.</string>
+
+    <!-- Waqf Support (Sadaqah Jariyah) -->
+    <string name="waqf_settings_card_title">Waqf Sustainability Share — Support Hisn</string>
+    <string name="waqf_settings_card_subtitle" formatted="false">100% free, ad-free digital Waqf — contribute to sustain it as Sadaqah Jariyah</string>
+    <string name="waqf_support_title">Waqf Sustainability Share — Support Hisn</string>
+    <string name="waqf_hero_badge">100% Free Digital Waqf • Sadaqah Jariyah</string>
+    <string name="waqf_hero_hadith">The Messenger of Allah ﷺ said: “Whoever guides someone to goodness will have a reward like one who did it.”</string>
+    <string name="waqf_hero_title">Waqf Sustainability Share &amp; System Stewardship</string>
+    <string name="waqf_hero_body" formatted="false">Hisn was engineered over thousands of hours by an individual developer as a 100% free, ad-free digital Waqf — dedicated to preventing fitnah and safeguarding the youth, hearts, honor, and homes of Muslims.\n\nSustaining the cloud update servers and ongoing AI protection research carries continuous operational costs. Contributing is completely optional, and every single pound you give is an open door to Sadaqah Jariyah and an ongoing share in keeping this shield alive.</string>
+    <string name="waqf_offline_banner_title">Offline Mode</string>
+    <string name="waqf_offline_banner_desc">Only the primary InstaPay link is shown right now. Connect to the internet and tap Retry to load mobile wallets and additional channels.</string>
+    <string name="waqf_btn_retry">Retry</string>
+    <string name="waqf_channels_section_title">Available Support Channels</string>
+    <string name="waqf_tap_to_copy_hint">Tap to copy</string>
+    <string name="waqf_copied_toast">Copied %1$s to clipboard</string>
+    <string name="waqf_open_link_failed">Could not open link. Please copy the identifier and try manually.</string>
+    <string name="waqf_invalid_action">This action is currently unavailable or invalid.</string>
+    <string name="waqf_dial_failed">Could not open the phone dialer. You can copy the number instead.</string>
+    <string name="waqf_share_card_badge">Spread the Goodness</string>
+    <string name="waqf_share_card_title">Guiding to Good Earns the Same Reward</string>
+    <string name="waqf_share_card_body">Even if you cannot contribute financially today, sharing Hisn with someone who needs it or spreading the word may protect a heart and strengthen a home — earning you a share of the reward, God willing.</string>
+    <string name="waqf_share_btn_label">Share App &amp; Earn Reward</string>
+    <string name="waqf_share_chooser_title">Share Hisn via...</string>
+    <string name="waqf_share_message" formatted="false">Hisn — The first Android app to harness Android’s strongest system privilege (Device Owner) to block fitnah and digital addiction, freeing people from modern digital slavery and restoring willpower to those who lost it.\n\n100% free, ad-free digital Waqf for the sake of Allah.\n\nOfficial Website:\nhttps://hisn.uk/\n\nTelegram Channel:\nhttps://t.me/hisn_org</string>
+    <string name="waqf_share_failed">Could not open share dialog</string>
+
+    <!-- Fortresses -->
+    <string name="fortress_emergency_default_name">Emergency Fortress</string>
+    <string name="toast_fortress_extended">Fortress extended successfully</string>
+    <string name="notif_fortress_active_title">Fortress Active: Internet Isolated</string>
+    <string name="notif_fortress_active_desc_format">%1$s is active: Internet isolated and distraction apps paused.</string>
+    <string name="notif_fortress_ended_title">Fortress Session Finished</string>
+    <string name="notif_fortress_ended_desc">Apps and internet connection have been restored successfully.</string>
+    <string name="notif_fortress_ended_desc_curfew_still_active">Fortress finished, but protection remains active on your device.</string>
+    <string name="notif_action_extend_fortress">Extend Fortress</string>
+    <string name="notif_apps_suspended_fortress_desc_format">%1$s is active: Distraction apps temporarily paused.</string>
+    <string name="notif_guardian_lockdown_desc_fortress_format">Guardian block is active (along with %1$s). Calls and SMS work normally.</string>
+
+    <!-- Fortresses UI (Phase 3) -->
+    <string name="curfew_picker_desc_run_only">Select apps allowed to open only (internet remains blocked)</string>
+    <string name="fortresses_title">Fortresses</string>
+    <string name="fortresses_subtitle">Emergency Fortress and custom focus isolation profiles</string>
+    <string name="fortresses_btn_add">Add New Fortress</string>
+    <string name="fortress_badge_emergency">Mandatory • Emergency</string>
+    <string name="fortress_badge_active">Active Now</string>
+    <string name="fortress_duration_minutes_format">%1$d min</string>
+    <string name="fortress_internet_cut_on">Internet Cut: ON</string>
+    <string name="fortress_internet_cut_off">Internet Cut: OFF</string>
+    <string name="fortress_allowed_apps_summary_none">No allowed apps</string>
+    <string name="fortress_allowed_apps_summary_run_only">%1$d allowed app(s)</string>
+    <string name="fortress_allowed_apps_summary_with_net">%1$d allowed (%2$d with net)</string>
+    <string name="fortress_active_edit_blocked_toast">This fortress is currently active. Please unlock or finish it before editing or deleting.</string>
+    <string name="fortress_delete_confirm_title">Delete Fortress</string>
+    <string name="fortress_delete_confirm_msg">Are you sure you want to permanently delete \"%1$s\"?</string>
+    <string name="fortress_btn_delete">Delete Fortress</string>
+    <string name="fortress_btn_edit">Edit</string>
+    <string name="fortress_toast_deleted">Fortress deleted successfully</string>
+    <string name="fortress_toast_saved">Fortress settings saved</string>
+    <string name="fortress_editor_title_create">New Fortress</string>
+    <string name="fortress_editor_title_edit">Edit Fortress</string>
+    <string name="fortress_editor_title_emergency">Emergency Fortress Settings</string>
+    <string name="fortress_editor_name_label">Fortress Name</string>
+    <string name="fortress_editor_name_hint">e.g., Study Fortress or Deep Focus</string>
+    <string name="fortress_editor_duration_label">Duration</string>
+    <string name="fortress_chip_30m">30 min</string>
+    <string name="fortress_chip_1h">1 hour</string>
+    <string name="fortress_chip_2h">2 hours</string>
+    <string name="fortress_chip_custom">Custom</string>
+    <string name="fortress_editor_custom_minutes_label">Duration in minutes (1 - 720)</string>
+    <string name="fortress_editor_internet_cut_title">Cut Internet Access</string>
+    <string name="fortress_editor_internet_cut_desc">Isolate internet access for non-bypassed apps during the fortress</string>
+    <string name="fortress_editor_emergency_internet_note">Internet isolation is mandatory and cannot be disabled in Emergency Fortress.</string>
+    <string name="fortress_editor_allowed_apps_title">Allowed Apps During Fortress</string>
+    <string name="fortress_editor_emergency_apps_note">In Emergency Fortress, selected apps are allowed to run offline only.</string>
+    <string name="fortress_editor_btn_select_apps">Select Apps</string>
+    <string name="fortress_error_name_required">Please enter a fortress name</string>
+    <string name="fortress_error_duration_range">Please enter a valid duration between 1 and 720 minutes</string>
+
+    <!-- Home Fortresses -->
+    <string name="home_fortresses_section_title">Quick Fortresses</string>
+    <string name="home_emergency_fortress_desc">Instant internet isolation and distraction app freeze to restore focus</string>
+    <string name="home_btn_start_emergency_fortress">Start %1$s (%2$dm)</string>
+    <string name="home_btn_start_custom_fortress">Start (%1$dm)</string>
+    <string name="home_fortress_active_badge">Active</string>
+    <string name="home_fortress_another_active_hint">Another fortress is active</string>
+    <string name="home_btn_extend_fortress_minutes">+%1$dm Extend</string>
+    <string name="fortress_countdown_format">Remaining: %1$s</string>
+    <string name="dialog_fortress_start_title">Start %1$s</string>
+    <string name="dialog_fortress_start_msg_emergency">Internet will be isolated and non-allowed apps paused for %1$d minutes. Emergency Fortress cannot be cancelled manually without QR lock. Proceed?</string>
+    <string name="dialog_fortress_start_msg_custom_net_cut">Internet will be isolated and non-allowed apps paused for %1$d minutes. Proceed?</string>
+    <string name="dialog_fortress_start_msg_custom_no_net">Non-allowed apps will be paused for %1$d minutes. Proceed?</string>
+    <string name="toast_fortress_started">%1$s activated for %2$d minutes</string>
+    <string name="toast_fortress_another_active">Another fortress is already active</string>
+
+    <!-- Self-Control Fortresses & Active Modes -->
+    <string name="hub_title_fortresses">Fortresses</string>
+    <string name="hub_subtitle_fortresses">Manage Emergency &amp; Custom Fortresses</string>
+    <string name="self_control_active_modes_title">Active Protection Modes</string>
+    <string name="self_control_active_curfew_row">Night Curfew is currently active</string>
+    <string name="self_control_active_fortress_row">Active Fortress: %1$s (%2$s left)</string>
+    <string name="self_control_btn_unlock_curfew_qr">Unlock Curfew via QR</string>
+    <string name="self_control_btn_unlock_curfew_direct">Unlock Curfew Window</string>
+    <string name="self_control_btn_unlock_fortress_qr">Unlock Fortress via QR</string>
+    <string name="self_control_btn_unlock_fortress_direct">Unlock Fortress</string>
+    <string name="self_control_unlock_curfew_confirm_title">Unlock Night Curfew</string>
+    <string name="self_control_unlock_curfew_confirm_msg">Night Curfew will be unlocked for this night window only and will resume on the next schedule.</string>
+    <string name="self_control_unlock_fortress_confirm_title">Unlock Active Fortress</string>
+    <string name="self_control_unlock_fortress_confirm_msg">Do you want to end \"%1$s\" and restore apps and internet now?</string>
+    <string name="toast_curfew_unlocked">Night Curfew unlocked for current window</string>
+    <string name="toast_fortress_unlocked">Fortress unlocked successfully</string>
+    <string name="toast_mode_unlock_failed">Unable to unlock active mode; check permissions or QR verification</string>
+
+    <!-- Guardian Active Modes & Fortress Permissions -->
+    <string name="guardian_active_modes_banner_title">Ward Active Protection Modes</string>
+    <string name="guardian_active_fortress_status">Active Fortress: %1$s (%2$s left)</string>
+    <string name="guardian_active_curfew_status">Night Curfew is currently active</string>
+    <string name="guardian_btn_unlock_fortress">Unlock Fortress</string>
+    <string name="guardian_btn_unlock_curfew">Unlock Curfew</string>
+    <string name="guardian_btn_unlock_all_modes">Unlock All</string>
+    <string name="guardian_confirm_unlock_title">Remote Mode Unlock</string>
+    <string name="guardian_confirm_unlock_fortress_msg">Send a remote unlock command for %1$s\'s active Fortress now?</string>
+    <string name="guardian_confirm_unlock_curfew_msg">Send a remote unlock command for %1$s\'s current Night Curfew window?</string>
+    <string name="guardian_confirm_unlock_all_msg">Send a remote unlock command for both active Fortress and Night Curfew for %1$s?</string>
+    <string name="toast_guardian_remote_unlock_sent">Remote unlock command sent</string>
+    <string name="self_control_perm_fortresses">Manage &amp; Edit Fortresses</string>
+    <string name="self_control_perm_fortresses_desc">Allow ward to add and edit custom fortresses and emergency fortress settings</string>
+    <string name="self_control_perm_fortress_unlock">Allow Fortress &amp; Curfew Unlock</string>
+    <string name="self_control_perm_fortress_unlock_desc">Allow ward to unlock custom fortresses or current curfew window from Self-Control</string>
+    <string name="self_control_perm_other_settings">Additional Settings</string>
+    <string name="self_control_perm_other_settings_desc">Allow ward to modify date &amp; time lock, time zone, app data clearing, and internet cutoff</string>
 </resources>

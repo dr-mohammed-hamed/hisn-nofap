@@ -298,6 +298,7 @@ class QrScannerBottomSheet : BottomSheetDialogFragment() {
                             reqKey,
                             Bundle().apply {
                                 putBoolean(RESULT_KEY_VERIFIED, true)
+                                putString(RESULT_KEY_SCANNED_TOKEN, token)
                                 if (payload != null) putString(RESULT_KEY_PAYLOAD, payload)
                             }
                         )
@@ -496,6 +497,8 @@ class QrScannerBottomSheet : BottomSheetDialogFragment() {
         private const val KEY_IS_TORCH_ON = "key_is_torch_on"
         private const val REQ_EMERGENCY_CONFIRM = "req_qr_emergency_confirm"
         private const val TAG_EMERGENCY_CONFIRM = "tag_qr_emergency_confirm"
+        // main: remote Fortress unlock reads the scanned token from this result key.
+        const val RESULT_KEY_SCANNED_TOKEN = "result_key_scanned_token"
 
         fun newInstance(requestKey: String? = null, payload: String? = null): QrScannerBottomSheet {
             return QrScannerBottomSheet().apply {

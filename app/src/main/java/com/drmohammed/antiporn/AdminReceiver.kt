@@ -3,10 +3,10 @@ package com.drmohammed.antiporn
 import android.app.admin.DeviceAdminReceiver
 import android.content.Context
 import android.content.Intent
-import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import timber.log.Timber
 
 class AdminReceiver : DeviceAdminReceiver() {
 
@@ -17,32 +17,35 @@ class AdminReceiver : DeviceAdminReceiver() {
 
     override fun onEnabled(context: Context, intent: Intent) {
         super.onEnabled(context, intent)
-        Log.i(TAG, "Device Admin / Owner enabled. Enforcing DNS and security policies...")
-        val appContext = context.applicationContext
+        val appContext = context.applicationContext ?: context
+        if (!com.drmohammed.antiporn.telemetry.SafeDpmGateway.isDeviceOwner(appContext)) {
+            Timber.tag(TAG).i("Device Admin enabled transiently without Device Owner; deferring timestamp and policy sync.")
+            return
+        }
+        Timber.tag(TAG).i("Device Admin / Owner enabled. Enforcing DNS and security policies...")
         try {
             com.drmohammed.antiporn.data.repository.ApprovalRepository.getInstance(appContext).recordDeviceOwnerEnabledTimestamp()
         } catch (e: Exception) {
-            Log.e(TAG, "Error recording DO enabled timestamp in onEnabled", e)
+            Timber.tag(TAG).e(e, "Error recording DO enabled timestamp in onEnabled")
         }
-        enforcePoliciesAsync(context)
+        enforcePoliciesAsync(appContext)
     }
 
     override fun onProfileProvisioningComplete(context: Context, intent: Intent) {
         super.onProfileProvisioningComplete(context, intent)
-        Log.i(TAG, "Profile provisioning complete. Enforcing DNS and security policies...")
-        val appContext = context.applicationContext
+        Timber.tag(TAG).i("Profile provisioning complete. Enforcing DNS and security policies...")
+        val appContext = context.applicationContext ?: context
         try {
             com.drmohammed.antiporn.data.repository.ApprovalRepository.getInstance(appContext).recordDeviceOwnerEnabledTimestamp()
         } catch (e: Exception) {
-            Log.e(TAG, "Error recording DO enabled timestamp in onProfileProvisioningComplete", e)
+            Timber.tag(TAG).e(e, "Error recording DO enabled timestamp in onProfileProvisioningComplete")
         }
-        enforcePoliciesAsync(context)
+        enforcePoliciesAsync(appContext)
 
         // Bootstrap MainActivity as a fallback strictly for legacy Android versions (Android 11 and below)
         // ONLY if EnterpriseProvisioningActivity is not actively handling the OOBE compliance flow
         if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S) {
             if (!com.drmohammed.antiporn.provisioning.ui.EnterpriseProvisioningActivity.isComplianceFlowActive) {
-                val appContext = context.applicationContext
                 try {
                     val launchIntent = appContext.packageManager?.getLaunchIntentForPackage(appContext.packageName)?.apply {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -50,12 +53,12 @@ class AdminReceiver : DeviceAdminReceiver() {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                     }
                     appContext.startActivity(launchIntent)
-                    Log.i(TAG, "Dispatched MainActivity launch intent from AdminReceiver fallback.")
+                    Timber.tag(TAG).i("Dispatched MainActivity launch intent from AdminReceiver fallback.")
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to launch MainActivity in onProfileProvisioningComplete", e)
+                    Timber.tag(TAG).e(e, "Failed to launch MainActivity in onProfileProvisioningComplete")
                 }
             } else {
-                Log.i(TAG, "EnterpriseProvisioningActivity is actively running compliance flow; skipping redundant AdminReceiver launch.")
+                Timber.tag(TAG).i("EnterpriseProvisioningActivity is actively running compliance flow; skipping redundant AdminReceiver launch.")
             }
         }
     }
@@ -66,7 +69,7 @@ class AdminReceiver : DeviceAdminReceiver() {
             Intent.ACTION_BOOT_COMPLETED,
             Intent.ACTION_MY_PACKAGE_REPLACED,
             ACTION_ENFORCE_POLICIES -> {
-                Log.i(TAG, "Broadcast received (${intent?.action}). Enforcing DNS policies...")
+                Timber.tag(TAG).i("Broadcast received (${intent?.action}). Enforcing DNS policies...")
                 enforcePoliciesAsync(context)
             }
         }
@@ -74,11 +77,12 @@ class AdminReceiver : DeviceAdminReceiver() {
 
     override fun onDisabled(context: Context, intent: Intent) {
         super.onDisabled(context, intent)
-        Log.w(TAG, "Device Admin disabled.")
+        Timber.tag(TAG).w("Device Admin disabled.")
+        val appContext = context.applicationContext ?: context
         try {
-            com.drmohammed.antiporn.watchdog.WatchdogOrchestrator.stopAll(context.applicationContext)
+            com.drmohammed.antiporn.watchdog.WatchdogOrchestrator.stopAll(appContext)
         } catch (e: Exception) {
-            Log.e(TAG, "Error stopping watchdog in onDisabled", e)
+            Timber.tag(TAG).e(e, "Error stopping watchdog in onDisabled")
         }
     }
 
@@ -87,31 +91,35 @@ class AdminReceiver : DeviceAdminReceiver() {
     }
 
     private fun enforcePoliciesAsync(context: Context) {
-        val appContext = context.applicationContext
-        try {
-            com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(appContext).startFirestoreSync()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error initiating PolicyRepository sync in AdminReceiver", e)
-        }
-        try {
-            com.drmohammed.antiporn.data.repository.ApprovalRepository.getInstance(appContext).syncZeroTrustBaselineAndReconcileAsync()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error initiating syncZeroTrustBaselineAndReconcileAsync in AdminReceiver", e)
-        }
+        val appContext = context.applicationContext ?: context
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                if (com.drmohammed.antiporn.provisioning.engine.DeviceOwnerPromoter.isPromotionActive) {
+                    Timber.tag(TAG).i("Promotion active; deferring AdminReceiver enforcement to AdbPostPromotionVerifier.")
+                    return@launch
+                }
+                try {
+                    com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(appContext).startFirestoreSync()
+                } catch (e: Exception) {
+                    Timber.tag(TAG).e(e, "Error initiating PolicyRepository sync in AdminReceiver")
+                }
+                try {
+                    com.drmohammed.antiporn.data.repository.ApprovalRepository.getInstance(appContext).syncZeroTrustBaselineAndReconcileAsync()
+                } catch (e: Exception) {
+                    Timber.tag(TAG).e(e, "Error initiating syncZeroTrustBaselineAndReconcileAsync in AdminReceiver")
+                }
                 try {
                     com.drmohammed.antiporn.core.engine.SystemAppsHealingManager.healPreInstalledStoresSafely(appContext)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error executing SystemAppsHealingManager in AdminReceiver", e)
+                    Timber.tag(TAG).e(e, "Error executing SystemAppsHealingManager in AdminReceiver")
                 }
                 com.drmohammed.antiporn.data.repository.ApprovalRepository.getInstance(appContext).ensureInitialBaselineSeeded()
                 com.drmohammed.antiporn.core.engine.ProtectionEngine.applyAllSync(appContext)
             } catch (e: Exception) {
-                Log.e(TAG, "Error applying policies in AdminReceiver", e)
+                Timber.tag(TAG).e(e, "Error applying policies in AdminReceiver")
             } finally {
-                pendingResult.finish()
+                pendingResult?.finish()
             }
         }
     }

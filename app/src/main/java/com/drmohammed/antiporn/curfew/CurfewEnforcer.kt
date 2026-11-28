@@ -2,19 +2,28 @@ package com.drmohammed.antiporn.curfew
 
 import android.content.Context
 import android.content.pm.PackageManager
-import android.util.Log
+import com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard
+import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
+import com.drmohammed.antiporn.data.repository.WardActiveModesTelemetrySyncer
+import com.drmohammed.antiporn.fortress.engine.CurfewWindowOverrideStore
+import com.drmohammed.antiporn.fortress.engine.EffectiveRestrictionResolver
+import com.drmohammed.antiporn.fortress.engine.FortressSessionController
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import com.drmohammed.antiporn.telemetry.SafeDpmGateway
-import java.util.Calendar
+import com.drmohammed.antiporn.ui.control.gate.SelfControlAccessGateRegistry
+import com.drmohammed.antiporn.ui.control.gate.SelfControlSection
+import com.drmohammed.antiporn.ui.control.qr.SelfControlQrManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import timber.log.Timber
+import java.util.Calendar
 
 /**
- * Coordinates night curfew & nap schedule evaluation, snooze invariants,
+ * Coordinates night curfew & fortress schedule evaluation, snooze/window-override invariants,
  * and synchronized entry points to [CurfewLifecycleHandler].
  */
 object CurfewEnforcer {
@@ -22,11 +31,6 @@ object CurfewEnforcer {
     private const val TAG = "AntiPorn_CurfewEnforcer"
     private val enforcerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    /**
-     * Evaluates whether [calendar] falls inside the configured weekday or weekend
-     * curfew schedule window (including Thursday-evening transitions and cross-midnight spills),
-     * independent of whether the curfew master switch is enabled.
-     */
     fun isScheduleWindowActive(
         calendar: Calendar,
         startHour: Int,
@@ -96,19 +100,21 @@ object CurfewEnforcer {
         message = "DevicePolicyBundle.isCurfewEnabled is the single source of truth; update via PolicyRepository."
     )
     fun setCurfewFeatureEnabled(context: Context, enabled: Boolean) {
-        Log.w(TAG, "Ignoring deprecated setCurfewFeatureEnabled($enabled); DevicePolicyBundle.isCurfewEnabled is authoritative")
+        Timber.tag(TAG).w("Ignoring deprecated setCurfewFeatureEnabled(%b); PolicyRepository is authoritative", enabled)
         syncBlockState(context)
     }
 
-    fun isManualTestActive(context: Context): Boolean {
-        val prefs = context.getSharedPreferences(CurfewConfig.PREFS_NAME, Context.MODE_PRIVATE)
-        return prefs.getBoolean(CurfewConfig.KEY_MANUAL_TEST_ACTIVE, false)
-    }
+    fun isManualTestActive(context: Context): Boolean =
+        context.getSharedPreferences(CurfewConfig.PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(CurfewConfig.KEY_MANUAL_TEST_ACTIVE, false)
 
     @Synchronized
     fun setManualTestActive(context: Context, active: Boolean): Boolean {
-        val prefs = context.getSharedPreferences(CurfewConfig.PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putBoolean(CurfewConfig.KEY_MANUAL_TEST_ACTIVE, active).commit()
+        if (active) {
+            CurfewWindowOverrideStore.clearOverride(context)
+        }
+        context.getSharedPreferences(CurfewConfig.PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(CurfewConfig.KEY_MANUAL_TEST_ACTIVE, active).commit()
         return syncBlockState(context)
     }
 
@@ -119,52 +125,48 @@ object CurfewEnforcer {
             try {
                 success = setManualTestActive(appContext, active)
             } catch (e: Exception) {
-                Log.e(TAG, "Error executing setManualTestActiveAsync", e)
+                Timber.tag(TAG).e(e, "Error executing setManualTestActiveAsync")
             } finally {
                 if (onComplete != null) {
-                    withContext(Dispatchers.Main) {
-                        onComplete.invoke(success)
-                    }
+                    withContext(Dispatchers.Main) { onComplete.invoke(success) }
                 }
             }
         }
     }
 
     fun isSnoozeActive(context: Context): Boolean {
-        val prefs = context.getSharedPreferences(CurfewConfig.PREFS_NAME, Context.MODE_PRIVATE)
-        val snoozeEnd = prefs.getLong(CurfewConfig.KEY_CURFEW_SNOOZE_END_WALL, 0L)
+        val snoozeEnd = getSnoozeEndWall(context)
         return TrustedTimeProvider.currentTimeMillis(context) < snoozeEnd
     }
 
-    fun getSnoozeEndWall(context: Context): Long {
-        val prefs = context.getSharedPreferences(CurfewConfig.PREFS_NAME, Context.MODE_PRIVATE)
-        return prefs.getLong(CurfewConfig.KEY_CURFEW_SNOOZE_END_WALL, 0L)
-    }
+    fun getSnoozeEndWall(context: Context): Long =
+        context.getSharedPreferences(CurfewConfig.PREFS_NAME, Context.MODE_PRIVATE)
+            .getLong(CurfewConfig.KEY_CURFEW_SNOOZE_END_WALL, 0L)
 
     @Synchronized
     fun clearSnooze(context: Context) {
-        val prefs = context.getSharedPreferences(CurfewConfig.PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().remove(CurfewConfig.KEY_CURFEW_SNOOZE_END_WALL).commit()
-        Log.i(TAG, "Curfew snooze cleared")
+        context.getSharedPreferences(CurfewConfig.PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().remove(CurfewConfig.KEY_CURFEW_SNOOZE_END_WALL).commit()
+        Timber.tag(TAG).i("Curfew snooze cleared")
     }
 
     /**
-     * Requests a temporary curfew snooze. Rejected whenever a Nap session is active
-     * because Naps never yield to curfew snooze.
+     * Requests a temporary curfew snooze. Rejected whenever a Fortress session is active
+     * because Fortresses never yield to curfew snooze.
      */
     @Synchronized
     fun snoozeCurfew(context: Context, minutes: Int = 15): Boolean {
-        if (NapController.isNapActive(context)) {
-            logWarn("Curfew snooze rejected: Nap session is currently active")
+        if (FortressSessionController.isFortressActive(context)) {
+            Timber.tag(TAG).w("Curfew snooze rejected: Fortress session is currently active")
             return false
         }
         val safeMinutes = minutes.coerceIn(1, 60)
-        val prefs = context.getSharedPreferences(CurfewConfig.PREFS_NAME, Context.MODE_PRIVATE)
         val snoozeEnd = TrustedTimeProvider.currentTimeMillis(context) + (safeMinutes * 60 * 1000L)
-        prefs.edit().putLong(CurfewConfig.KEY_CURFEW_SNOOZE_END_WALL, snoozeEnd).commit()
+        context.getSharedPreferences(CurfewConfig.PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putLong(CurfewConfig.KEY_CURFEW_SNOOZE_END_WALL, snoozeEnd).commit()
         CurfewScheduler.scheduleCurfewSnoozeAlarm(context, snoozeEnd)
         val released = enforce(context, false)
-        Log.i(TAG, "Curfew snoozed for $safeMinutes minutes until $snoozeEnd (released=$released)")
+        Timber.tag(TAG).i("Curfew snoozed for $safeMinutes minutes until $snoozeEnd (released=$released)")
         return released
     }
 
@@ -172,14 +174,93 @@ object CurfewEnforcer {
         if (!isCurfewFeatureEnabled(context)) return false
         if (isSnoozeActive(context)) return false
         if (isManualTestActive(context)) return true
+        if (CurfewWindowOverrideStore.isWindowOverridden(context)) return false
         return isCurfewActive(context)
     }
 
     /**
-     * Effective block = night curfew OR active nap. Nap merges into the same engine.
+     * Effective block = active Night Curfew OR active Fortress session.
      */
     fun isEffectiveBlockActive(context: Context): Boolean =
-        isEffectiveCurfewActive(context) || NapController.isNapActive(context)
+        isEffectiveCurfewActive(context) || FortressSessionController.isFortressActive(context)
+
+    /**
+     * Unlocks the current Night Curfew window directly when QR lock is disabled and
+     * supervision policy permits [SelfControlSection.FORTRESS_UNLOCK].
+     */
+    @Synchronized
+    fun unlockCurfewForCurrentWindowDirect(context: Context): Boolean {
+        val appContext = context.applicationContext ?: context
+        if (SelfControlQrManager.getInstance(appContext).isQrLockEnabled()) {
+            BlackBoxRecorder.recordGate(appContext, "CURFEW_UNLOCK_REJECTED_QR_REQUIRED", isSuccess = false, error = "QR lock is enabled")
+            return false
+        }
+        if (!SelfControlAccessGateRegistry.isSectionPermitted(appContext, SelfControlSection.FORTRESS_UNLOCK)) {
+            BlackBoxRecorder.recordGate(appContext, "CURFEW_UNLOCK_DENIED_BY_GUARDIAN", isSuccess = false, error = "FORTRESS_UNLOCK not permitted")
+            return false
+        }
+        applyCurfewWindowOverride(appContext)
+        BlackBoxRecorder.recordGate(appContext, "CURFEW_WINDOW_UNLOCKED_DIRECT", isSuccess = true)
+        return true
+    }
+
+    /**
+     * Unlocks the current Night Curfew window via verified QR token or completed emergency bypass,
+     * subject to supervision permission [SelfControlSection.FORTRESS_UNLOCK].
+     */
+    @Synchronized
+    fun unlockCurfewForCurrentWindowWithQr(
+        context: Context,
+        rawScannedToken: String,
+        isEmergencyBypassCompleted: Boolean = false
+    ): Boolean {
+        val appContext = context.applicationContext ?: context
+        if (!SelfControlAccessGateRegistry.isSectionPermitted(appContext, SelfControlSection.FORTRESS_UNLOCK)) {
+            BlackBoxRecorder.recordGate(appContext, "CURFEW_QR_UNLOCK_DENIED_BY_GUARDIAN", isSuccess = false, error = "FORTRESS_UNLOCK not permitted")
+            return false
+        }
+        val qrManager = SelfControlQrManager.getInstance(appContext)
+        if (isEmergencyBypassCompleted) {
+            if (qrManager.isQrLockEnabled()) {
+                Timber.tag(TAG).w("Rejected curfew emergency bypass unlock: QR lock is still enabled")
+                return false
+            }
+            applyCurfewWindowOverride(appContext)
+            BlackBoxRecorder.recordGate(appContext, "CURFEW_WINDOW_UNLOCKED_QR_EMERGENCY_BYPASS", isSuccess = true)
+            return true
+        }
+        if (!qrManager.isQrLockEnabled() || !qrManager.verifyToken(rawScannedToken)) {
+            BlackBoxRecorder.recordGate(appContext, "CURFEW_QR_UNLOCK_INVALID_TOKEN", isSuccess = false, error = "QR token verification failed")
+            return false
+        }
+        applyCurfewWindowOverride(appContext)
+        BlackBoxRecorder.recordGate(appContext, "CURFEW_WINDOW_UNLOCKED_QR", isSuccess = true)
+        return true
+    }
+
+    @Synchronized
+    internal fun applyCurfewWindowOverride(
+        context: Context,
+        policy: DevicePolicyBundle? = null,
+        syncAndNotify: Boolean = true
+    ) {
+        val appContext = context.applicationContext ?: context
+        val snapshot = EffectiveRestrictionResolver.getActiveModesSnapshot(appContext, policy = policy)
+        if (snapshot.nightCurfewWindowEndWallMs > 0L) {
+            CurfewWindowOverrideStore.setOverrideUntil(appContext, snapshot.nightCurfewWindowEndWallMs)
+        }
+        if (isManualTestActive(appContext)) {
+            appContext.getSharedPreferences(CurfewConfig.PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().putBoolean(CurfewConfig.KEY_MANUAL_TEST_ACTIVE, false).commit()
+        }
+        clearSnooze(appContext)
+        CurfewScheduler.cancelCurfewSnoozeAlarm(appContext)
+        CurfewAppResolver.invalidateCache()
+        if (syncAndNotify) {
+            syncBlockState(appContext)
+            runCatching { WardActiveModesTelemetrySyncer.syncAsync(appContext) }
+        }
+    }
 
     internal fun isPackageInstalled(
         pm: PackageManager,
@@ -206,15 +287,8 @@ object CurfewEnforcer {
         hasTrackedSuspendedPackages ||
         hasLingeringSuspendedPackages
 
-    /**
-     * Synchronously applies or releases curfew/nap suspensions and store lockdowns.
-     * Guaranteed invariant: Nap ALWAYS vetoes release (never overridden by curfew snooze),
-     * and night curfew window holds unless explicitly snoozed.
-     */
     @Synchronized
-    internal fun awaitIdleForTeardown() {
-        // Acquiring and releasing the intrinsic monitor guarantees any in-flight @Synchronized enforce() has finished
-    }
+    internal fun awaitIdleForTeardown() = Unit
 
     @Synchronized
     fun enforce(
@@ -222,30 +296,33 @@ object CurfewEnforcer {
         activate: Boolean,
         calendar: Calendar = CurfewConfig.getCurfewCalendar(context)
     ): Boolean {
-        if (com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.isTeardownInProgress) {
-            Log.d(TAG, "Skipping CurfewEnforcer.enforce because teardown is in progress")
+        if (ProtectionTransitionGuard.isTeardownInProgress) {
+            Timber.tag(TAG).d("Skipping CurfewEnforcer.enforce because teardown is in progress")
             return false
         }
         if (!SafeDpmGateway.isDeviceOwner(context)) {
-            Log.w(TAG, "Cannot enforce curfew: Not Device/Profile Owner")
+            Timber.tag(TAG).w("Cannot enforce curfew: Not Device/Profile Owner")
             return false
         }
 
-        val napActive = NapController.isNapActive(context)
+        val nowWallMs = TrustedTimeProvider.currentTimeMillis(context)
+        val fortressActive = FortressSessionController.isFortressActive(context)
+        val isCurfewOverridden = CurfewWindowOverrideStore.isWindowOverridden(context, nowWallMs)
         val isCurfewEffective = isCurfewActive(context, calendar, useFailSecureEnabled = true)
-        if (!activate && (napActive || (!isSnoozeActive(context) && isCurfewEffective))) {
-            Log.w(TAG, "Security Alert: Block release rejected - night curfew window or active nap still holds!")
+        if (!activate && (fortressActive || (!isSnoozeActive(context) && !isCurfewOverridden && isCurfewEffective))) {
+            Timber.tag(TAG).w("Security Alert: Block release rejected - night curfew window or active fortress still holds")
             BlackBoxRecorder.recordCurfew(
                 context,
                 "RELEASE_REJECTED",
                 isSuccess = false,
-                error = "Security invariant: release rejected (effective=$isCurfewEffective, nap=$napActive)"
+                error = "Security invariant: release rejected (effective=$isCurfewEffective, fortress=$fortressActive, overridden=$isCurfewOverridden)"
             )
             return true
         }
 
         return if (activate) {
-            CurfewLifecycleHandler.enforceActivation(context)
+            val effectiveProfile = EffectiveRestrictionResolver.resolve(context, calendar)
+            CurfewLifecycleHandler.enforceActivation(context, effectiveProfile)
         } else {
             CurfewLifecycleHandler.enforceRelease(context)
         }
@@ -254,8 +331,12 @@ object CurfewEnforcer {
     @Synchronized
     fun syncCurfewState(context: Context): Boolean {
         val shouldBeActive = isEffectiveBlockActive(context)
-        Log.d(TAG, "Syncing curfew/block state: shouldBeActive = $shouldBeActive")
-        return enforce(context, shouldBeActive)
+        Timber.tag(TAG).d("Syncing curfew/block state: shouldBeActive=%b", shouldBeActive)
+        val ok = enforce(context, shouldBeActive)
+        if (!ProtectionTransitionGuard.isTeardownInProgress) {
+            runCatching { WardActiveModesTelemetrySyncer.syncAsync(context) }
+        }
+        return ok
     }
 
     fun syncCurfewStateAsync(context: Context, onComplete: ((Boolean) -> Unit)? = null) {
@@ -265,12 +346,10 @@ object CurfewEnforcer {
             try {
                 success = syncCurfewState(appContext)
             } catch (e: Exception) {
-                Log.e(TAG, "Error in syncCurfewStateAsync", e)
+                Timber.tag(TAG).e(e, "Error in syncCurfewStateAsync")
             } finally {
                 if (onComplete != null) {
-                    withContext(Dispatchers.Main) {
-                        onComplete.invoke(success)
-                    }
+                    withContext(Dispatchers.Main) { onComplete.invoke(success) }
                 }
             }
         }
@@ -279,8 +358,12 @@ object CurfewEnforcer {
     @Synchronized
     fun syncBlockState(context: Context): Boolean {
         val shouldBeActive = isEffectiveBlockActive(context)
-        Log.d(TAG, "Syncing block state: shouldBeActive = $shouldBeActive")
-        return enforce(context, shouldBeActive)
+        Timber.tag(TAG).d("Syncing block state: shouldBeActive=%b", shouldBeActive)
+        val ok = enforce(context, shouldBeActive)
+        if (!ProtectionTransitionGuard.isTeardownInProgress) {
+            runCatching { WardActiveModesTelemetrySyncer.syncAsync(context) }
+        }
+        return ok
     }
 
     fun syncBlockStateAsync(context: Context, onComplete: ((Boolean) -> Unit)? = null) {
@@ -290,12 +373,10 @@ object CurfewEnforcer {
             try {
                 success = syncBlockState(appContext)
             } catch (e: Exception) {
-                Log.e(TAG, "Error in syncBlockStateAsync", e)
+                Timber.tag(TAG).e(e, "Error in syncBlockStateAsync")
             } finally {
                 if (onComplete != null) {
-                    withContext(Dispatchers.Main) {
-                        onComplete.invoke(success)
-                    }
+                    withContext(Dispatchers.Main) { onComplete.invoke(success) }
                 }
             }
         }
@@ -309,12 +390,4 @@ object CurfewEnforcer {
     @Synchronized
     fun repairStuckSuspendedApps(context: Context): Int =
         CurfewLifecycleHandler.repairStuckSuspendedApps(context)
-
-    private fun logWarn(msg: String) {
-        try {
-            Log.w(TAG, msg)
-        } catch (e: RuntimeException) {
-            if (e.message?.contains("not mocked") != true) throw e
-        }
-    }
 }

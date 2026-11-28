@@ -1,9 +1,9 @@
 package com.drmohammed.antiporn.data.repository
 
 import android.content.Context
-import android.util.Log
 import androidx.annotation.VisibleForTesting
 import androidx.core.content.edit
+import timber.log.Timber
 import com.drmohammed.antiporn.accessibility.control.AccessibilityPolicyCoordinator
 import com.drmohammed.antiporn.cloud.CloudSyncManager
 import com.drmohammed.antiporn.core.engine.DeviceOwnerTeardownManager
@@ -93,12 +93,15 @@ class PolicyRepository(
             val (reconciled, needsSave) = loadAndReconcilePolicy(initialPolicy)
             val adopted = synchronized(policyStateLock) {
                 val current = _currentPolicyFlow.value
-                val shouldAdoptInitialRoomLoad = !hasCachedPolicy && current == initialPolicy
+                val noConcurrentUpdate = current == initialPolicy
+                val shouldAdoptInitialRoomLoad = !hasCachedPolicy && noConcurrentUpdate
                 val isNewerOrEqualReconciled = reconciled != current &&
                     (shouldAdoptInitialRoomLoad ||
                         reconciled.version > current.version ||
-                        (reconciled.version == current.version && reconciled.updatedAt >= current.updatedAt))
-                if (isNewerOrEqualReconciled) {
+                        (reconciled.version == current.version &&
+                            (reconciled.updatedAt > current.updatedAt ||
+                                (noConcurrentUpdate && reconciled.updatedAt >= current.updatedAt))))
+                val didAdopt = if (isNewerOrEqualReconciled) {
                     _currentPolicyFlow.value = reconciled
                     PageShieldAccessibilityHook.getInstance().updateConfig(reconciled.pageShieldConfig)
                     SelfControlAccessGateRegistry.isSelfControlAllowedWhenSupervised = reconciled.isSelfControlAllowed
@@ -111,19 +114,22 @@ class PolicyRepository(
                     true
                 } else {
                     false
-                }.also { isInitialPolicyLoaded = true }
+                }
+                isInitialPolicyLoaded = true
+                didAdopt
             }
             val effectivePolicy = _currentPolicyFlow.value
             if (adopted || effectivePolicy != initialPolicy) {
                 runCatching { PageShieldAccessibilityHook.getInstance().updateConfig(effectivePolicy.pageShieldConfig) }
-                    .onFailure { Log.w(TAG, "Failed updating PageShield config after cold-start Room reconcile", it) }
+                    .onFailure { Timber.tag(TAG).w(it, "Failed updating PageShield config after cold-start Room reconcile") }
                 runCatching { WaqfaSessionManager.getInstance(appContext).updateConfig(effectivePolicy.waqfaConfig) }
-                    .onFailure { Log.w(TAG, "Failed updating Waqfa config after cold-start Room reconcile", it) }
+                    .onFailure { Timber.tag(TAG).w(it, "Failed updating Waqfa config after cold-start Room reconcile") }
                 runCatching { AccessibilityPolicyCoordinator.reconcile(appContext, effectivePolicy) }
-                    .onFailure { Log.w(TAG, "Failed reconciling accessibility after cold-start Room reconcile", it) }
+                    .onFailure { Timber.tag(TAG).w(it, "Failed reconciling accessibility after cold-start Room reconcile") }
             }
             if (adopted) {
                 remoteTeardownHandler.checkAndApplyRemoteSelfControlReset(reconciled)
+                RemoteModeUnlockHandler.checkAndApplyRemoteModeUnlock(appContext, reconciled)
             }
         }
 
@@ -139,11 +145,11 @@ class PolicyRepository(
     }
 
     private fun safeLogInfo(message: String) {
-        try { Log.i(TAG, message) } catch (_: RuntimeException) {}
+        Timber.tag(TAG).i("%s", message)
     }
 
     private fun safeLogWarn(message: String) {
-        try { Log.w(TAG, message) } catch (_: RuntimeException) {}
+        Timber.tag(TAG).w("%s", message)
     }
 
     private fun loadFastPolicyFromCache(): DevicePolicyBundle? {
@@ -153,13 +159,13 @@ class PolicyRepository(
             if (!cachedJson.isNullOrBlank()) {
                 val parsed = DevicePolicyBundle.fromJsonOrNull(cachedJson)
                 if (parsed != null) {
-                    Log.d(TAG, "Fast synchronous policy loaded from SharedPreferences cache (version=${parsed.version})")
+                    Timber.tag(TAG).d("Fast synchronous policy loaded from SharedPreferences cache (version=%d)", parsed.version)
                     return parsed
                 }
-                Log.w(TAG, "Corrupted fast policy cache JSON; awaiting asynchronous Room reconcile")
+                Timber.tag(TAG).w("Corrupted fast policy cache JSON; awaiting asynchronous Room reconcile")
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed reading fast policy cache from SharedPreferences", e)
+            Timber.tag(TAG).w(e, "Failed reading fast policy cache from SharedPreferences")
         }
         return null
     }
@@ -172,7 +178,7 @@ class PolicyRepository(
                 putString(KEY_CACHED_POLICY_JSON, bundle.toJson())
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed saving policy to fast SharedPreferences cache", e)
+            Timber.tag(TAG).w(e, "Failed saving policy to fast SharedPreferences cache")
         }
     }
 
@@ -180,7 +186,7 @@ class PolicyRepository(
         val seq = persistSequence.incrementAndGet()
         val sendResult = roomSaveChannel.trySend(seq to bundle)
         if (!sendResult.isSuccess) {
-            Log.w(TAG, "Policy persistence channel unavailable; writing asynchronously on IO")
+            Timber.tag(TAG).w("Policy persistence channel unavailable; writing asynchronously on IO")
             repositoryScope.launch {
                 persistPolicyBundle(seq, bundle)
             }
@@ -190,7 +196,7 @@ class PolicyRepository(
     private suspend fun persistPolicyBundle(seq: Long, bundle: DevicePolicyBundle) {
         policyPersistMutex.withLock {
             if (seq < persistSequence.get()) {
-                Log.d(TAG, "Skipping superseded disk persistence for policy v${bundle.version} (seq=$seq < ${persistSequence.get()})")
+                Timber.tag(TAG).d("Skipping superseded disk persistence for policy v%d (seq=%d < %d)", bundle.version, seq, persistSequence.get())
                 return@withLock
             }
             saveFastPolicyCache(bundle, syncCommit = true)
@@ -198,7 +204,7 @@ class PolicyRepository(
                 policyDao.saveDevicePolicyBlocking(DevicePolicyEntity.fromBundle(bundle))
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                Log.e(TAG, "Failed persisting device policy v${bundle.version} to Room", e)
+                Timber.tag(TAG).e(e, "Failed persisting device policy v%d to Room", bundle.version)
             }
         }
     }
@@ -209,7 +215,7 @@ class PolicyRepository(
             val hasGuardians = try {
                 partnerDao.getPartnersByRoleBlocking(PartnerEntity.ROLE_GUARDIAN).isNotEmpty()
             } catch (e: Exception) {
-                Log.w(TAG, "Failed checking guardians in SQLite during cold boot reconcile", e)
+                Timber.tag(TAG).w(e, "Failed checking guardians in SQLite during cold boot reconcile")
                 false
             }
             if (loaded.isSupervised && !loaded.guardianUid.isNullOrBlank() && !hasGuardians) {
@@ -224,9 +230,9 @@ class PolicyRepository(
                         lastSyncAt = loaded.updatedAt
                     )
                     partnerDao.savePartnerBlocking(guardian)
-                    Log.i(TAG, "Reconciled missing guardian in SQLite on cold boot: ${AiTelemetryReporter.maskIdentifier(loaded.guardianName)}")
+                    Timber.tag(TAG).i("Reconciled missing guardian in SQLite on cold boot: %s", AiTelemetryReporter.maskIdentifier(loaded.guardianName))
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed reconciling missing guardian in SQLite", e)
+                    Timber.tag(TAG).e(e, "Failed reconciling missing guardian in SQLite")
                 }
             }
 
@@ -236,15 +242,24 @@ class PolicyRepository(
                 workingPolicy = workingPolicy.copy(isVpnBlackholeEnabled = CurfewConfig.DEFAULT_VPN_BLACKHOLE_ENABLED)
                 needsSave = true
             }
+            if (!hasGuardians &&
+                !workingPolicy.isSupervised &&
+                workingPolicy.guardianUid.isNullOrBlank() &&
+                !workingPolicy.hasAllSelfControlPermissionsEnabled()
+            ) {
+                workingPolicy = workingPolicy.withAllSelfControlPermissionsEnabled()
+                needsSave = true
+            }
             if (needsSave) {
                 val reconciled = workingPolicy.copy(updatedAt = TrustedTimeProvider.currentTimeMillis(appContext))
-                Log.i(TAG, "Prepared standalone device policy reconciliation on cold boot (version=${reconciled.version})")
+                Timber.tag(TAG).i("Prepared standalone device policy reconciliation on cold boot (version=%d)", reconciled.version)
                 reconciled to true
             } else {
                 loaded to false
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error in loadAndReconcilePolicy", e)
+            if (e is CancellationException) throw e
+            Timber.tag(TAG).e(e, "Error in loadAndReconcilePolicy")
             initialPolicy to false
         }
     }
@@ -279,14 +294,27 @@ class PolicyRepository(
     }
 
     fun updateLocalPolicyAndEnforce(bundle: DevicePolicyBundle, forceSovereignOverride: Boolean = false): Boolean {
+        var shouldTeardown = false
         val currentBeforeUpdate = synchronized(policyStateLock) {
             val current = _currentPolicyFlow.value
-            Log.i(TAG, "[SelfControlDiag] updateLocalPolicyAndEnforce: v${bundle.version}, isSupervised=${bundle.isSupervised}, isSelfControlAllowed=${bundle.isSelfControlAllowed}, forceOverride=$forceSovereignOverride")
+            Timber.tag(TAG).i(
+                "[SelfControlDiag] updateLocalPolicyAndEnforce: v%d, isSupervised=%b, isSelfControlAllowed=%b, forceOverride=%b",
+                bundle.version,
+                bundle.isSupervised,
+                bundle.isSelfControlAllowed,
+                forceSovereignOverride
+            )
             val isBreakoutStatusChange = bundle.breakoutStatus != current.breakoutStatus || bundle.deactivationStatus != current.deactivationStatus
             if (!forceSovereignOverride &&
                 (bundle.version < current.version || (!isBreakoutStatusChange && bundle.version == current.version && bundle.updatedAt < current.updatedAt))
             ) {
-                Log.w(TAG, "Monotonic guard: rejected stale/out-of-order policy v${bundle.version}@${bundle.updatedAt} (current is v${current.version}@${current.updatedAt})")
+                Timber.tag(TAG).w(
+                    "Monotonic guard: rejected stale/out-of-order policy v%d@%d (current is v%d@%d)",
+                    bundle.version,
+                    bundle.updatedAt,
+                    current.version,
+                    current.updatedAt
+                )
                 return@synchronized null to current
             }
             _currentPolicyFlow.value = bundle
@@ -294,13 +322,7 @@ class PolicyRepository(
             schedulePolicyPersistenceLocked(bundle)
             val lastProcessedTeardown = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .getLong(KEY_LAST_PROCESSED_REMOTE_TEARDOWN_AT, 0L)
-            if (shouldExecuteGuardianTeardown(bundle, lastProcessedTeardown)) {
-                repositoryScope.launch {
-                    checkAndExecutePendingGuardianTeardown(bundle)
-                }
-            } else {
-                enforcementHandler.enqueueApply(bundle, current)
-            }
+            shouldTeardown = shouldExecuteGuardianTeardown(bundle, lastProcessedTeardown)
             current to current
         }
 
@@ -314,6 +336,14 @@ class PolicyRepository(
                 error = "Monotonic guard reject: incoming v${bundle.version}@${bundle.updatedAt} < current v${current.version}@${current.updatedAt}"
             )
             return false
+        }
+        if (shouldTeardown) {
+            repositoryScope.launch {
+                checkAndExecutePendingGuardianTeardown(bundle)
+            }
+        } else {
+            RemoteModeUnlockHandler.checkAndApplyRemoteModeUnlock(appContext, bundle)
+            enforcementHandler.enqueueApply(bundle, previous)
         }
         recordAndHandleSupervisionChange(bundle, previous)
         remoteTeardownHandler.checkAndApplyRemoteSelfControlReset(bundle)
@@ -329,14 +359,14 @@ class PolicyRepository(
         )
 
         if (previous.isSupervised && !bundle.isSupervised) {
-            Log.i(TAG, "Supervision revocation detected in updateLocalPolicyAndEnforce! Restoring standalone mode...")
+            Timber.tag(TAG).i("Supervision revocation detected in updateLocalPolicyAndEnforce! Restoring standalone mode...")
             repositoryScope.launch {
                 try {
                     AccountabilityRepository.getInstance(appContext).onSupervisionRevokedLocally()
                     ApprovalRepository.getInstance(appContext).stopApprovalsSync()
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
-                    Log.e(TAG, "Error cleaning up supervision state on revocation", e)
+                    Timber.tag(TAG).e(e, "Error cleaning up supervision state on revocation")
                 }
             }
         }
@@ -378,6 +408,7 @@ class PolicyRepository(
         mergeAndSaveSelfPolicyPatch { bundle } != null
 
     suspend fun mergeAndSaveSelfPolicyPatch(
+        awaitCloudSync: Boolean = false,
         transform: (DevicePolicyBundle) -> DevicePolicyBundle
     ): DevicePolicyBundle? = withContext(Dispatchers.IO) {
         try {
@@ -385,14 +416,19 @@ class PolicyRepository(
                 AccountabilityRepository.getInstance(appContext).isSupervised()
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                Log.w(TAG, "Failed to query accountability supervision in mergeAndSaveSelfPolicyPatch", e)
+                Timber.tag(TAG).w(e, "Failed to query accountability supervision in mergeAndSaveSelfPolicyPatch")
                 false
             }
             val acceptedPair = synchronized(policyStateLock) {
                 val current = _currentPolicyFlow.value
                 val bundle = transform(current)
                 val isSupervised = current.isSupervised || bundle.isSupervised || repoSupervised
-                Log.i(TAG, "[SelfControlDiag] saveAndEnforceSelfPolicy called: isSupervised=$isSupervised, current.isSelfControlAllowed=${current.isSelfControlAllowed}, bundle.isSelfControlAllowed=${bundle.isSelfControlAllowed}")
+                Timber.tag(TAG).i(
+                    "[SelfControlDiag] saveAndEnforceSelfPolicy called: isSupervised=%b, current.isSelfControlAllowed=%b, bundle.isSelfControlAllowed=%b",
+                    isSupervised,
+                    current.isSelfControlAllowed,
+                    bundle.isSelfControlAllowed
+                )
 
                 if (isSupervised && (!current.isSelfControlAllowed || !bundle.isSelfControlAllowed)) {
                     null
@@ -407,7 +443,12 @@ class PolicyRepository(
                         selfControlAppsAllowed = current.selfControlAppsAllowed,
                         selfControlWaqfaAllowed = current.selfControlWaqfaAllowed,
                         selfControlPageShieldAllowed = current.selfControlPageShieldAllowed,
-                        selfControlNewAppsAllowed = current.selfControlNewAppsAllowed
+                        selfControlNewAppsAllowed = current.selfControlNewAppsAllowed,
+                        selfControlFortressesAllowed = current.selfControlFortressesAllowed,
+                        selfControlFortressUnlockAllowed = current.selfControlFortressUnlockAllowed,
+                        selfControlOtherSettingsAllowed = current.selfControlOtherSettingsAllowed,
+                        remoteModeUnlockTarget = current.remoteModeUnlockTarget,
+                        remoteModeUnlockRequestedAt = current.remoteModeUnlockRequestedAt
                     )
                     if (isSupervised) {
                         sanitized = sanitizeSupervisedSelfPolicy(sanitized, current)
@@ -415,6 +456,7 @@ class PolicyRepository(
 
                     val now = TrustedTimeProvider.currentTimeMillis(appContext)
                     val newPolicy = sanitized.copy(
+                        fortressesConfig = sanitized.fortressesConfig.normalized(),
                         guardianPolicySnapshot = if (isSupervised) (current.guardianPolicySnapshot ?: current.toJson()) else null,
                         lastSelfModifiedAt = if (isSupervised) now else null,
                         version = current.version + 1,
@@ -429,7 +471,7 @@ class PolicyRepository(
             }
 
             if (acceptedPair == null) {
-                Log.w(TAG, "[SelfControlDiag] saveAndEnforceSelfPolicy REJECTED: self-control is disabled by supervisor!")
+                Timber.tag(TAG).w("[SelfControlDiag] saveAndEnforceSelfPolicy REJECTED: self-control is disabled by supervisor!")
                 BlackBoxRecorder.recordGate(
                     appContext,
                     "SELF_CONTROL_SAVE_REJECTED",
@@ -448,11 +490,57 @@ class PolicyRepository(
                 details = "v${updated.version}, curfew=${updated.isCurfewEnabled}(${updated.curfewStartHour}:${updated.curfewStartMinute})"
             )
             val myUid = AccountabilityRepository.getInstance(appContext).getCachedUid()
+            val syncJob = cloudSyncBridge.syncPolicyToCloudAsync(myUid, updated)
+            if (awaitCloudSync) {
+                syncJob?.join()
+            }
+            updated
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Timber.tag(TAG).e(e, "Error in mergeAndSaveSelfPolicyPatch")
+            null
+        }
+    }
+
+    /**
+     * Approves local VPN DNS fallback on this device without weakening any existing
+     * restriction, allowing supervised wards to grant 1-tap resilience consent offline.
+     */
+    suspend fun approveLocalVpnFallbackLocally(): DevicePolicyBundle? = withContext(Dispatchers.IO) {
+        try {
+            var alreadyEnabled: DevicePolicyBundle? = null
+            val acceptedPair = synchronized(policyStateLock) {
+                val current = _currentPolicyFlow.value
+                if (current.isLocalVpnFallbackEnabled) {
+                    alreadyEnabled = current
+                    null
+                } else {
+                    val newPolicy = current.copy(
+                        isLocalVpnFallbackEnabled = true,
+                        version = current.version + 1,
+                        updatedAt = TrustedTimeProvider.currentTimeMillis(appContext)
+                    )
+                    _currentPolicyFlow.value = newPolicy
+                    schedulePolicyPersistenceLocked(newPolicy)
+                    enforcementHandler.enqueueApply(newPolicy, current)
+                    current to newPolicy
+                }
+            }
+            if (alreadyEnabled != null) return@withContext alreadyEnabled
+
+            val (_, updated) = acceptedPair ?: return@withContext null
+            BlackBoxRecorder.recordGate(
+                appContext,
+                "LOCAL_VPN_FALLBACK_APPROVED",
+                isSuccess = true,
+                details = "v${updated.version}, supervised=${updated.isSupervised}"
+            )
+            val myUid = AccountabilityRepository.getInstance(appContext).getCachedUid()
             cloudSyncBridge.syncPolicyToCloudAsync(myUid, updated)
             updated
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            Log.e(TAG, "Error in mergeAndSaveSelfPolicyPatch", e)
+            Timber.tag(TAG).e(e, "Error in approveLocalVpnFallbackLocally")
             null
         }
     }
@@ -463,9 +551,6 @@ class PolicyRepository(
         current: DevicePolicyBundle
     ): DevicePolicyBundle {
         var sanitized = bundle.copy(
-            isDateTimeLocked = current.isDateTimeLocked,
-            isClearAppDataAllowed = current.isClearAppDataAllowed,
-            timeZoneId = current.timeZoneId,
             screenAiSchemaVersion = maxOf(
                 current.screenAiSchemaVersion,
                 DevicePolicyBundle.CURRENT_SCREEN_AI_SCHEMA_VERSION
@@ -478,8 +563,18 @@ class PolicyRepository(
             deactivationUnlockAt = current.deactivationUnlockAt,
             deactivationHasQr = current.deactivationHasQr,
             remoteSelfControlResetRequestedAt = current.remoteSelfControlResetRequestedAt,
-            remoteTeardownRequestedAt = current.remoteTeardownRequestedAt
+            remoteTeardownRequestedAt = current.remoteTeardownRequestedAt,
+            remoteModeUnlockTarget = current.remoteModeUnlockTarget,
+            remoteModeUnlockRequestedAt = current.remoteModeUnlockRequestedAt
         )
+        if (!current.selfControlOtherSettingsAllowed) {
+            sanitized = sanitized.copy(
+                isDateTimeLocked = current.isDateTimeLocked,
+                isClearAppDataAllowed = current.isClearAppDataAllowed,
+                timeZoneId = current.timeZoneId,
+                isInstantInternetKillEnabled = current.isInstantInternetKillEnabled
+            )
+        }
         if (!current.selfControlCurfewAllowed) {
             sanitized = sanitized.copy(
                 curfewStartHour = current.curfewStartHour,
@@ -493,7 +588,9 @@ class PolicyRepository(
                 weekendCurfewStartMinute = current.weekendCurfewStartMinute,
                 weekendCurfewEndHour = current.weekendCurfewEndHour,
                 weekendCurfewEndMinute = current.weekendCurfewEndMinute,
-                isVpnBlackholeEnabled = current.isVpnBlackholeEnabled
+                isVpnBlackholeEnabled = current.isVpnBlackholeEnabled,
+                customCurfewWhitelistPackages = current.customCurfewWhitelistPackages,
+                curfewVpnBypassPackages = current.curfewVpnBypassPackages
             )
         }
         if (!current.selfControlWebAllowed) {
@@ -505,6 +602,7 @@ class PolicyRepository(
                 dnsHost = current.dnsHost,
                 isYouTubeRestrictedModeEnabled = current.isYouTubeRestrictedModeEnabled,
                 isAdBlockingEnabled = current.isAdBlockingEnabled,
+                isLocalVpnFallbackEnabled = current.isLocalVpnFallbackEnabled,
                 isTelegramWebBlocked = current.isTelegramWebBlocked,
                 isIncognitoBlocked = current.isIncognitoBlocked,
                 isBlockExternalVpnEnabled = current.isBlockExternalVpnEnabled
@@ -514,10 +612,8 @@ class PolicyRepository(
             sanitized = sanitized.copy(
                 isScreenAiEnabledGlobally = current.isScreenAiEnabledGlobally,
                 customBlacklistPackages = current.customBlacklistPackages,
-                customCurfewWhitelistPackages = current.customCurfewWhitelistPackages,
                 customAiScanPackages = current.customAiScanPackages,
                 excludedAiScanPackages = current.excludedAiScanPackages,
-                curfewVpnBypassPackages = current.curfewVpnBypassPackages,
                 protectedAppPackages = current.protectedAppPackages
             )
         }
@@ -529,6 +625,9 @@ class PolicyRepository(
         }
         if (!current.selfControlNewAppsAllowed) {
             sanitized = sanitized.copy(lockNewInstallsUntilApproved = current.lockNewInstallsUntilApproved)
+        }
+        if (!current.selfControlFortressesAllowed) {
+            sanitized = sanitized.copy(fortressesConfig = current.fortressesConfig)
         }
         return sanitized
     }
@@ -545,7 +644,6 @@ class PolicyRepository(
                 } else if (AppPolicyRegistry.isRestrictedBrowser(packageName) ||
                     CurfewConfig.KNOWN_APP_STORES.contains(packageName) ||
                     CurfewConfig.CURFEW_SEARCH_APPS.contains(packageName) ||
-                    AppPolicyRegistry.isHighRisk(packageName) ||
                     current.customBlacklistPackages.contains(packageName)
                 ) {
                     null
@@ -565,7 +663,7 @@ class PolicyRepository(
 
             if (alreadyWhitelisted) return@withContext true
             if (acceptedPair == null) {
-                Log.w(TAG, "Refusing to add restricted or blacklisted package to curfew whitelist: $packageName")
+                Timber.tag(TAG).w("Refusing to add restricted or blacklisted package to curfew whitelist: %s", packageName)
                 return@withContext false
             }
 
@@ -573,11 +671,11 @@ class PolicyRepository(
             recordAndHandleSupervisionChange(updated, previous)
             val myUid = AccountabilityRepository.getInstance(appContext).getCachedUid()
             cloudSyncBridge.syncPolicyToCloudAsync(myUid, updated)
-            Log.i(TAG, "Auto-whitelisted new Islamic/productive app in curfew: $packageName")
+            Timber.tag(TAG).i("Auto-whitelisted new Islamic/productive app in curfew: %s", packageName)
             true
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            Log.e(TAG, "Failed auto-whitelisting app $packageName in curfew", e)
+            Timber.tag(TAG).e(e, "Failed auto-whitelisting app %s in curfew", packageName)
             false
         }
     }
@@ -611,6 +709,7 @@ class PolicyRepository(
         const val KEY_CACHED_POLICY_JSON = "cached_policy_json"
         const val KEY_LAST_PROCESSED_REMOTE_RESET_AT = "last_processed_remote_reset_at"
         const val KEY_LAST_PROCESSED_REMOTE_TEARDOWN_AT = "last_processed_remote_teardown_at"
+        const val KEY_LAST_PROCESSED_REMOTE_MODE_UNLOCK_AT = "last_processed_remote_mode_unlock_at"
 
         @VisibleForTesting
         internal fun shouldExecuteGuardianTeardown(

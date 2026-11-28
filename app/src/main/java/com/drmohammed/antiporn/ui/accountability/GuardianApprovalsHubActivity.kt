@@ -1,4 +1,4 @@
-package com.drmohammed.antiporn.ui.accountability
+﻿package com.drmohammed.antiporn.ui.accountability
 
 import android.content.Intent
 import android.os.Bundle

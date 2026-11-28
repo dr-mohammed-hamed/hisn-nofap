@@ -85,6 +85,9 @@ class WebFilterViewModel(
     @VisibleForTesting
     internal var coroutineScopeOverride: CoroutineScope? = null
 
+    @VisibleForTesting
+    internal var selfPolicyPatchSaver: (suspend ((DevicePolicyBundle) -> DevicePolicyBundle) -> DevicePolicyBundle?)? = null
+
     private val workScope: CoroutineScope
         get() = coroutineScopeOverride ?: viewModelScope
 
@@ -108,7 +111,31 @@ class WebFilterViewModel(
         return true
     }
 
+    @VisibleForTesting
+    internal interface SavedStateAccessor {
+        fun getString(key: String, defaultValue: String): String
+        fun getBoolean(key: String, defaultValue: Boolean): Boolean
+        fun getStringArrayList(key: String): ArrayList<String>?
+        fun putString(key: String, value: String)
+        fun putBoolean(key: String, value: Boolean)
+        fun putStringArrayList(key: String, value: ArrayList<String>)
+    }
+
+    private class BundleSavedStateAccessor(private val bundle: Bundle) : SavedStateAccessor {
+        override fun getString(key: String, defaultValue: String): String = bundle.getString(key, defaultValue)
+        override fun getBoolean(key: String, defaultValue: Boolean): Boolean = bundle.getBoolean(key, defaultValue)
+        override fun getStringArrayList(key: String): ArrayList<String>? = bundle.getStringArrayList(key)
+        override fun putString(key: String, value: String) = bundle.putString(key, value)
+        override fun putBoolean(key: String, value: Boolean) = bundle.putBoolean(key, value)
+        override fun putStringArrayList(key: String, value: ArrayList<String>) = bundle.putStringArrayList(key, value)
+    }
+
     fun restoreFromSavedState(state: Bundle) {
+        restoreFromSavedState(BundleSavedStateAccessor(state))
+    }
+
+    @VisibleForTesting
+    internal fun restoreFromSavedState(state: SavedStateAccessor) {
         if (isRestoredFromSavedState) return
         isRestoredFromSavedState = true
         _uiState.update { current ->
@@ -122,6 +149,7 @@ class WebFilterViewModel(
                 isYouTubeRestricted = state.getBoolean(STATE_YOUTUBE_RESTRICTED, current.isYouTubeRestricted),
                 isFullSystemFiltering = state.getBoolean(STATE_FULL_SYSTEM_FILTERING, current.isFullSystemFiltering),
                 isAdBlocking = state.getBoolean(STATE_AD_BLOCKING, current.isAdBlocking),
+                isLocalVpnFallbackEnabled = state.getBoolean(STATE_LOCAL_VPN_FALLBACK, current.isLocalVpnFallbackEnabled),
                 isBlockExternalVpn = state.getBoolean(STATE_BLOCK_EXTERNAL_VPN, current.isBlockExternalVpn),
                 isWhitelistOnlyMode = state.getBoolean(STATE_WHITELIST_ONLY, current.isWhitelistOnlyMode),
                 blockedUrls = restoredBlocked,
@@ -132,6 +160,11 @@ class WebFilterViewModel(
     }
 
     fun writeToSavedState(outState: Bundle) {
+        writeToSavedState(BundleSavedStateAccessor(outState))
+    }
+
+    @VisibleForTesting
+    internal fun writeToSavedState(outState: SavedStateAccessor) {
         val state = _uiState.value
         outState.putString(STATE_DNS_HOST, state.dnsHost)
         outState.putBoolean(STATE_INCOGNITO_BLOCKED, state.isIncognitoBlocked)
@@ -139,6 +172,7 @@ class WebFilterViewModel(
         outState.putBoolean(STATE_YOUTUBE_RESTRICTED, state.isYouTubeRestricted)
         outState.putBoolean(STATE_FULL_SYSTEM_FILTERING, state.isFullSystemFiltering)
         outState.putBoolean(STATE_AD_BLOCKING, state.isAdBlocking)
+        outState.putBoolean(STATE_LOCAL_VPN_FALLBACK, state.isLocalVpnFallbackEnabled)
         outState.putBoolean(STATE_BLOCK_EXTERNAL_VPN, state.isBlockExternalVpn)
         outState.putBoolean(STATE_WHITELIST_ONLY, state.isWhitelistOnlyMode)
         outState.putStringArrayList(STATE_BLOCKED_URLS, ArrayList(state.blockedUrls))
@@ -191,6 +225,10 @@ class WebFilterViewModel(
 
     fun setAdBlocking(enabled: Boolean) {
         _uiState.update { it.copy(isAdBlocking = enabled) }
+    }
+
+    fun setLocalVpnFallbackEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(isLocalVpnFallbackEnabled = enabled) }
     }
 
     fun refreshUnaffiliatedStatusAsync() {
@@ -307,9 +345,10 @@ class WebFilterViewModel(
                 applyWebFields(basePolicy, state, dnsToSave, filterMode)
             }
         } else {
-            policyRepository.mergeAndSaveSelfPolicyPatch { basePolicy ->
+            val patch: (DevicePolicyBundle) -> DevicePolicyBundle = { basePolicy ->
                 applyWebFields(basePolicy, state, dnsToSave, filterMode)
             }
+            selfPolicyPatchSaver?.invoke(patch) ?: policyRepository.mergeAndSaveSelfPolicyPatch(transform = patch)
         }
     }
 
@@ -325,6 +364,13 @@ class WebFilterViewModel(
         isYouTubeRestrictedModeEnabled = state.isYouTubeRestricted,
         isFullSystemFilteringEnabled = state.isFullSystemFiltering,
         isAdBlockingEnabled = state.isAdBlocking,
+        isLocalVpnFallbackEnabled = if (!state.isRemote &&
+            state.isLocalVpnFallbackEnabled == state.initialPolicy.isLocalVpnFallbackEnabled
+        ) {
+            basePolicy.isLocalVpnFallbackEnabled
+        } else {
+            state.isLocalVpnFallbackEnabled
+        },
         isBlockExternalVpnEnabled = state.isBlockExternalVpn,
         customBlockedUrls = state.blockedUrls,
         customAllowedUrls = state.allowedUrls,
@@ -363,6 +409,7 @@ class WebFilterViewModel(
         private const val STATE_YOUTUBE_RESTRICTED = "vm_state_youtube_restricted"
         private const val STATE_FULL_SYSTEM_FILTERING = "vm_state_full_system_filtering"
         private const val STATE_AD_BLOCKING = "vm_state_ad_blocking"
+        private const val STATE_LOCAL_VPN_FALLBACK = "vm_state_local_vpn_fallback"
         private const val STATE_BLOCK_EXTERNAL_VPN = "vm_state_block_external_vpn"
         private const val STATE_WHITELIST_ONLY = "vm_state_whitelist_only"
         private const val STATE_BLOCKED_URLS = "vm_state_blocked_urls"

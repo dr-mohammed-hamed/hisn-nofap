@@ -3,17 +3,20 @@ package com.drmohammed.antiporn.data.repository
 import android.app.Application
 import android.content.Context
 import android.content.SharedPreferences
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.content.res.Resources
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
 import com.drmohammed.antiporn.data.local.db.dao.InAppNotificationDao
-import com.drmohammed.antiporn.data.local.db.dao.PendingApprovalDao
 import com.drmohammed.antiporn.data.local.db.entity.InAppNotificationEntity
 import com.drmohammed.antiporn.data.local.db.entity.PendingApprovalEntity
 import com.drmohammed.antiporn.notification.manager.AppNotificationManager
 import com.drmohammed.antiporn.notification.repository.NotificationRepository
+import com.drmohammed.antiporn.testing.FakeTestPendingApprovalDao
+import com.drmohammed.antiporn.testing.InMemoryTestSharedPreferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -37,7 +40,7 @@ import org.junit.Test
 class ApprovalSelfControlTest {
 
     private lateinit var fakeContext: FakeContext
-    private lateinit var fakeDao: FakePendingApprovalDao
+    private lateinit var fakeDao: FakeTestPendingApprovalDao
     private lateinit var repo: ApprovalRepository
     private lateinit var notifScope: CoroutineScope
 
@@ -60,7 +63,7 @@ class ApprovalSelfControlTest {
         TrustedTimeProvider.resetForTesting()
 
         fakeContext = FakeContext()
-        fakeDao = FakePendingApprovalDao()
+        fakeDao = FakeTestPendingApprovalDao()
 
         notifScope = CoroutineScope(Dispatchers.Unconfined + SupervisorJob())
         val fakeNotifRepo = NotificationRepository(NoOpInAppNotificationDao(), notifScope)
@@ -362,135 +365,287 @@ class ApprovalSelfControlTest {
         assertTrue(afterSync?.isCloudSynced == true)
     }
 
-    private class FakePendingApprovalDao : PendingApprovalDao {
-        private val lock = Any()
-        private val store = linkedMapOf<String, PendingApprovalEntity>()
-        private val flow = MutableStateFlow<List<PendingApprovalEntity>>(emptyList())
-
-        private fun snapshotSortedDesc(): List<PendingApprovalEntity> =
-            store.values.sortedByDescending { it.requestedAt }
-
-        private fun emitLocked() {
-            flow.value = snapshotSortedDesc()
-        }
-
-        override fun getPendingApprovalsFlow(): Flow<List<PendingApprovalEntity>> = flow.asStateFlow()
-
-        override suspend fun getPendingApprovals(): List<PendingApprovalEntity> = getPendingApprovalsBlocking()
-
-        override fun getPendingApprovalsBlocking(): List<PendingApprovalEntity> = synchronized(lock) {
-            snapshotSortedDesc()
-        }
-
-        override suspend fun getActualPendingApprovals(): List<PendingApprovalEntity> = getActualPendingApprovalsBlocking()
-
-        override fun getActualPendingApprovalsBlocking(): List<PendingApprovalEntity> = synchronized(lock) {
-            store.values
-                .filter { it.status == PendingApprovalEntity.STATUS_PENDING || it.status == PendingApprovalEntity.STATUS_FALLBACK_HIDDEN }
-                .sortedByDescending { it.requestedAt }
-        }
-
-        override suspend fun getUnsyncedApprovals(): List<PendingApprovalEntity> = getUnsyncedApprovalsBlocking()
-
-        override fun getUnsyncedApprovalsBlocking(): List<PendingApprovalEntity> = synchronized(lock) {
-            store.values.filter { !it.isCloudSynced }.sortedBy { it.requestedAt }
-        }
-
-        override suspend fun getApprovalByPackageName(packageName: String): PendingApprovalEntity? =
-            getApprovalByPackageNameBlocking(packageName)
-
-        override fun getApprovalByPackageNameBlocking(packageName: String): PendingApprovalEntity? = synchronized(lock) {
-            store[packageName]
-        }
-
-        override suspend fun savePendingApproval(approval: PendingApprovalEntity) =
-            savePendingApprovalBlocking(approval)
-
-        override fun savePendingApprovalBlocking(approval: PendingApprovalEntity) = synchronized(lock) {
-            store[approval.packageName] = approval
-            emitLocked()
-        }
-
-        override suspend fun savePendingApprovals(approvals: List<PendingApprovalEntity>) =
-            savePendingApprovalsBlocking(approvals)
-
-        override fun savePendingApprovalsBlocking(approvals: List<PendingApprovalEntity>) = synchronized(lock) {
-            for (approval in approvals) {
-                store[approval.packageName] = approval
-            }
-            emitLocked()
-        }
-
-        override suspend fun updateApprovalStatus(
-            packageName: String,
-            status: String,
-            decidedBy: String?,
-            decidedAt: Long,
-            isSynced: Int
-        ): Int = updateApprovalStatusBlocking(packageName, status, decidedBy, decidedAt, isSynced)
-
-        override fun updateApprovalStatusBlocking(
-            packageName: String,
-            status: String,
-            decidedBy: String?,
-            decidedAt: Long,
-            isSynced: Int
-        ): Int = synchronized(lock) {
-            val existing = store[packageName] ?: return 0
-            store[packageName] = existing.copy(
-                status = status,
-                decidedBy = decidedBy,
-                decidedAt = decidedAt,
-                isCloudSynced = isSynced == 1
+    @Test
+    fun selfRejected_allowsSelfApprovalWithoutOverrideRejected() {
+        fakeDao.savePendingApprovalBlocking(
+            PendingApprovalEntity(
+                packageName = "com.self.rejected.app",
+                appName = "Self Rejected App",
+                requestedAt = 1000L,
+                status = PendingApprovalEntity.STATUS_REJECTED,
+                decidedBy = "SELF",
+                decidedAt = 1500L,
+                isCloudSynced = true
             )
-            emitLocked()
-            1
+        )
+
+        val result = repo.unsuspendAndApprove(
+            packageName = "com.self.rejected.app",
+            decidedBy = "SELF",
+            syncToCloud = true,
+            overrideRejected = false
+        )
+
+        assertEquals(ApprovalDecisionResult.APPROVED, result)
+        assertEquals(listOf(listOf("com.self.rejected.app")), dpmUnsuspendCalls)
+        val stored = fakeDao.getApprovalByPackageNameBlocking("com.self.rejected.app")
+        assertNotNull(stored)
+        assertEquals(PendingApprovalEntity.STATUS_APPROVED, stored?.status)
+        assertEquals("SELF", stored?.decidedBy)
+    }
+
+    @Test
+    fun guardianRejected_allowsSelfApprovalFromAppManagerWhenOverrideRejectedTrueAndSelfControlAppsAllowed() {
+        repo.policyProvider = {
+            DevicePolicyBundle.defaultPolicy().copy(
+                isSupervised = true,
+                guardianUid = "guardian_1",
+                isSelfControlAllowed = true,
+                selfControlNewAppsAllowed = false,
+                selfControlAppsAllowed = true
+            )
         }
+        fakeDao.savePendingApprovalBlocking(
+            PendingApprovalEntity(
+                packageName = "com.guardian.rejected.app",
+                appName = "Guardian Rejected App",
+                requestedAt = 1000L,
+                status = PendingApprovalEntity.STATUS_REJECTED,
+                decidedBy = "GuardianAlice",
+                decidedAt = 1500L,
+                isCloudSynced = true
+            )
+        )
 
-        override suspend fun markApprovalCloudSynced(packageName: String, isSynced: Int): Int =
-            markApprovalCloudSyncedBlocking(packageName, isSynced)
+        val result = repo.unsuspendAndApprove(
+            packageName = "com.guardian.rejected.app",
+            decidedBy = "SELF",
+            syncToCloud = true,
+            overrideRejected = true
+        )
 
-        override fun markApprovalCloudSyncedBlocking(packageName: String, isSynced: Int): Int = synchronized(lock) {
-            val existing = store[packageName] ?: return 0
-            store[packageName] = existing.copy(isCloudSynced = isSynced == 1)
-            emitLocked()
-            1
-        }
+        assertEquals(ApprovalDecisionResult.APPROVED, result)
+        assertEquals(listOf(listOf("com.guardian.rejected.app")), dpmUnsuspendCalls)
+        val stored = fakeDao.getApprovalByPackageNameBlocking("com.guardian.rejected.app")
+        assertNotNull(stored)
+        assertEquals(PendingApprovalEntity.STATUS_APPROVED, stored?.status)
+        assertEquals("SELF", stored?.decidedBy)
+    }
 
-        override fun markApprovalCloudSyncedIfMatchingBlocking(
-            packageName: String,
-            expectedStatus: String,
-            expectedDecidedAt: Long?,
-            isSynced: Int
-        ): Int = synchronized(lock) {
-            val existing = store[packageName] ?: return 0
-            val matchesStatus = existing.status == expectedStatus
-            val matchesDecidedAt = (existing.decidedAt ?: 0L) == (expectedDecidedAt ?: 0L)
-            if (!matchesStatus || !matchesDecidedAt) return 0
-            store[packageName] = existing.copy(isCloudSynced = isSynced == 1)
-            emitLocked()
-            1
-        }
+    @Test
+    fun migrateLegacyHighRiskFreezesIfNeeded_unsuspendsAndApprovesUnlocked_skipsBlacklistAndRejected_runsOnce() {
+        val telegramPkg = "org.telegram.messenger"
+        val blacklistedPkg = "com.twitter.android"
+        val rejectedPkg = "com.zhiliaoapp.musically"
+        val secondRunPkg = "com.reddit.frontpage"
 
-        override suspend fun deletePendingApproval(packageName: String): Int =
-            deletePendingApprovalBlocking(packageName)
-
-        override fun deletePendingApprovalBlocking(packageName: String): Int = synchronized(lock) {
-            val removed = store.remove(packageName)
-            if (removed != null) {
-                emitLocked()
-                1
-            } else {
-                0
+        fun makePkgInfo(pkg: String) = PackageInfo().apply {
+            packageName = pkg
+            applicationInfo = ApplicationInfo().apply {
+                packageName = pkg
+                flags = 0
             }
+            firstInstallTime = 1_700_000_000_000L
         }
 
-        override fun clearAllPendingApprovalsBlocking(): Int = synchronized(lock) {
-            val count = store.size
-            store.clear()
-            emitLocked()
-            count
+        fakeDao.savePendingApprovalBlocking(
+            PendingApprovalEntity(
+                packageName = rejectedPkg,
+                appName = "TikTok",
+                requestedAt = 1000L,
+                status = PendingApprovalEntity.STATUS_REJECTED,
+                decidedBy = "GuardianAlice",
+                decidedAt = 1500L,
+                isCloudSynced = true
+            )
+        )
+
+        repo.policyProvider = {
+            DevicePolicyBundle.defaultPolicy().copy(
+                lockNewInstallsUntilApproved = false,
+                customBlacklistPackages = setOf(blacklistedPkg)
+            )
         }
+        var currentInstalled = listOf(
+            makePkgInfo(telegramPkg),
+            makePkgInfo(blacklistedPkg),
+            makePkgInfo(rejectedPkg)
+        )
+        repo.installedPackagesProvider = { currentInstalled }
+        repo.isPackageSuspendedProvider = { true }
+
+        repo.migrateLegacyHighRiskFreezesIfNeeded()
+
+        assertEquals(listOf(listOf(telegramPkg)), dpmUnsuspendCalls)
+        val telegramRow = fakeDao.getApprovalByPackageNameBlocking(telegramPkg)
+        assertNotNull(telegramRow)
+        assertEquals(PendingApprovalEntity.STATUS_APPROVED, telegramRow?.status)
+        assertEquals("AUTO_APPROVED_UNLOCKED", telegramRow?.decidedBy)
+        assertTrue(telegramRow?.isCloudSynced == true)
+
+        assertEquals(null, fakeDao.getApprovalByPackageNameBlocking(blacklistedPkg))
+        val rejectedRow = fakeDao.getApprovalByPackageNameBlocking(rejectedPkg)
+        assertEquals(PendingApprovalEntity.STATUS_REJECTED, rejectedRow?.status)
+        assertEquals("GuardianAlice", rejectedRow?.decidedBy)
+
+        // Second invocation must be a no-op because KEY_HIGH_RISK_NORMALIZATION_V1 is persisted
+        dpmUnsuspendCalls.clear()
+        currentInstalled = listOf(makePkgInfo(secondRunPkg))
+        repo.migrateLegacyHighRiskFreezesIfNeeded()
+
+        assertTrue("Migration must run only once", dpmUnsuspendCalls.isEmpty())
+        assertEquals(null, fakeDao.getApprovalByPackageNameBlocking(secondRunPkg))
+    }
+
+    @Test
+    fun guardianRejected_blocksSelfApproval_evenWithOverrideRejectedTrueWhenSelfControlAppsDisallowed() {
+        repo.policyProvider = {
+            DevicePolicyBundle.defaultPolicy().copy(
+                isSupervised = true,
+                guardianUid = "guardian_1",
+                isSelfControlAllowed = true,
+                selfControlNewAppsAllowed = true,
+                selfControlAppsAllowed = false
+            )
+        }
+        fakeDao.savePendingApprovalBlocking(
+            PendingApprovalEntity(
+                packageName = "com.guardian.rejected.app",
+                appName = "Guardian Rejected App",
+                requestedAt = 1000L,
+                status = PendingApprovalEntity.STATUS_REJECTED,
+                decidedBy = "GuardianAlice",
+                decidedAt = 1500L,
+                isCloudSynced = true
+            )
+        )
+
+        val result = repo.unsuspendAndApprove(
+            packageName = "com.guardian.rejected.app",
+            decidedBy = "SELF",
+            syncToCloud = true,
+            overrideRejected = true
+        )
+
+        assertEquals(ApprovalDecisionResult.BLOCKED_REJECTED, result)
+        assertTrue("DPM unsuspend must NOT be called when selfControlAppsAllowed=false", dpmUnsuspendCalls.isEmpty())
+    }
+
+    @Test
+    fun recordApproval_neverOverwritesExistingRejectedRecord() {
+        fakeDao.savePendingApprovalBlocking(
+            PendingApprovalEntity(
+                packageName = "com.guardian.rejected",
+                appName = "Rejected",
+                requestedAt = 1000L,
+                status = PendingApprovalEntity.STATUS_REJECTED,
+                decidedBy = "GuardianAlice",
+                decidedAt = 1500L,
+                isCloudSynced = true
+            )
+        )
+
+        repo.recordApproval("com.guardian.rejected", "Rejected", "AUTO_APPROVED_UNLOCKED")
+
+        val stored = fakeDao.getApprovalByPackageNameBlocking("com.guardian.rejected")
+        assertEquals(PendingApprovalEntity.STATUS_REJECTED, stored?.status)
+        assertEquals("GuardianAlice", stored?.decidedBy)
+    }
+
+    @Test
+    fun migrateLegacyHighRiskFreezesIfNeeded_retriesAfterDpmFailure_andUnhidesDuringCurfew() {
+        val hiddenPkg = "org.telegram.messenger"
+        val pkgInfo = PackageInfo().apply {
+            packageName = hiddenPkg
+            applicationInfo = ApplicationInfo().apply {
+                packageName = hiddenPkg
+                flags = 0
+            }
+            firstInstallTime = 1_700_000_000_000L
+        }
+        val unhideCalls = mutableListOf<String>()
+        var failSuspend = true
+
+        repo.policyProvider = { DevicePolicyBundle.defaultPolicy().copy(lockNewInstallsUntilApproved = false) }
+        repo.installedPackagesProvider = { listOf(pkgInfo) }
+        repo.isBlockActiveProvider = { true }
+        repo.isAppHiddenProvider = { true }
+        repo.isPackageSuspendedProvider = { true }
+        repo.setAppHiddenProvider = { pkg, hidden ->
+            if (!hidden) unhideCalls.add(pkg)
+            true
+        }
+        repo.setPackagesSuspendedProvider = { pkgs, suspended ->
+            if (!suspended) dpmUnsuspendCalls.add(pkgs.toList())
+            !failSuspend
+        }
+
+        // During active curfew: unhides hidden app without lifting curfew suspension
+        repo.migrateLegacyHighRiskFreezesIfNeeded()
+        assertEquals(listOf(hiddenPkg), unhideCalls)
+        assertTrue("Curfew active must keep package suspended", dpmUnsuspendCalls.isEmpty())
+
+        // Reset completion via a fresh scenario where DPM unsuspend fails then retries cleanly
+        val retryContext = FakeContext()
+        val retryDao = FakeTestPendingApprovalDao()
+        val retryRepo = ApprovalRepository(retryContext, retryDao).apply {
+            policyProvider = { DevicePolicyBundle.defaultPolicy().copy(lockNewInstallsUntilApproved = false) }
+            currentTimeMillisProvider = { fakeNowMs }
+            isDeviceOwnerProvider = { true }
+            isBlockActiveProvider = { false }
+            immunePackagesProvider = { emptySet() }
+            appLabelProvider = { it }
+            isAppHiddenProvider = { false }
+            isPackageSuspendedProvider = { true }
+            setPackagesSuspendedProvider = { pkgs, suspended ->
+                if (!suspended) dpmUnsuspendCalls.add(pkgs.toList())
+                !failSuspend
+            }
+            watcherSyncer = {}
+            systemCriticalChecker = { false }
+            installedPackagesProvider = { listOf(pkgInfo) }
+        }
+
+        retryRepo.migrateLegacyHighRiskFreezesIfNeeded()
+        assertEquals(1, dpmUnsuspendCalls.size)
+
+        failSuspend = false
+        retryRepo.migrateLegacyHighRiskFreezesIfNeeded()
+        assertEquals("Migration must retry when prior DPM unsuspend failed", 2, dpmUnsuspendCalls.size)
+    }
+
+    @Test
+    fun enforcePendingSuspensionsLocked_skipsAppsNoLongerPending() {
+        fakeDao.savePendingApprovalBlocking(
+            PendingApprovalEntity(
+                packageName = "com.already.approved",
+                appName = "Approved",
+                requestedAt = 1000L,
+                status = PendingApprovalEntity.STATUS_APPROVED,
+                decidedBy = "SELF",
+                decidedAt = 1500L,
+                isCloudSynced = true
+            )
+        )
+        fakeDao.savePendingApprovalBlocking(
+            PendingApprovalEntity(
+                packageName = "com.still.pending",
+                appName = "Pending",
+                requestedAt = 1000L,
+                status = PendingApprovalEntity.STATUS_PENDING,
+                isCloudSynced = false
+            )
+        )
+        val suspendedCalls = mutableListOf<List<String>>()
+        repo.isPackageSuspendedProvider = { false }
+        repo.setPackagesSuspendedProvider = { pkgs, suspended ->
+            if (suspended) suspendedCalls.add(pkgs.toList())
+            true
+        }
+
+        repo.enforcePendingSuspensionsLocked(listOf("com.already.approved", "com.still.pending"))
+
+        assertEquals(listOf(listOf("com.still.pending")), suspendedCalls)
     }
 
     private class NoOpInAppNotificationDao : InAppNotificationDao {
@@ -513,7 +668,7 @@ class ApprovalSelfControlTest {
     }
 
     private class FakeContext : Application() {
-        private val prefsByName = mutableMapOf<String, InMemorySharedPreferences>()
+        private val prefsByName = mutableMapOf<String, InMemoryTestSharedPreferences>()
 
         override fun getApplicationContext(): Context = this
 
@@ -524,7 +679,7 @@ class ApprovalSelfControlTest {
         override fun getSystemService(name: String): Any? = null
 
         override fun getSharedPreferences(name: String?, mode: Int): SharedPreferences {
-            return prefsByName.getOrPut(name ?: "default") { InMemorySharedPreferences() }
+            return prefsByName.getOrPut(name ?: "default") { InMemoryTestSharedPreferences() }
         }
 
         private val fakeResources: Resources by lazy {
@@ -555,46 +710,6 @@ class ApprovalSelfControlTest {
                 else -> "res_$resId"
             }
             return if (formatArgs.isEmpty()) template else String.format(template, *formatArgs)
-        }
-    }
-
-    private class InMemorySharedPreferences : SharedPreferences {
-        private val values = mutableMapOf<String, Any?>()
-
-        override fun getAll(): MutableMap<String, *> = values.toMutableMap()
-        override fun getString(key: String?, defValue: String?): String? = values[key] as? String ?: defValue
-        override fun getStringSet(key: String?, defValues: MutableSet<String>?): MutableSet<String>? =
-            @Suppress("UNCHECKED_CAST") ((values[key] as? Set<String>)?.toMutableSet() ?: defValues)
-        override fun getInt(key: String?, defValue: Int): Int = values[key] as? Int ?: defValue
-        override fun getLong(key: String?, defValue: Long): Long = values[key] as? Long ?: defValue
-        override fun getFloat(key: String?, defValue: Float): Float = values[key] as? Float ?: defValue
-        override fun getBoolean(key: String?, defValue: Boolean): Boolean = values[key] as? Boolean ?: defValue
-        override fun contains(key: String?): Boolean = values.containsKey(key)
-        override fun registerOnSharedPreferenceChangeListener(listener: SharedPreferences.OnSharedPreferenceChangeListener?) {}
-        override fun unregisterOnSharedPreferenceChangeListener(listener: SharedPreferences.OnSharedPreferenceChangeListener?) {}
-        override fun edit(): SharedPreferences.Editor = object : SharedPreferences.Editor {
-            private val pending = mutableMapOf<String, Any?>()
-            private var clearAll = false
-
-            override fun putString(key: String?, value: String?) = apply { if (key != null) pending[key] = value }
-            override fun putStringSet(key: String?, v: MutableSet<String>?) = apply { if (key != null) pending[key] = v?.toSet() }
-            override fun putInt(key: String?, value: Int) = apply { if (key != null) pending[key] = value }
-            override fun putLong(key: String?, value: Long) = apply { if (key != null) pending[key] = value }
-            override fun putFloat(key: String?, value: Float) = apply { if (key != null) pending[key] = value }
-            override fun putBoolean(key: String?, value: Boolean) = apply { if (key != null) pending[key] = value }
-            override fun remove(key: String?) = apply { if (key != null) pending[key] = null }
-            override fun clear() = apply { clearAll = true }
-            override fun commit(): Boolean { apply(); return true }
-            override fun apply() {
-                if (clearAll) {
-                    values.clear()
-                    clearAll = false
-                }
-                for ((k, v) in pending) {
-                    if (v == null) values.remove(k) else values[k] = v
-                }
-                pending.clear()
-            }
         }
     }
 }

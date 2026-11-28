@@ -11,6 +11,7 @@ import com.drmohammed.antiporn.telemetry.AiTelemetryReporter
 import com.drmohammed.antiporn.curfew.CurfewConfig
 import com.drmohammed.antiporn.data.local.db.HisnRoomDatabase
 import com.drmohammed.antiporn.data.local.db.dao.PartnerDao
+import com.drmohammed.antiporn.data.local.db.entity.PartnerEntity
 import com.drmohammed.antiporn.data.repository.AccountabilityRepository
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.data.repository.completeGuardianSideTeardownCleanup
@@ -82,11 +83,11 @@ class GuardianControlViewModel(
 
         loadWardJob = viewModelScope.launch(Dispatchers.IO) {
             try {
-                val partner = partnerDao.getPartnerById(state.wardId)
+                val partner = partnerDao.getPartnerByIdAndRole(state.wardId, PartnerEntity.ROLE_WARD)
                 val resolvedWardId = accountabilityRepository.resolveActivePartnerUid(state.wardId, partner?.pairingCode)
                 val activeWardId = if (resolvedWardId.isNotBlank()) resolvedWardId else state.wardId
                 val activePartner = if (activeWardId != state.wardId) {
-                    partnerDao.getPartnerById(activeWardId) ?: partner
+                    partnerDao.getPartnerByIdAndRole(activeWardId, PartnerEntity.ROLE_WARD) ?: partner
                 } else {
                     partner
                 }
@@ -120,7 +121,7 @@ class GuardianControlViewModel(
                         netEx.code == FirebaseFirestoreException.Code.PERMISSION_DENIED &&
                         FirebaseAuth.getInstance().currentUser != null &&
                         (accountabilityRepository.isPendingGuardianTeardown(activeWardId) ||
-                            partnerDao.getPartnerById(activeWardId) == null)
+                            partnerDao.getPartnerByIdAndRole(activeWardId, PartnerEntity.ROLE_WARD) == null)
                     ) {
                         val cleaned = accountabilityRepository.completeGuardianSideTeardownCleanup(activeWardId, resolvedWardName)
                         _uiState.update { it.copy(isLoading = false) }
@@ -168,22 +169,7 @@ class GuardianControlViewModel(
                     details = "wardId=$maskedActiveId, isLive=$isLivePolicy, offline=$isOffline, curfew=${policy.curfewStartHour}:${policy.curfewStartMinute}-${policy.curfewEndHour}:${policy.curfewEndMinute}, selfControl=${policy.isSelfControlAllowed}"
                 )
 
-                val version = snapshot?.getLong("version") ?: policy.version
-                val acknowledgedVersion = snapshot?.getLong("acknowledgedVersion") ?: 0L
-                val lastAcknowledgedAt = snapshot?.getLong("lastAcknowledgedAt") ?: 0L
-                val lastHeartbeat = snapshot?.getLong("lastHeartbeat") ?: 0L
-                val wardHasAccessibilityService = snapshot?.getBoolean("wardHasAccessibilityService")
-                    ?: policy.wardHasAccessibilityService
-                val wardHasUsageStats = snapshot?.getBoolean("wardHasUsageStats")
-                    ?: policy.wardHasUsageStats
-                val wardCanWriteSecureSettings = snapshot?.getBoolean("wardCanWriteSecureSettings")
-                    ?: policy.wardCanWriteSecureSettings
-                val wardCapabilitiesUpdatedAt = snapshot?.getLong("wardCapabilitiesUpdatedAt")
-                    ?: policy.wardCapabilitiesUpdatedAt
-                val wardA11yTamperAt = snapshot?.getLong("wardA11yTamperAt")
-                    ?: policy.wardA11yTamperAt
-                val wardSdkInt = snapshot?.getLong("wardSdkInt")?.toInt()
-                    ?: policy.wardSdkInt
+                val telemetry = extractTelemetry(snapshot, policy)
 
                 _uiState.update { current ->
                     val initial = policy.copy(
@@ -191,43 +177,36 @@ class GuardianControlViewModel(
                         timeZoneId = policy.timeZoneId.ifBlank { CurfewConfig.DEFAULT_TIMEZONE_ID }
                     )
 
-                    current.copy(
-                        wardId = activeWardId,
-                        isLoading = false,
-                        isOffline = isOffline,
-                        currentPolicy = policy,
-                        initialPolicySnapshot = if (isLivePolicy) initial else current.initialPolicySnapshot,
-                        selectedStartHour = policy.curfewStartHour,
-                        selectedStartMinute = policy.curfewStartMinute,
-                        selectedEndHour = policy.curfewEndHour,
-                        selectedEndMinute = policy.curfewEndMinute,
-                        selectedWeekendStartHour = policy.weekendCurfewStartHour,
-                        selectedWeekendStartMinute = policy.weekendCurfewStartMinute,
-                        selectedWeekendEndHour = policy.weekendCurfewEndHour,
-                        selectedWeekendEndMinute = policy.weekendCurfewEndMinute,
-                        selectedTimeZoneId = policy.timeZoneId.ifBlank { CurfewConfig.DEFAULT_TIMEZONE_ID },
-                        isCurfewEnabled = policy.isCurfewEnabled,
-                        isWeekendCurfewEnabled = policy.isWeekendCurfewEnabled,
-                        isSelfControlAllowed = policy.isSelfControlAllowed,
-                        isVpnBlackholeEnabled = policy.isVpnBlackholeEnabled,
-                        isInstantInternetKillEnabled = policy.isInstantInternetKillEnabled,
-                        isIncognitoBlocked = policy.isIncognitoBlocked,
-                        lockNewInstallsUntilApproved = policy.lockNewInstallsUntilApproved,
-                        isDateTimeLocked = policy.isDateTimeLocked,
-                        isYouTubeRestrictedModeEnabled = policy.isYouTubeRestrictedModeEnabled,
-                        isTelegramWebBlocked = policy.isTelegramWebBlocked,
-                        isScreenAiEnabledGlobally = policy.isScreenAiEnabledGlobally,
-                        dnsHost = policy.dnsHost.trim(),
-                        version = version,
-                        acknowledgedVersion = acknowledgedVersion,
-                        lastAcknowledgedAt = lastAcknowledgedAt,
-                        lastHeartbeat = lastHeartbeat,
-                        wardHasAccessibilityService = wardHasAccessibilityService,
-                        wardHasUsageStats = wardHasUsageStats,
-                        wardCanWriteSecureSettings = wardCanWriteSecureSettings,
-                        wardCapabilitiesUpdatedAt = wardCapabilitiesUpdatedAt,
-                        wardA11yTamperAt = wardA11yTamperAt,
-                        wardSdkInt = wardSdkInt
+                    applyTelemetryToState(
+                        current.copy(
+                            wardId = activeWardId,
+                            isLoading = false,
+                            isOffline = isOffline,
+                            currentPolicy = policy,
+                            initialPolicySnapshot = if (isLivePolicy) initial else current.initialPolicySnapshot,
+                            selectedStartHour = policy.curfewStartHour,
+                            selectedStartMinute = policy.curfewStartMinute,
+                            selectedEndHour = policy.curfewEndHour,
+                            selectedEndMinute = policy.curfewEndMinute,
+                            selectedWeekendStartHour = policy.weekendCurfewStartHour,
+                            selectedWeekendStartMinute = policy.weekendCurfewStartMinute,
+                            selectedWeekendEndHour = policy.weekendCurfewEndHour,
+                            selectedWeekendEndMinute = policy.weekendCurfewEndMinute,
+                            selectedTimeZoneId = policy.timeZoneId.ifBlank { CurfewConfig.DEFAULT_TIMEZONE_ID },
+                            isCurfewEnabled = policy.isCurfewEnabled,
+                            isWeekendCurfewEnabled = policy.isWeekendCurfewEnabled,
+                            isSelfControlAllowed = policy.isSelfControlAllowed,
+                            isVpnBlackholeEnabled = policy.isVpnBlackholeEnabled,
+                            isInstantInternetKillEnabled = policy.isInstantInternetKillEnabled,
+                            isIncognitoBlocked = policy.isIncognitoBlocked,
+                            lockNewInstallsUntilApproved = policy.lockNewInstallsUntilApproved,
+                            isDateTimeLocked = policy.isDateTimeLocked,
+                            isYouTubeRestrictedModeEnabled = policy.isYouTubeRestrictedModeEnabled,
+                            isTelegramWebBlocked = policy.isTelegramWebBlocked,
+                            isScreenAiEnabledGlobally = policy.isScreenAiEnabledGlobally,
+                            dnsHost = policy.dnsHost.trim()
+                        ),
+                        telemetry
                     )
                 }
                 synchronized(listenerLock) {
@@ -239,120 +218,6 @@ class GuardianControlViewModel(
                 if (e is CancellationException) throw e
                 Timber.tag(TAG).e(e, "Error loading ward policy for %s", AiTelemetryReporter.maskIdentifier(state.wardId))
                 _uiState.update { it.copy(isLoading = false, isOffline = true) }
-            }
-        }
-    }
-
-    fun updateSelfControlPermissionImmediately(allowed: Boolean) {
-        val state = _uiState.value
-        val baseline = state.initialPolicySnapshot
-        if (state.wardId.isBlank() || state.isSaving || state.isLoading) return
-        if (baseline == null) {
-            viewModelScope.launch {
-                _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_guardian_policy_save_failed))
-            }
-            return
-        }
-        val previousAllowed = state.isSelfControlAllowed
-        _uiState.update { it.copy(isSelfControlAllowed = allowed, isSaving = true) }
-
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val context = getApplication<Application>()
-                val myUid = accountabilityRepository.getCachedUid()
-                val myName = accountabilityRepository.getMyDisplayName()
-                val pushedPolicy = policyRepository.mergeAndPushRemotePolicyPatch(
-                    wardUid = state.wardId,
-                    fallbackPolicy = baseline,
-                    guardianUidFallback = myUid,
-                    guardianNameFallback = myName
-                ) { latest ->
-                    val now = TrustedTimeProvider.currentTimeMillis(context)
-                    latest.copy(
-                        isSelfControlAllowed = allowed,
-                        version = latest.version + 1,
-                        updatedAt = now
-                    )
-                }
-                withContext(Dispatchers.Main) {
-                    if (pushedPolicy != null) {
-                        _uiState.update {
-                            it.copy(
-                                currentPolicy = pushedPolicy,
-                                initialPolicySnapshot = pushedPolicy.copy(),
-                                isSelfControlAllowed = pushedPolicy.isSelfControlAllowed,
-                                version = pushedPolicy.version
-                            )
-                        }
-                        _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_guardian_policy_saved))
-                    } else {
-                        _uiState.update { it.copy(isSelfControlAllowed = previousAllowed) }
-                        _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_guardian_policy_save_failed))
-                    }
-                }
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                Log.e(TAG, "Error updating self-control permission immediately", e)
-                _uiState.update { it.copy(isSelfControlAllowed = previousAllowed) }
-                _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_guardian_policy_save_failed))
-            } finally {
-                _uiState.update { it.copy(isSaving = false) }
-            }
-        }
-    }
-
-    fun resetWardSelfControlQr(onComplete: (Boolean) -> Unit) {
-        val state = _uiState.value
-        val baseline = state.initialPolicySnapshot
-        if (state.wardId.isBlank() || baseline == null) {
-            if (state.wardId.isNotBlank()) {
-                viewModelScope.launch {
-                    _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_reset_ward_qr_failed))
-                }
-            }
-            onComplete(false)
-            return
-        }
-
-        viewModelScope.launch(Dispatchers.IO) {
-            var success = false
-            try {
-                val context = getApplication<Application>()
-                val myUid = accountabilityRepository.getCachedUid()
-                val myName = accountabilityRepository.getMyDisplayName()
-                val pushedPolicy = policyRepository.mergeAndPushRemotePolicyPatch(
-                    wardUid = state.wardId,
-                    fallbackPolicy = baseline,
-                    guardianUidFallback = myUid,
-                    guardianNameFallback = myName
-                ) { latest ->
-                    val now = TrustedTimeProvider.currentTimeMillis(context)
-                    latest.copy(
-                        remoteSelfControlResetRequestedAt = now,
-                        version = latest.version + 1,
-                        updatedAt = now
-                    )
-                }
-                if (pushedPolicy != null) {
-                    success = true
-                    _uiState.update {
-                        it.copy(
-                            currentPolicy = pushedPolicy,
-                            initialPolicySnapshot = pushedPolicy.copy(),
-                            version = pushedPolicy.version
-                        )
-                    }
-                    _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_reset_ward_qr_success))
-                } else {
-                    _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_reset_ward_qr_failed))
-                }
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                Log.e(TAG, "Error resetting ward self-control QR", e)
-                _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_reset_ward_qr_failed))
-            }
-            withContext(Dispatchers.Main) {
-                onComplete(success)
             }
         }
     }
@@ -466,12 +331,73 @@ class GuardianControlViewModel(
         }
     }
 
+    fun applyUpdatedPolicyFromSubScreen(updated: DevicePolicyBundle) {
+        onPolicyReverted(updated)
+        _uiState.update { it.copy(version = updated.version) }
+    }
+
+    fun unlockWardActiveMode(target: String) {
+        val state = _uiState.value
+        val baseline = state.initialPolicySnapshot
+        if (state.wardId.isBlank() || state.isSaving || state.isLoading || baseline == null) {
+            if (baseline == null && state.wardId.isNotBlank()) {
+                viewModelScope.launch {
+                    _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_guardian_policy_save_failed))
+                }
+            }
+            return
+        }
+
+        _uiState.update { it.copy(isSaving = true) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val context = getApplication<Application>()
+                val myUid = accountabilityRepository.getCachedUid()
+                val myName = accountabilityRepository.getMyDisplayName()
+                val pushedPolicy = policyRepository.mergeAndPushRemotePolicyPatch(
+                    wardUid = state.wardId,
+                    fallbackPolicy = baseline,
+                    guardianUidFallback = myUid,
+                    guardianNameFallback = myName
+                ) { latest ->
+                    val now = TrustedTimeProvider.currentTimeMillis(context)
+                    latest.copy(
+                        remoteModeUnlockTarget = target,
+                        remoteModeUnlockRequestedAt = now,
+                        version = latest.version + 1,
+                        updatedAt = now
+                    )
+                }
+                withContext(Dispatchers.Main) {
+                    if (pushedPolicy != null) {
+                        _uiState.update {
+                            it.copy(
+                                currentPolicy = pushedPolicy,
+                                initialPolicySnapshot = pushedPolicy.copy(),
+                                version = pushedPolicy.version
+                            )
+                        }
+                        _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_guardian_remote_unlock_sent))
+                    } else {
+                        _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_guardian_policy_save_failed))
+                    }
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                Timber.tag(TAG).e(e, "Error sending remote mode unlock target=%s", target)
+                _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_guardian_policy_save_failed))
+            } finally {
+                _uiState.update { it.copy(isSaving = false) }
+            }
+        }
+    }
+
     fun renameWard(newName: String) {
         val state = _uiState.value
         if (newName.isBlank() || newName == state.wardName) return
 
         viewModelScope.launch(Dispatchers.IO) {
-            val result = accountabilityRepository.renamePartner(state.wardId, newName)
+            val result = accountabilityRepository.renamePartner(state.wardId, newName, PartnerEntity.ROLE_WARD)
             result.onSuccess {
                 _uiState.update { it.copy(wardName = newName) }
                 _events.send(GuardianControlEvent.ShowToastRes(R.string.toast_name_saved))
@@ -513,7 +439,7 @@ class GuardianControlViewModel(
                             ) {
                                 viewModelScope.launch(Dispatchers.IO) {
                                     val isPendingOrRemoved = accountabilityRepository.isPendingGuardianTeardown(targetWardId) ||
-                                        partnerDao.getPartnerById(targetWardId) == null
+                                        partnerDao.getPartnerByIdAndRole(targetWardId, PartnerEntity.ROLE_WARD) == null
                                     if (isPendingOrRemoved) {
                                         stopPolicyListener()
                                         val cleaned = accountabilityRepository.completeGuardianSideTeardownCleanup(
@@ -552,22 +478,7 @@ class GuardianControlViewModel(
                             }
                             return@addSnapshotListener
                         }
-                        val version = snapshot.getLong("version") ?: policy.version
-                        val acknowledgedVersion = snapshot.getLong("acknowledgedVersion") ?: 0L
-                        val lastAcknowledgedAt = snapshot.getLong("lastAcknowledgedAt") ?: 0L
-                        val lastHeartbeat = snapshot.getLong("lastHeartbeat") ?: 0L
-                        val wardHasAccessibilityService = snapshot.getBoolean("wardHasAccessibilityService")
-                            ?: policy.wardHasAccessibilityService
-                        val wardHasUsageStats = snapshot.getBoolean("wardHasUsageStats")
-                            ?: policy.wardHasUsageStats
-                        val wardCanWriteSecureSettings = snapshot.getBoolean("wardCanWriteSecureSettings")
-                            ?: policy.wardCanWriteSecureSettings
-                        val wardCapabilitiesUpdatedAt = snapshot.getLong("wardCapabilitiesUpdatedAt")
-                            ?: policy.wardCapabilitiesUpdatedAt
-                        val wardA11yTamperAt = snapshot.getLong("wardA11yTamperAt")
-                            ?: policy.wardA11yTamperAt
-                        val wardSdkInt = snapshot.getLong("wardSdkInt")?.toInt()
-                            ?: policy.wardSdkInt
+                        val telemetry = extractTelemetry(snapshot, policy)
 
                         _uiState.update { current ->
                             val keepLocalEdits = current.hasUnsavedChanges || current.isSaving
@@ -578,56 +489,37 @@ class GuardianControlViewModel(
                                     dnsHost = normalizedDns,
                                     timeZoneId = normalizedTz
                                 )
-                                current.copy(
-                                    currentPolicy = policy,
-                                    initialPolicySnapshot = initial,
-                                    selectedStartHour = policy.curfewStartHour,
-                                    selectedStartMinute = policy.curfewStartMinute,
-                                    selectedEndHour = policy.curfewEndHour,
-                                    selectedEndMinute = policy.curfewEndMinute,
-                                    selectedWeekendStartHour = policy.weekendCurfewStartHour,
-                                    selectedWeekendStartMinute = policy.weekendCurfewStartMinute,
-                                    selectedWeekendEndHour = policy.weekendCurfewEndHour,
-                                    selectedWeekendEndMinute = policy.weekendCurfewEndMinute,
-                                    selectedTimeZoneId = normalizedTz,
-                                    isCurfewEnabled = policy.isCurfewEnabled,
-                                    isWeekendCurfewEnabled = policy.isWeekendCurfewEnabled,
-                                    isSelfControlAllowed = policy.isSelfControlAllowed,
-                                    isVpnBlackholeEnabled = policy.isVpnBlackholeEnabled,
-                                    isInstantInternetKillEnabled = policy.isInstantInternetKillEnabled,
-                                    isIncognitoBlocked = policy.isIncognitoBlocked,
-                                    lockNewInstallsUntilApproved = policy.lockNewInstallsUntilApproved,
-                                    isDateTimeLocked = policy.isDateTimeLocked,
-                                    isYouTubeRestrictedModeEnabled = policy.isYouTubeRestrictedModeEnabled,
-                                    isTelegramWebBlocked = policy.isTelegramWebBlocked,
-                                    isScreenAiEnabledGlobally = policy.isScreenAiEnabledGlobally,
-                                    dnsHost = normalizedDns,
-                                    version = version,
-                                    acknowledgedVersion = acknowledgedVersion,
-                                    lastAcknowledgedAt = lastAcknowledgedAt,
-                                    lastHeartbeat = lastHeartbeat,
-                                    wardHasAccessibilityService = wardHasAccessibilityService,
-                                    wardHasUsageStats = wardHasUsageStats,
-                                    wardCanWriteSecureSettings = wardCanWriteSecureSettings,
-                                    wardCapabilitiesUpdatedAt = wardCapabilitiesUpdatedAt,
-                                    wardA11yTamperAt = wardA11yTamperAt,
-                                    wardSdkInt = wardSdkInt,
-                                    isOffline = false
+                                applyTelemetryToState(
+                                    current.copy(
+                                        currentPolicy = policy,
+                                        initialPolicySnapshot = initial,
+                                        selectedStartHour = policy.curfewStartHour,
+                                        selectedStartMinute = policy.curfewStartMinute,
+                                        selectedEndHour = policy.curfewEndHour,
+                                        selectedEndMinute = policy.curfewEndMinute,
+                                        selectedWeekendStartHour = policy.weekendCurfewStartHour,
+                                        selectedWeekendStartMinute = policy.weekendCurfewStartMinute,
+                                        selectedWeekendEndHour = policy.weekendCurfewEndHour,
+                                        selectedWeekendEndMinute = policy.weekendCurfewEndMinute,
+                                        selectedTimeZoneId = normalizedTz,
+                                        isCurfewEnabled = policy.isCurfewEnabled,
+                                        isWeekendCurfewEnabled = policy.isWeekendCurfewEnabled,
+                                        isSelfControlAllowed = policy.isSelfControlAllowed,
+                                        isVpnBlackholeEnabled = policy.isVpnBlackholeEnabled,
+                                        isInstantInternetKillEnabled = policy.isInstantInternetKillEnabled,
+                                        isIncognitoBlocked = policy.isIncognitoBlocked,
+                                        lockNewInstallsUntilApproved = policy.lockNewInstallsUntilApproved,
+                                        isDateTimeLocked = policy.isDateTimeLocked,
+                                        isYouTubeRestrictedModeEnabled = policy.isYouTubeRestrictedModeEnabled,
+                                        isTelegramWebBlocked = policy.isTelegramWebBlocked,
+                                        isScreenAiEnabledGlobally = policy.isScreenAiEnabledGlobally,
+                                        dnsHost = normalizedDns,
+                                        isOffline = false
+                                    ),
+                                    telemetry
                                 )
                             } else {
-                                current.copy(
-                                    version = version,
-                                    acknowledgedVersion = acknowledgedVersion,
-                                    lastAcknowledgedAt = lastAcknowledgedAt,
-                                    lastHeartbeat = lastHeartbeat,
-                                    wardHasAccessibilityService = wardHasAccessibilityService,
-                                    wardHasUsageStats = wardHasUsageStats,
-                                    wardCanWriteSecureSettings = wardCanWriteSecureSettings,
-                                    wardCapabilitiesUpdatedAt = wardCapabilitiesUpdatedAt,
-                                    wardA11yTamperAt = wardA11yTamperAt,
-                                    wardSdkInt = wardSdkInt,
-                                    isOffline = false
-                                )
+                                applyTelemetryToState(current.copy(isOffline = false), telemetry)
                             }
                         }
                     }
@@ -650,6 +542,81 @@ class GuardianControlViewModel(
         stopPolicyListener()
         super.onCleared()
     }
+
+    private data class WardTelemetrySnapshot(
+        val version: Long,
+        val acknowledgedVersion: Long,
+        val lastAcknowledgedAt: Long,
+        val lastHeartbeat: Long,
+        val wardHasAccessibilityService: Boolean?,
+        val wardHasUsageStats: Boolean?,
+        val wardCanWriteSecureSettings: Boolean?,
+        val wardCapabilitiesUpdatedAt: Long,
+        val wardA11yTamperAt: Long,
+        val wardSdkInt: Int?,
+        val wardActiveFortressId: String?,
+        val wardActiveFortressName: String?,
+        val wardActiveFortressIsEmergency: Boolean,
+        val wardActiveFortressEndsAtWall: Long,
+        val wardIsCurfewActiveNow: Boolean,
+        val wardActiveModesUpdatedAt: Long
+    )
+
+    private fun extractTelemetry(
+        snapshot: com.google.firebase.firestore.DocumentSnapshot?,
+        policy: DevicePolicyBundle
+    ): WardTelemetrySnapshot = WardTelemetrySnapshot(
+        version = snapshot?.getLong("version") ?: policy.version,
+        acknowledgedVersion = snapshot?.getLong("acknowledgedVersion") ?: 0L,
+        lastAcknowledgedAt = snapshot?.getLong("lastAcknowledgedAt") ?: 0L,
+        lastHeartbeat = snapshot?.getLong("lastHeartbeat") ?: 0L,
+        wardHasAccessibilityService = snapshot?.getBoolean("wardHasAccessibilityService")
+            ?: policy.wardHasAccessibilityService,
+        wardHasUsageStats = snapshot?.getBoolean("wardHasUsageStats")
+            ?: policy.wardHasUsageStats,
+        wardCanWriteSecureSettings = snapshot?.getBoolean("wardCanWriteSecureSettings")
+            ?: policy.wardCanWriteSecureSettings,
+        wardCapabilitiesUpdatedAt = snapshot?.getLong("wardCapabilitiesUpdatedAt")
+            ?: policy.wardCapabilitiesUpdatedAt,
+        wardA11yTamperAt = snapshot?.getLong("wardA11yTamperAt")
+            ?: policy.wardA11yTamperAt,
+        wardSdkInt = snapshot?.getLong("wardSdkInt")?.toInt()
+            ?: policy.wardSdkInt,
+        wardActiveFortressId = snapshot?.getString("wardActiveFortressId")?.takeIf { it.isNotBlank() }
+            ?: policy.wardActiveFortressId,
+        wardActiveFortressName = snapshot?.getString("wardActiveFortressName")?.takeIf { it.isNotBlank() }
+            ?: policy.wardActiveFortressName,
+        wardActiveFortressIsEmergency = snapshot?.getBoolean("wardActiveFortressIsEmergency")
+            ?: policy.wardActiveFortressIsEmergency,
+        wardActiveFortressEndsAtWall = snapshot?.getLong("wardActiveFortressEndsAtWall")
+            ?: policy.wardActiveFortressEndsAtWall,
+        wardIsCurfewActiveNow = snapshot?.getBoolean("wardIsCurfewActiveNow")
+            ?: policy.wardIsCurfewActiveNow,
+        wardActiveModesUpdatedAt = snapshot?.getLong("wardActiveModesUpdatedAt")
+            ?: policy.wardActiveModesUpdatedAt
+    )
+
+    private fun applyTelemetryToState(
+        state: GuardianControlUiState,
+        telemetry: WardTelemetrySnapshot
+    ): GuardianControlUiState = state.copy(
+        version = telemetry.version,
+        acknowledgedVersion = telemetry.acknowledgedVersion,
+        lastAcknowledgedAt = telemetry.lastAcknowledgedAt,
+        lastHeartbeat = telemetry.lastHeartbeat,
+        wardHasAccessibilityService = telemetry.wardHasAccessibilityService,
+        wardHasUsageStats = telemetry.wardHasUsageStats,
+        wardCanWriteSecureSettings = telemetry.wardCanWriteSecureSettings,
+        wardCapabilitiesUpdatedAt = telemetry.wardCapabilitiesUpdatedAt,
+        wardA11yTamperAt = telemetry.wardA11yTamperAt,
+        wardSdkInt = telemetry.wardSdkInt,
+        wardActiveFortressId = telemetry.wardActiveFortressId,
+        wardActiveFortressName = telemetry.wardActiveFortressName,
+        wardActiveFortressIsEmergency = telemetry.wardActiveFortressIsEmergency,
+        wardActiveFortressEndsAtWall = telemetry.wardActiveFortressEndsAtWall,
+        wardIsCurfewActiveNow = telemetry.wardIsCurfewActiveNow,
+        wardActiveModesUpdatedAt = telemetry.wardActiveModesUpdatedAt
+    )
 
     companion object {
         private const val TAG = "AntiPorn_GuardianVM"

@@ -3,30 +3,32 @@ package com.drmohammed.antiporn.data.local.db.entity
 import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
-import androidx.room.PrimaryKey
 
 /**
  * Entity representing an accountability partner (Guardian or Ward).
  * Verbatim SQLite DDL:
  * CREATE TABLE IF NOT EXISTS partners (
- *     id TEXT PRIMARY KEY,
+ *     id TEXT NOT NULL,
  *     pairing_code TEXT NOT NULL,
  *     display_name TEXT NOT NULL,
  *     role TEXT NOT NULL,
  *     status TEXT NOT NULL,
  *     created_at INTEGER NOT NULL,
- *     last_sync_at INTEGER NOT NULL
+ *     last_sync_at INTEGER NOT NULL,
+ *     PRIMARY KEY(id, role)
  * );
  * CREATE INDEX IF NOT EXISTS idx_partners_role ON partners (role);
+ * CREATE INDEX IF NOT EXISTS idx_partners_id ON partners (id);
  */
 @Entity(
     tableName = "partners",
+    primaryKeys = ["id", "role"],
     indices = [
-        Index(value = ["role"], name = "idx_partners_role")
+        Index(value = ["role"], name = "idx_partners_role"),
+        Index(value = ["id"], name = "idx_partners_id")
     ]
 )
 data class PartnerEntity(
-    @PrimaryKey
     @ColumnInfo(name = "id")
     val id: String,
 

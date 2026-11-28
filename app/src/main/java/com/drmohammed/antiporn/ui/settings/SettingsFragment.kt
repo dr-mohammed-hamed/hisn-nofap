@@ -1,4 +1,4 @@
-package com.drmohammed.antiporn.ui.settings
+﻿package com.drmohammed.antiporn.ui.settings
 
 import android.content.Context
 import android.content.Intent
@@ -23,6 +23,7 @@ import com.drmohammed.antiporn.telemetry.AiTelemetryReporter
 import com.drmohammed.antiporn.ui.common.TextInputDialogFragment
 import com.drmohammed.antiporn.ui.common.showSafely
 import com.drmohammed.antiporn.ui.control.qr.QrScannerBottomSheet
+import com.drmohammed.antiporn.ui.waqf.WaqfSupportActivity
 import com.google.android.material.color.MaterialColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -58,6 +59,7 @@ class SettingsFragment : Fragment() {
     private var lastEditNameClickTime = 0L
     private var lastDeviceOwnerClickTime = 0L
     private var lastBankingClickTime = 0L
+    private var lastWaqfClickTime = 0L
 
     override fun onAttach(context: Context) {
         super.onAttach(context)
@@ -85,6 +87,7 @@ class SettingsFragment : Fragment() {
         setupFragmentResultListeners()
         setupListeners()
         observeViewModel()
+        settingsViewModel.prefetchWaqfConfigIfStale()
     }
 
     private fun setupFragmentResultListeners() {
@@ -335,6 +338,16 @@ class SettingsFragment : Fragment() {
                 DiagnosticLogsBottomSheet.newInstance()
             }
             true
+        }
+
+        binding.cardWaqfSupport.setOnClickListener {
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastWaqfClickTime < 800L) return@setOnClickListener
+            lastWaqfClickTime = now
+            val ctx = context ?: return@setOnClickListener
+            startActivity(Intent(ctx, WaqfSupportActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+            })
         }
     }
 

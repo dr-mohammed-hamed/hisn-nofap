@@ -2,7 +2,6 @@ package com.drmohammed.antiporn.ui.accountability
 
 import android.app.Activity
 import android.content.Intent
-import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.View
@@ -13,7 +12,6 @@ import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
@@ -21,6 +19,8 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.accessibility.control.AccessibilityPolicyCoordinator
+import com.drmohammed.antiporn.core.model.DevicePolicyBundle
+import com.drmohammed.antiporn.fortress.ui.FortressesListActivity
 import com.drmohammed.antiporn.ui.common.TextInputDialogFragment
 import com.drmohammed.antiporn.ui.common.showSafely
 import com.google.android.material.appbar.MaterialToolbar
@@ -28,6 +28,8 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.color.MaterialColors
 import com.google.android.material.materialswitch.MaterialSwitch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.koin.androidx.viewmodel.ext.android.viewModel
 
@@ -52,10 +54,6 @@ class GuardianControlActivity : AppCompatActivity() {
     private lateinit var cardOfflineBanner: MaterialCardView
     private lateinit var tvOfflineStatus: TextView
     private lateinit var btnRetryLoadPolicy: MaterialButton
-    private lateinit var cardWardCapabilityAlert: MaterialCardView
-    private lateinit var ivWardCapabilityAlertIcon: ImageView
-    private lateinit var tvWardCapabilityAlertTitle: TextView
-    private lateinit var tvWardCapabilityAlertMsg: TextView
     private lateinit var switchGuardianVisionAi: MaterialSwitch
     private lateinit var alertsViewBinder: GuardianAlertsViewBinder
 
@@ -66,6 +64,7 @@ class GuardianControlActivity : AppCompatActivity() {
     private lateinit var approvalsViewBinder: GuardianApprovalsViewBinder
     private lateinit var liveSyncViewBinder: GuardianLiveSyncViewBinder
     private lateinit var policyTilesViewBinder: GuardianPolicyTilesViewBinder
+    private lateinit var activeModesViewBinder: GuardianActiveModesViewBinder
 
     private var lastEditNameClickTime = 0L
     private var lastTileClickTime = 0L
@@ -74,6 +73,11 @@ class GuardianControlActivity : AppCompatActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
+            val updatedJson = result.data?.getStringExtra(FortressesListActivity.EXTRA_UPDATED_POLICY_JSON)
+                ?: result.data?.getStringExtra(GuardianSelfControlSettingsActivity.EXTRA_POLICY_JSON)
+            updatedJson?.let { DevicePolicyBundle.fromJsonOrNull(it) }?.let { parsed ->
+                viewModel.applyUpdatedPolicyFromSubScreen(parsed)
+            }
             viewModel.loadWardPolicy()
         }
     }
@@ -152,10 +156,6 @@ class GuardianControlActivity : AppCompatActivity() {
         cardOfflineBanner = findViewById(R.id.cardOfflineBanner)
         tvOfflineStatus = findViewById(R.id.tvOfflineStatus)
         btnRetryLoadPolicy = findViewById(R.id.btnRetryLoadPolicy)
-        cardWardCapabilityAlert = findViewById(R.id.cardWardCapabilityAlert)
-        ivWardCapabilityAlertIcon = findViewById(R.id.ivWardCapabilityAlertIcon)
-        tvWardCapabilityAlertTitle = findViewById(R.id.tvWardCapabilityAlertTitle)
-        tvWardCapabilityAlertMsg = findViewById(R.id.tvWardCapabilityAlertMsg)
         switchGuardianVisionAi = findViewById(R.id.switchGuardianVisionAi)
 
         alertsViewBinder = GuardianAlertsViewBinder(
@@ -194,11 +194,16 @@ class GuardianControlActivity : AppCompatActivity() {
             stateProvider = { viewModel.uiState.value },
             onLaunchSubScreen = { intentProvider -> launchSubScreen(intentProvider) }
         )
+        activeModesViewBinder = GuardianActiveModesViewBinder(
+            activity = this,
+            onUnlockModeRequested = { target -> viewModel.unlockWardActiveMode(target) }
+        )
     }
 
     private fun setupListeners() {
         alertsViewBinder.setupListeners()
         policyTilesViewBinder.setupListeners()
+        activeModesViewBinder.setupListeners()
 
         btnEditWardName.setOnClickListener {
             val now = SystemClock.elapsedRealtime()
@@ -241,6 +246,15 @@ class GuardianControlActivity : AppCompatActivity() {
                         handleEvent(event)
                     }
                 }
+                launch {
+                    while (isActive) {
+                        delay(1_000L)
+                        val state = viewModel.uiState.value
+                        if (activeModesViewBinder.needsCountdownTick(state)) {
+                            activeModesViewBinder.render(state)
+                        }
+                    }
+                }
             }
         }
     }
@@ -253,8 +267,9 @@ class GuardianControlActivity : AppCompatActivity() {
         val policyReady = !state.isLoading && state.initialPolicySnapshot != null
         policyTilesViewBinder.renderPolicyReadyState(policyReady)
 
+        activeModesViewBinder.render(state)
         alertsViewBinder.renderPolicyAlerts(state.currentPolicy)
-        renderWardCapabilityAlert(state)
+        activeModesViewBinder.renderWardCapabilityAlert(state)
 
         switchGuardianVisionAi.setOnCheckedChangeListener(null)
         switchGuardianVisionAi.isChecked = state.isScreenAiEnabledGlobally
@@ -269,68 +284,6 @@ class GuardianControlActivity : AppCompatActivity() {
             lastAcknowledgedAt = state.lastAcknowledgedAt,
             lastHeartbeat = state.lastHeartbeat
         )
-    }
-
-    private fun renderWardCapabilityAlert(state: GuardianControlUiState) {
-        val currentPolicy = state.currentPolicy
-        val wardSdk = state.wardSdkInt ?: Build.VERSION.SDK_INT
-        val isA11yRequired = AccessibilityPolicyCoordinator.isAccessibilityRequired(
-            currentPolicy,
-            sdkInt = wardSdk
-        )
-        val isUsageRequired = AccessibilityPolicyCoordinator.isUsageAccessRequired(
-            currentPolicy,
-            isA11yActive = state.wardHasAccessibilityService == true,
-            sdkInt = wardSdk
-        )
-
-        when {
-            state.wardA11yTamperAt > 0L &&
-                state.wardHasAccessibilityService == false &&
-                isA11yRequired -> {
-                val red = ContextCompat.getColor(this, R.color.status_red)
-                val redBg = ContextCompat.getColor(this, R.color.status_red_bg)
-                cardWardCapabilityAlert.visibility = View.VISIBLE
-                cardWardCapabilityAlert.setCardBackgroundColor(redBg)
-                cardWardCapabilityAlert.strokeColor = red
-                ivWardCapabilityAlertIcon.setColorFilter(red)
-                tvWardCapabilityAlertTitle.setTextColor(red)
-                tvWardCapabilityAlertMsg.setTextColor(red)
-                tvWardCapabilityAlertTitle.setText(R.string.guardian_alert_a11y_tamper_title)
-                tvWardCapabilityAlertMsg.setText(R.string.guardian_alert_a11y_tamper_msg)
-            }
-            state.wardHasAccessibilityService == false &&
-                state.wardCanWriteSecureSettings == false &&
-                isA11yRequired -> {
-                val amber = ContextCompat.getColor(this, R.color.shield_amber_calm)
-                val amberBg = ContextCompat.getColor(this, R.color.shield_amber_subtle)
-                val onSurface = MaterialColors.getColor(cardWardCapabilityAlert, com.google.android.material.R.attr.colorOnSurface)
-                cardWardCapabilityAlert.visibility = View.VISIBLE
-                cardWardCapabilityAlert.setCardBackgroundColor(amberBg)
-                cardWardCapabilityAlert.strokeColor = amber
-                ivWardCapabilityAlertIcon.setColorFilter(amber)
-                tvWardCapabilityAlertTitle.setTextColor(onSurface)
-                tvWardCapabilityAlertMsg.setTextColor(onSurface)
-                tvWardCapabilityAlertTitle.setText(R.string.guardian_alert_a11y_pending_qr_title)
-                tvWardCapabilityAlertMsg.setText(R.string.guardian_alert_a11y_pending_qr_msg)
-            }
-            state.wardHasUsageStats == false && isUsageRequired -> {
-                val amber = ContextCompat.getColor(this, R.color.shield_amber_calm)
-                val amberBg = ContextCompat.getColor(this, R.color.shield_amber_subtle)
-                val onSurface = MaterialColors.getColor(cardWardCapabilityAlert, com.google.android.material.R.attr.colorOnSurface)
-                cardWardCapabilityAlert.visibility = View.VISIBLE
-                cardWardCapabilityAlert.setCardBackgroundColor(amberBg)
-                cardWardCapabilityAlert.strokeColor = amber
-                ivWardCapabilityAlertIcon.setColorFilter(amber)
-                tvWardCapabilityAlertTitle.setTextColor(onSurface)
-                tvWardCapabilityAlertMsg.setTextColor(onSurface)
-                tvWardCapabilityAlertTitle.setText(R.string.guardian_alert_usage_access_pending_title)
-                tvWardCapabilityAlertMsg.setText(R.string.guardian_alert_usage_access_pending_msg)
-            }
-            else -> {
-                cardWardCapabilityAlert.visibility = View.GONE
-            }
-        }
     }
 
     private fun updateWardTitle(name: String) {
@@ -354,8 +307,6 @@ class GuardianControlActivity : AppCompatActivity() {
                 val length = if (event.isLong) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
                 Toast.makeText(this, event.message, length).show()
             }
-            is GuardianControlEvent.DnsValidationError,
-            is GuardianControlEvent.SaveSuccess -> Unit
             is GuardianControlEvent.WardTeardownCompleted -> {
                 Toast.makeText(this, R.string.toast_guardian_remote_teardown_completed, Toast.LENGTH_LONG).show()
                 finish()
@@ -397,6 +348,7 @@ class GuardianControlActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        activeModesViewBinder.onDestroy()
         alertsViewBinder.onDestroy()
         viewModel.stopPolicyListener()
         approvalsViewBinder.stopListening()

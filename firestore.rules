@@ -36,14 +36,23 @@ service cloud.firestore {
         get(/databases/$(database)/documents/policies/$(wardUid)).data.get('guardianUid', null) == null;
     }
 
+    // Verifies if ward is allowed to decide pending newly-installed app tickets
+    function isSelfNewAppDecisionAllowed(wardUid) {
+      return isUnsupervisedOwner(wardUid) || (
+        exists(/databases/$(database)/documents/policies/$(wardUid)) &&
+        get(/databases/$(database)/documents/policies/$(wardUid)).data.get('isSelfControlAllowed', true) == true &&
+        get(/databases/$(database)/documents/policies/$(wardUid)).data.get('selfControlNewAppsAllowed', true) == true
+      );
+    }
+
     // Verifies if ward is allowed to make self-control app decisions (approve or reject)
     function isSelfAppDecisionAllowed(wardUid) {
       return isUnsupervisedOwner(wardUid) || (
         exists(/databases/$(database)/documents/policies/$(wardUid)) &&
-        get(/databases/$(database)/documents/policies/$(wardUid)).data.get('isSelfControlAllowed', false) == true &&
+        get(/databases/$(database)/documents/policies/$(wardUid)).data.get('isSelfControlAllowed', true) == true &&
         (
-          get(/databases/$(database)/documents/policies/$(wardUid)).data.get('selfControlNewAppsAllowed', false) == true ||
-          get(/databases/$(database)/documents/policies/$(wardUid)).data.get('selfControlAppsAllowed', false) == true
+          get(/databases/$(database)/documents/policies/$(wardUid)).data.get('selfControlNewAppsAllowed', true) == true ||
+          get(/databases/$(database)/documents/policies/$(wardUid)).data.get('selfControlAppsAllowed', true) == true
         )
       );
     }
@@ -98,7 +107,8 @@ service cloud.firestore {
 
     // 2. Policies: Unified protection policies with strict single-guardian lock, heartbeat & 24h emergency breakout
     match /policies/{wardUid} {
-      allow read: if isOwner(wardUid) || isGuardianOf(wardUid);
+      allow get: if isOwner(wardUid) || isGuardianOf(wardUid);
+      allow list: if request.auth != null && resource.data.guardianUid == request.auth.uid;
       allow create: if isOwner(wardUid);
       allow update: if request.auth != null && (
         // Case 1: Guardian updates or revokes
@@ -117,18 +127,102 @@ service cloud.firestore {
         )) ||
         // Case 3: Ward updates policy when supervised and self-control is explicitly allowed by guardian
         (resource.data.get('guardianUid', null) != null && isOwner(wardUid) &&
-          resource.data.get('isSelfControlAllowed', false) == true &&
+          resource.data.get('isSelfControlAllowed', true) == true &&
           request.resource.data.get('guardianUid', null) == resource.data.get('guardianUid', null) &&
           request.resource.data.get('isSupervised', null) == resource.data.get('isSupervised', null) &&
-          request.resource.data.get('isSelfControlAllowed', false) == resource.data.get('isSelfControlAllowed', false) &&
+          request.resource.data.get('isSelfControlAllowed', true) == resource.data.get('isSelfControlAllowed', true) &&
           request.resource.data.get('selfControlCurfewAllowed', true) == resource.data.get('selfControlCurfewAllowed', true) &&
-          request.resource.data.get('selfControlWebAllowed', false) == resource.data.get('selfControlWebAllowed', false) &&
-          request.resource.data.get('selfControlAppsAllowed', false) == resource.data.get('selfControlAppsAllowed', false) &&
+          request.resource.data.get('selfControlWebAllowed', true) == resource.data.get('selfControlWebAllowed', true) &&
+          request.resource.data.get('selfControlAppsAllowed', true) == resource.data.get('selfControlAppsAllowed', true) &&
           request.resource.data.get('selfControlWaqfaAllowed', true) == resource.data.get('selfControlWaqfaAllowed', true) &&
-          request.resource.data.get('selfControlPageShieldAllowed', false) == resource.data.get('selfControlPageShieldAllowed', false) &&
-          request.resource.data.get('selfControlNewAppsAllowed', false) == resource.data.get('selfControlNewAppsAllowed', false) &&
-          request.resource.data.get('isDateTimeLocked', false) == resource.data.get('isDateTimeLocked', false) &&
-          request.resource.data.get('isClearAppDataAllowed', true) == resource.data.get('isClearAppDataAllowed', true) &&
+          request.resource.data.get('selfControlPageShieldAllowed', true) == resource.data.get('selfControlPageShieldAllowed', true) &&
+          request.resource.data.get('selfControlNewAppsAllowed', true) == resource.data.get('selfControlNewAppsAllowed', true) &&
+          request.resource.data.get('selfControlFortressesAllowed', true) == resource.data.get('selfControlFortressesAllowed', true) &&
+          request.resource.data.get('selfControlFortressUnlockAllowed', true) == resource.data.get('selfControlFortressUnlockAllowed', true) &&
+          request.resource.data.get('selfControlOtherSettingsAllowed', true) == resource.data.get('selfControlOtherSettingsAllowed', true) &&
+          (
+            resource.data.get('selfControlFortressesAllowed', true) == true ||
+            request.resource.data.get('fortressesConfig', null) == resource.data.get('fortressesConfig', null) ||
+            (
+              !('fortressesConfig' in resource.data) &&
+              request.resource.data.get('fortressesConfig', null) is map &&
+              request.resource.data.fortressesConfig.get('profiles', []) is list &&
+              request.resource.data.fortressesConfig.profiles.size() == 1 &&
+              request.resource.data.fortressesConfig.profiles[0].get('id', '') == 'fortress_emergency' &&
+              request.resource.data.fortressesConfig.profiles[0].get('isEmergency', false) == true &&
+              request.resource.data.fortressesConfig.profiles[0].get('durationMinutes', 0) == 60 &&
+              request.resource.data.fortressesConfig.profiles[0].get('isInternetCutEnabled', false) == true &&
+              request.resource.data.fortressesConfig.profiles[0].get('allowedPackages', []).size() == 0 &&
+              request.resource.data.fortressesConfig.profiles[0].get('vpnBypassPackages', []).size() == 0
+            )
+          ) &&
+          (
+            resource.data.get('selfControlCurfewAllowed', true) == true ||
+            (
+              request.resource.data.get('curfewStartHour', null) == resource.data.get('curfewStartHour', null) &&
+              request.resource.data.get('curfewStartMinute', null) == resource.data.get('curfewStartMinute', null) &&
+              request.resource.data.get('curfewEndHour', null) == resource.data.get('curfewEndHour', null) &&
+              request.resource.data.get('curfewEndMinute', null) == resource.data.get('curfewEndMinute', null) &&
+              request.resource.data.get('isCurfewEnabled', null) == resource.data.get('isCurfewEnabled', null) &&
+              request.resource.data.get('isInstantInternetKillEnabled', false) == resource.data.get('isInstantInternetKillEnabled', false) &&
+              request.resource.data.get('isWeekendCurfewEnabled', null) == resource.data.get('isWeekendCurfewEnabled', null) &&
+              request.resource.data.get('weekendCurfewStartHour', null) == resource.data.get('weekendCurfewStartHour', null) &&
+              request.resource.data.get('weekendCurfewStartMinute', null) == resource.data.get('weekendCurfewStartMinute', null) &&
+              request.resource.data.get('weekendCurfewEndHour', null) == resource.data.get('weekendCurfewEndHour', null) &&
+              request.resource.data.get('weekendCurfewEndMinute', null) == resource.data.get('weekendCurfewEndMinute', null) &&
+              request.resource.data.get('isVpnBlackholeEnabled', null) == resource.data.get('isVpnBlackholeEnabled', null) &&
+              request.resource.data.get('customCurfewWhitelistPackages', null) == resource.data.get('customCurfewWhitelistPackages', null) &&
+              request.resource.data.get('curfewVpnBypassPackages', null) == resource.data.get('curfewVpnBypassPackages', null)
+            )
+          ) &&
+          (
+            resource.data.get('selfControlWebAllowed', true) == true ||
+            (
+              request.resource.data.get('browserFilterMode', null) == resource.data.get('browserFilterMode', null) &&
+              request.resource.data.get('isFullSystemFilteringEnabled', null) == resource.data.get('isFullSystemFilteringEnabled', null) &&
+              request.resource.data.get('customBlockedUrls', null) == resource.data.get('customBlockedUrls', null) &&
+              request.resource.data.get('customAllowedUrls', null) == resource.data.get('customAllowedUrls', null) &&
+              request.resource.data.get('dnsHost', null) == resource.data.get('dnsHost', null) &&
+              request.resource.data.get('isYouTubeRestrictedModeEnabled', null) == resource.data.get('isYouTubeRestrictedModeEnabled', null) &&
+              request.resource.data.get('isAdBlockingEnabled', null) == resource.data.get('isAdBlockingEnabled', null) &&
+              request.resource.data.get('isTelegramWebBlocked', null) == resource.data.get('isTelegramWebBlocked', null) &&
+              request.resource.data.get('isIncognitoBlocked', null) == resource.data.get('isIncognitoBlocked', null) &&
+              request.resource.data.get('isBlockExternalVpnEnabled', null) == resource.data.get('isBlockExternalVpnEnabled', null)
+            )
+          ) &&
+          (
+            resource.data.get('selfControlAppsAllowed', true) == true ||
+            (
+              request.resource.data.get('isScreenAiEnabledGlobally', null) == resource.data.get('isScreenAiEnabledGlobally', null) &&
+              request.resource.data.get('customBlacklistPackages', null) == resource.data.get('customBlacklistPackages', null) &&
+              request.resource.data.get('customAiScanPackages', null) == resource.data.get('customAiScanPackages', null) &&
+              request.resource.data.get('excludedAiScanPackages', null) == resource.data.get('excludedAiScanPackages', null) &&
+              request.resource.data.get('protectedAppPackages', null) == resource.data.get('protectedAppPackages', null)
+            )
+          ) &&
+          (
+            resource.data.get('selfControlWaqfaAllowed', true) == true ||
+            request.resource.data.get('waqfaConfig', null) == resource.data.get('waqfaConfig', null)
+          ) &&
+          (
+            resource.data.get('selfControlPageShieldAllowed', true) == true ||
+            request.resource.data.get('pageShieldConfig', null) == resource.data.get('pageShieldConfig', null)
+          ) &&
+          (
+            resource.data.get('selfControlNewAppsAllowed', true) == true ||
+            request.resource.data.get('lockNewInstallsUntilApproved', null) == resource.data.get('lockNewInstallsUntilApproved', null)
+          ) &&
+          (
+            resource.data.get('selfControlOtherSettingsAllowed', true) == true ||
+            (
+              request.resource.data.get('timeZoneId', null) == resource.data.get('timeZoneId', null) &&
+              request.resource.data.get('isDateTimeLocked', false) == resource.data.get('isDateTimeLocked', false) &&
+              request.resource.data.get('isClearAppDataAllowed', true) == resource.data.get('isClearAppDataAllowed', true) &&
+              request.resource.data.get('isInstantInternetKillEnabled', false) == resource.data.get('isInstantInternetKillEnabled', false)
+            )
+          ) &&
+          request.resource.data.get('remoteModeUnlockTarget', null) == resource.data.get('remoteModeUnlockTarget', null) &&
+          request.resource.data.get('remoteModeUnlockRequestedAt', null) == resource.data.get('remoteModeUnlockRequestedAt', null) &&
           request.resource.data.get('breakoutStatus', null) == resource.data.get('breakoutStatus', null) &&
           request.resource.data.get('breakoutRequestedAt', null) == resource.data.get('breakoutRequestedAt', null) &&
           request.resource.data.get('breakoutUnlockAt', null) == resource.data.get('breakoutUnlockAt', null) &&
@@ -144,7 +238,10 @@ service cloud.firestore {
             'lastHeartbeat', 'acknowledgedVersion', 'lastAcknowledgedAt',
             'wardHasAccessibilityService', 'wardHasUsageStats',
             'wardCanWriteSecureSettings', 'wardCapabilitiesUpdatedAt',
-            'wardA11yTamperAt', 'wardSdkInt'
+            'wardA11yTamperAt', 'wardSdkInt',
+            'wardActiveFortressId', 'wardActiveFortressName',
+            'wardActiveFortressIsEmergency', 'wardActiveFortressEndsAtWall',
+            'wardIsCurfewActiveNow', 'wardActiveModesUpdatedAt'
           ])) ||
         // Case 5: Ward initiates or cancels 24h emergency breakout while supervised (protection stays intact)
         (resource.data.get('guardianUid', null) != null && isOwner(wardUid) &&
@@ -225,7 +322,25 @@ service cloud.firestore {
         isGuardianOf(wardUid) ||
         (
           isOwner(wardUid) &&
-          resource.data.get('status', '') == 'PENDING' &&
+          (
+            (
+              resource.data.get('status', '') == 'PENDING' &&
+              isSelfNewAppDecisionAllowed(wardUid)
+            ) ||
+            (
+              resource.data.get('status', '') == 'REJECTED' &&
+              request.resource.data.get('status', '') == 'APPROVED' &&
+              (
+                resource.data.get('decidedBy', '') == 'SELF' ||
+                isUnsupervisedOwner(wardUid) ||
+                (
+                  exists(/databases/$(database)/documents/policies/$(wardUid)) &&
+                  get(/databases/$(database)/documents/policies/$(wardUid)).data.get('isSelfControlAllowed', true) == true &&
+                  get(/databases/$(database)/documents/policies/$(wardUid)).data.get('selfControlAppsAllowed', true) == true
+                )
+              )
+            )
+          ) &&
           request.resource.data.get('decidedBy', '') == 'SELF' &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'decidedBy', 'decidedAt']) &&
           (

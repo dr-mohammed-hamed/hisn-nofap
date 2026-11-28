@@ -241,10 +241,10 @@ object AiTelemetryReporter {
             diagDao.getDiagnosticEventsBlocking(40, BlackBoxRecorder.TAG_CURFEW).map { it.toDto() }
         }
         val (dpmEvents, dpmReadError) = queryEventsSafely("dpm") {
-            diagDao.getDiagnosticEventsBlocking(30, BlackBoxRecorder.TAG_DPM).map { it.toDto() }
+            diagDao.getDiagnosticEventsBlocking(35, BlackBoxRecorder.TAG_DPM).map { it.toDto() }
         }
         val (shieldEvents, shieldEventsReadError) = queryEventsSafely("shield") {
-            diagDao.getDiagnosticEventsBlocking(20, BlackBoxRecorder.TAG_SHIELD).map { it.toDto() }
+            diagDao.getDiagnosticEventsBlocking(40, BlackBoxRecorder.TAG_SHIELD).map { it.toDto() }
         }
         var waqfaReadError = false
         val waqfaEvents = try {
@@ -256,7 +256,7 @@ object AiTelemetryReporter {
             emptyList()
         }.sortedByDescending { it.timestamp }
         val (networkEvents, networkReadError) = queryEventsSafely("network") {
-            diagDao.getDiagnosticEventsBlocking(25, BlackBoxRecorder.TAG_NETWORK).map { it.toDto() }
+            diagDao.getDiagnosticEventsBlocking(45, BlackBoxRecorder.TAG_NETWORK).map { it.toDto() }
         }
         val (timeEvents, timeReadError) = queryEventsSafely("time") {
             diagDao.getDiagnosticEventsBlocking(20, BlackBoxRecorder.TAG_TIME).map { it.toDto() }
@@ -295,12 +295,24 @@ object AiTelemetryReporter {
             sb.appendLine("| **Live VPN Service / Tunnel State** | `${sanitizeMarkdownCell(vpnStatus.liveTunnelStateLabel)}` |")
             sb.appendLine("| **Full System Filtering** | `${if (currentPolicy.isFullSystemFilteringEnabled) "[YES]" else "[NO]"}` |")
             sb.appendLine("| **Ad Blocking Active** | `${if (currentPolicy.isAdBlockingEnabled) "[YES]" else "[NO]"}` |")
+            sb.appendLine("| **Local DNS VPN Fallback Enabled** | `${if (currentPolicy.isLocalVpnFallbackEnabled) "[YES]" else "[NO]"}` |")
             sb.appendLine("| **Browser Filter Mode** | `${currentPolicy.browserFilterMode}` |")
             sb.appendLine("| **Active DNS Host (Policy)** | `${sanitizeMarkdownCell(currentPolicy.dnsHost)}` |")
             val runtimeDnsHost = com.drmohammed.antiporn.shields.DnsShield.getEffectiveDnsHost(appContext)
-            val resilienceMode = com.drmohammed.antiporn.core.network.dns.DnsResilienceManager.getActiveMode()
-            sb.appendLine("| **Effective Runtime DNS Host** | `${sanitizeMarkdownCell(runtimeDnsHost)} (ResilienceMode=$resilienceMode)` |")
+            val resilienceSnapshot = com.drmohammed.antiporn.core.network.dns.DnsResilienceManager.getRuntimeSnapshot()
+            sb.appendLine("| **Effective Runtime DNS Host** | `${sanitizeMarkdownCell(runtimeDnsHost)} (ResilienceMode=${resilienceSnapshot.mode})` |")
             sb.appendLine("| **Local Binary DNS Filter Entries** | `${BinaryDomainFilter.getLoadedEntriesCount()}` |")
+            sb.appendLine("| **DNS Resilience Runtime** | `mode=${resilienceSnapshot.mode}, protectedNet=${sanitizeMarkdownCell(resilienceSnapshot.protectedNetworkId ?: "none")}, transport=${sanitizeMarkdownCell(resilienceSnapshot.protectedTransport ?: "none")}, trigger=${resilienceSnapshot.triggerClass ?: "none"}, restoring=${resilienceSnapshot.isRestoringPrimary}` |")
+            val activePhysicalSummary = com.drmohammed.antiporn.core.network.PhysicalNetworkResolver
+                .describeActivePhysicalNetwork(appContext)
+            sb.appendLine("| **Active Physical Network** | `${sanitizeMarkdownCell(activePhysicalSummary)}` |")
+            val isPendingOfflineDpmSync = CurfewConfig.isPendingDpmPrivateDnsSync(appContext)
+            val pendingDpmHost = if (isPendingOfflineDpmSync) {
+                CurfewConfig.getPendingDpmPrivateDnsHost(appContext)
+            } else {
+                null
+            }
+            sb.appendLine("| **Pending Offline DPM DNS Sync** | `${if (isPendingOfflineDpmSync) "[PENDING] host=${sanitizeMarkdownCell(pendingDpmHost ?: runtimeDnsHost)}" else "[NONE]"}` |")
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                 val gMode = android.provider.Settings.Global.getString(appContext.contentResolver, "private_dns_mode")
                 val gHost = android.provider.Settings.Global.getString(appContext.contentResolver, "private_dns_specifier")
@@ -442,7 +454,7 @@ object AiTelemetryReporter {
             sb.appendLine("### Recent Shield Status & Failure Events (سجل الدروع المتعثرة)")
             sb.appendLine("| Timestamp | Shield | Status | Details / Failure Reason |")
             sb.appendLine("| :--- | :--- | :---: | :--- |")
-            for (event in shieldEvents.take(15)) {
+            for (event in shieldEvents.take(30)) {
                 val statusLabel = if (event.isSuccess) "[OK]" else "[FAIL]"
                 val errOrMeta = formatEventDetails(event)
                 sb.appendLine("| `${sanitizeMarkdownCell(event.formattedTime())}` | `${sanitizeMarkdownCell(event.actionName)}` | $statusLabel | $errOrMeta |")
@@ -481,12 +493,12 @@ object AiTelemetryReporter {
         if (dpmReadError) {
             sb.appendLine("[WARN] *READ_ERROR querying DPM telemetry events.*")
         } else if (dpmEvents.isNotEmpty()) {
-            sb.appendLine("| Timestamp | Action | Latency | Status | Error Details |")
+            sb.appendLine("| Timestamp | Action | Latency | Status | Details / Error |")
             sb.appendLine("| :--- | :--- | :---: | :---: | :--- |")
-            for (event in dpmEvents.take(25)) {
+            for (event in dpmEvents.take(30)) {
                 val statusLabel = if (event.isSuccess) "[OK]" else "[FAIL]"
-                val safeError = sanitizeMarkdownCell(event.errorDetails?.let { redactSensitiveIdentifiers(it) })
-                sb.appendLine("| `${sanitizeMarkdownCell(event.formattedTime())}` | `${sanitizeMarkdownCell(event.actionName)}` | `${event.executionTimeMs}ms` | $statusLabel | $safeError |")
+                val safeDetails = formatEventDetails(event)
+                sb.appendLine("| `${sanitizeMarkdownCell(event.formattedTime())}` | `${sanitizeMarkdownCell(event.actionName)}` | `${event.executionTimeMs}ms` | $statusLabel | $safeDetails |")
             }
         } else {
             sb.appendLine("[INFO] *No DPM operations recorded yet.*")
@@ -514,7 +526,7 @@ object AiTelemetryReporter {
             title = "## 9. Network Connectivity & Transitions (أحداث الشبكة والاتصال)",
             emptyMessage = "[INFO] *No network connectivity transition events recorded yet.*",
             readError = networkReadError,
-            events = networkEvents.take(25)
+            events = networkEvents.take(40)
         )
         appendEventSection(
             sb = sb,

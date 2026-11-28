@@ -10,6 +10,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.annotation.StringRes
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.ColorUtils
 import androidx.core.os.bundleOf
 import androidx.fragment.app.DialogFragment
 import androidx.lifecycle.lifecycleScope
@@ -124,14 +125,18 @@ class BlockingSecondaryUsersDialogFragment : DialogFragment() {
             container.addView(itemView)
         }
 
+        // main: explicit disabled-state colors so the confirm button is never shown as enabled
+        // while the safety countdown is running or consent has not been given.
+        val disabledBg = ColorUtils.setAlphaComponent(colorOnSurface, 31)
+        val disabledText = ColorUtils.setAlphaComponent(colorOnSurface, 97)
         btnConfirm.backgroundTintList = ColorStateList(
             arrayOf(intArrayOf(android.R.attr.state_enabled), intArrayOf()),
-            intArrayOf(colorRed, MaterialColors.layer(colorOnSurface, colorOnSurfaceVariant, 0.12f))
+            intArrayOf(colorRed, disabledBg)
         )
         btnConfirm.setTextColor(
             ColorStateList(
                 arrayOf(intArrayOf(android.R.attr.state_enabled), intArrayOf()),
-                intArrayOf(colorWhite, colorOnSurfaceVariant)
+                intArrayOf(colorWhite, disabledText)
             )
         )
 

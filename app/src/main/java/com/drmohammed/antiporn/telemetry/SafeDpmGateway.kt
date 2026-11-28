@@ -9,6 +9,7 @@ import android.util.Log
 import com.drmohammed.antiporn.AdminReceiver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import timber.log.Timber
 
 /**
  * Centralized, type-safe execution gateway for all Android Enterprise (DevicePolicyManager) commands.
@@ -41,7 +42,7 @@ object SafeDpmGateway : SafeDpmPackageBridge, SafeDpmPolicyBridge {
             val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager ?: return false
             dpm.isAdminActive(getAdminComponent(context))
         } catch (e: Exception) {
-            Log.w(TAG, "Error checking isAdminActive", e)
+            Timber.tag(TAG).w(e, "Error checking isAdminActive")
             false
         }
     }
@@ -54,7 +55,7 @@ object SafeDpmGateway : SafeDpmPackageBridge, SafeDpmPolicyBridge {
             val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager ?: return false
             dpm.isDeviceOwnerApp(context.packageName) || dpm.isProfileOwnerApp(context.packageName)
         } catch (e: Exception) {
-            Log.w(TAG, "Error checking isDeviceOwnerApp", e)
+            Timber.tag(TAG).w(e, "Error checking isDeviceOwnerApp")
             false
         }
     }

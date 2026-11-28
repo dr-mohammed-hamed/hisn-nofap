@@ -983,6 +983,100 @@ class PrivateDnsFastPathTest {
     }
 
     @Test
+    fun testApplyStandaloneDot_offlineHostNotServing_preArmsSettingsGlobalAndMarksPendingDpmSync() {
+        val executionLog = mutableListOf<String>()
+        var pendingDpmState: Boolean? = null
+        var clearPendingCalls = 0
+
+        val (resCode, usedFallback) = CurfewVpnDnsBridge.applyStandaloneDotInternal(
+            targetHost = expectedHost,
+            currentDpmMode = DevicePolicyManager.PRIVATE_DNS_MODE_OPPORTUNISTIC,
+            currentDpmHost = null,
+            globalMode = "opportunistic",
+            globalHost = "",
+            isDeviceOwner = true,
+            markInternalMutation = { executionLog.add("markInternalMutation") },
+            writeGlobal = { key, value ->
+                executionLog.add("writeGlobal:$key=$value")
+                true
+            },
+            setDpmPrivateDns = { host ->
+                executionLog.add("setDpm:$host")
+                true to DevicePolicyManager.PRIVATE_DNS_SET_ERROR_HOST_NOT_SERVING
+            },
+            clearDnsRestorePending = { clearPendingCalls++ },
+            isDeviceOffline = true,
+            markPendingDpmSync = { pending ->
+                pendingDpmState = pending
+                executionLog.add("markPendingDpm=$pending")
+            }
+        )
+
+        assertEquals(DevicePolicyManager.PRIVATE_DNS_SET_ERROR_HOST_NOT_SERVING, resCode)
+        assertTrue("Offline HOST_NOT_SERVING must pre-arm via Settings.Global", usedFallback)
+        assertEquals(true, pendingDpmState)
+        assertEquals(1, clearPendingCalls)
+        assertEquals(
+            listOf(
+                "markInternalMutation",
+                "setDpm:$expectedHost",
+                "writeGlobal:private_dns_specifier=$expectedHost",
+                "writeGlobal:private_dns_mode=hostname",
+                "markPendingDpm=true"
+            ),
+            executionLog
+        )
+
+        // When online later and DPM succeeds, pending DPM sync must be cleared cleanly
+        val (onlineRes, onlineFallback) = CurfewVpnDnsBridge.applyStandaloneDotInternal(
+            targetHost = expectedHost,
+            currentDpmMode = DevicePolicyManager.PRIVATE_DNS_MODE_OPPORTUNISTIC,
+            currentDpmHost = null,
+            globalMode = "hostname",
+            globalHost = expectedHost,
+            isDeviceOwner = true,
+            markInternalMutation = {},
+            writeGlobal = { _, _ -> true },
+            setDpmPrivateDns = { _ -> true to DevicePolicyManager.PRIVATE_DNS_SET_NO_ERROR },
+            clearDnsRestorePending = {},
+            isDeviceOffline = false,
+            markPendingDpmSync = { pending -> pendingDpmState = pending }
+        )
+
+        assertEquals(DevicePolicyManager.PRIVATE_DNS_SET_NO_ERROR, onlineRes)
+        assertFalse(onlineFallback)
+        assertEquals(false, pendingDpmState)
+    }
+
+    @Test
+    fun testIsStandaloneDnsStateConsistent_offlinePreArmedReportsConsistent_onlineRequiresDpmConvergence() {
+        assertTrue(
+            "Offline pre-armed state must report consistent/ACTIVE without false tamper alarm",
+            CurfewVpnDnsBridge.isStandaloneDnsStateConsistent(
+                dpmMode = DevicePolicyManager.PRIVATE_DNS_MODE_OPPORTUNISTIC,
+                dpmHost = null,
+                globalMode = "hostname",
+                globalHost = expectedHost,
+                targetHost = expectedHost,
+                isUnaffiliatedBlocked = false,
+                isOfflinePreArmedPendingDpm = true
+            )
+        )
+        assertFalse(
+            "Online state with un-converged DPM must require sync until DPM succeeds",
+            CurfewVpnDnsBridge.isStandaloneDnsStateConsistent(
+                dpmMode = DevicePolicyManager.PRIVATE_DNS_MODE_OPPORTUNISTIC,
+                dpmHost = null,
+                globalMode = "hostname",
+                globalHost = expectedHost,
+                targetHost = expectedHost,
+                isUnaffiliatedBlocked = false,
+                isOfflinePreArmedPendingDpm = false
+            )
+        )
+    }
+
+    @Test
     fun testApplyStandaloneDot_dpmSucceedsAndGlobalMatches_noDoubleGlobalWrite() {
         var globalWriteCalls = 0
         val (resCode, usedFallback) = CurfewVpnDnsBridge.applyStandaloneDotInternal(
@@ -1025,5 +1119,70 @@ class PrivateDnsFastPathTest {
         assertEquals(DevicePolicyManager.PRIVATE_DNS_SET_ERROR_FAILURE_SETTING, resCode)
         assertTrue("Pre-armed Settings.Global must report usedFallback=true on DPM error 2", usedFallback)
         assertTrue("clearDnsRestorePending must be called when fail-closed global fallback is active", clearedRestorePending)
+    }
+
+    @Test
+    fun testStandaloneDotEnforcer_skipsRecursiveResilienceNotifyWhenSuppressedOrEvaluating() {
+        val hostNotServing = CurfewVpnDnsBridge.COMPAT_PRIVATE_DNS_SET_ERROR_HOST_NOT_SERVING
+        assertFalse(
+            "Must skip resilience notify when suppressResilienceNotify=true",
+            StandaloneDotEnforcer.shouldNotifyResilienceOnHostNotServing(
+                dnsSetResult = hostNotServing,
+                isOffline = false,
+                suppressResilienceNotify = true,
+                isEvaluationInProgress = false
+            )
+        )
+        assertFalse(
+            "Must skip resilience notify when DnsResilienceManager evaluation is already in progress",
+            StandaloneDotEnforcer.shouldNotifyResilienceOnHostNotServing(
+                dnsSetResult = hostNotServing,
+                isOffline = false,
+                suppressResilienceNotify = false,
+                isEvaluationInProgress = true
+            )
+        )
+        assertFalse(
+            "Must skip resilience notify when device is offline",
+            StandaloneDotEnforcer.shouldNotifyResilienceOnHostNotServing(
+                dnsSetResult = hostNotServing,
+                isOffline = true,
+                suppressResilienceNotify = false,
+                isEvaluationInProgress = false
+            )
+        )
+        assertFalse(
+            "Must skip resilience notify when DPM succeeded",
+            StandaloneDotEnforcer.shouldNotifyResilienceOnHostNotServing(
+                dnsSetResult = CurfewVpnDnsBridge.COMPAT_PRIVATE_DNS_SET_NO_ERROR,
+                isOffline = false,
+                suppressResilienceNotify = false,
+                isEvaluationInProgress = false
+            )
+        )
+        assertTrue(
+            "Must notify resilience when online HOST_NOT_SERVING occurs outside evaluation and suppression",
+            StandaloneDotEnforcer.shouldNotifyResilienceOnHostNotServing(
+                dnsSetResult = hostNotServing,
+                isOffline = false,
+                suppressResilienceNotify = false,
+                isEvaluationInProgress = false
+            )
+        )
+
+        assertTrue(
+            "Normal callers must skip DPM hammering when network DoT is already exhausted",
+            StandaloneDotEnforcer.shouldSkipDpmForExhaustedNetwork(
+                suppressResilienceNotify = false,
+                isExhaustedOnNetwork = true
+            )
+        )
+        assertFalse(
+            "Resilience evaluator callers with suppressResilienceNotify=true must be allowed to probe DPM",
+            StandaloneDotEnforcer.shouldSkipDpmForExhaustedNetwork(
+                suppressResilienceNotify = true,
+                isExhaustedOnNetwork = true
+            )
+        )
     }
 }

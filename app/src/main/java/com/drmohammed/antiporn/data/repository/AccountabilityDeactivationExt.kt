@@ -5,6 +5,7 @@ import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.cloud.CloudSyncManager
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
+import com.drmohammed.antiporn.data.local.db.entity.PartnerEntity
 import com.drmohammed.antiporn.notification.manager.AppNotificationManager
 import com.drmohammed.antiporn.notification.model.NotificationActionType
 import com.drmohammed.antiporn.notification.model.NotificationCategory
@@ -252,7 +253,7 @@ suspend fun AccountabilityRepository.requestGuardianImmediateTeardown(wardUid: S
 
                 val now = TrustedTimeProvider.currentTimeMillis(appContext)
                 val unlockAt = maxOf(1L, now - 60_000L)
-                val partner = partnerDao.getPartnerByIdBlocking(wardUid)
+                val partner = partnerDao.getPartnerByIdAndRoleBlocking(wardUid, PartnerEntity.ROLE_WARD)
                 val resolvedActiveUid = resolveActivePartnerUid(wardUid, partner?.pairingCode)
                 val canonicalUid = resolvedActiveUid.ifBlank { wardUid }
                 val targetUids = expandPendingTeardownGroup(
@@ -322,7 +323,7 @@ suspend fun AccountabilityRepository.cancelGuardianImmediateTeardown(wardUid: St
         guardianTeardownCleanupMutex.withLock {
             try {
                 val now = TrustedTimeProvider.currentTimeMillis(appContext)
-                val partner = partnerDao.getPartnerByIdBlocking(wardUid)
+                val partner = partnerDao.getPartnerByIdAndRoleBlocking(wardUid, PartnerEntity.ROLE_WARD)
                 val resolvedActiveUid = resolveActivePartnerUid(wardUid, partner?.pairingCode)
                 val canonicalUid = resolvedActiveUid.ifBlank { wardUid }
                 val targetUids = expandPendingTeardownGroup(
@@ -413,7 +414,7 @@ private suspend fun AccountabilityRepository.completeGuardianSideTeardownCleanup
     wardUid: String,
     wardName: String
 ): Boolean {
-    val partner = partnerDao.getPartnerByIdBlocking(wardUid)
+    val partner = partnerDao.getPartnerByIdAndRoleBlocking(wardUid, PartnerEntity.ROLE_WARD)
     val resolvedActiveUid = resolveActivePartnerUid(wardUid, partner?.pairingCode)
     val targetUids = expandPendingTeardownGroup(
         linkedSetOf(wardUid).apply { if (resolvedActiveUid.isNotBlank()) add(resolvedActiveUid) }
@@ -430,17 +431,14 @@ private suspend fun AccountabilityRepository.completeGuardianSideTeardownCleanup
     val failedCloudDeletes = mutableListOf<String>()
     for (targetUid in targetUids) {
         try {
-            firestore.collection("users").document(myUid)
-                .collection("partners").document(targetUid)
-                .delete()
-                .await()
+            deleteCloudPartnerDocSafely(myUid, targetUid, PartnerEntity.ROLE_WARD)
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             failedCloudDeletes.add(targetUid)
             Timber.tag(TAG).w("Partner cloud delete warning on teardown completion: %s", e.message)
         }
         try {
-            partnerDao.deletePartnerBlocking(targetUid)
+            partnerDao.deletePartnerByIdAndRoleBlocking(targetUid, PartnerEntity.ROLE_WARD)
         } catch (e: Exception) {
             Timber.tag(TAG).w("Partner local delete warning on teardown completion: %s", e.message)
         }

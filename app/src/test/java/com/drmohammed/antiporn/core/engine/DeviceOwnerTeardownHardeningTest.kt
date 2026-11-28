@@ -6,12 +6,14 @@ import android.content.SharedPreferences
 import com.drmohammed.antiporn.cloud.CloudSyncManager
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.curfew.CurfewConfig
-import com.drmohammed.antiporn.curfew.NapConfig
-import com.drmohammed.antiporn.curfew.NapController
+import com.drmohammed.antiporn.fortress.engine.FortressSessionController
+import com.drmohammed.antiporn.fortress.engine.FortressSessionPrefsStore
+import com.drmohammed.antiporn.fortress.model.FortressProfile
 import com.drmohammed.antiporn.data.local.db.dao.PartnerDao
 import com.drmohammed.antiporn.data.repository.PolicyCloudSyncBridge
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.data.repository.RemoteTeardownHandler
+import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -33,7 +35,9 @@ class DeviceOwnerTeardownHardeningTest {
 
     @After
     fun tearDown() {
+        BlackBoxRecorder.awaitPendingWritesBlocking()
         ProtectionTransitionGuard.isTeardownInProgress = false
+        FortressSessionController.resetForTesting()
     }
 
     @Test
@@ -292,25 +296,43 @@ class DeviceOwnerTeardownHardeningTest {
     }
 
     @Test
-    fun napController_clearNapForTeardownClearsActiveNapSynchronously() {
+    fun fortressSessionController_clearForTeardownClearsFortressAndLegacyNapSynchronously() {
         val context = FakePrefsContext()
-        val napPrefs = context.getSharedPreferences(NapConfig.PREFS_NAME, Context.MODE_PRIVATE)
-        napPrefs.edit()
-            .putBoolean(NapConfig.KEY_NAP_ACTIVE, true)
-            .putLong(NapConfig.KEY_NAP_START_ELAPSED, 10_000L)
-            .putLong(NapConfig.KEY_NAP_END_ELAPSED, 3_610_000L)
-            .putLong(NapConfig.KEY_NAP_END_WALL_MS, 1_790_003_600_000L)
-            .putInt(NapConfig.KEY_NAP_BOOT_COUNT, 7)
+        val fortressPrefs = context.getSharedPreferences(FortressSessionPrefsStore.PREFS_NAME, Context.MODE_PRIVATE)
+        fortressPrefs.edit()
+            .putBoolean(FortressSessionPrefsStore.KEY_ACTIVE, true)
+            .putString(FortressSessionPrefsStore.KEY_FORTRESS_ID, FortressProfile.EMERGENCY_FORTRESS_ID)
+            .putString(FortressSessionPrefsStore.KEY_FORTRESS_NAME, "Emergency")
+            .putBoolean(FortressSessionPrefsStore.KEY_IS_EMERGENCY, true)
+            .putInt(FortressSessionPrefsStore.KEY_DURATION_MINUTES, 60)
+            .putLong(FortressSessionPrefsStore.KEY_START_ELAPSED, 10_000L)
+            .putLong(FortressSessionPrefsStore.KEY_END_ELAPSED, 3_610_000L)
+            .putLong(FortressSessionPrefsStore.KEY_END_WALL_MS, 1_790_003_600_000L)
+            .putInt(FortressSessionPrefsStore.KEY_BOOT_COUNT, 7)
             .commit()
 
-        NapController.clearNapForTeardown(context)
+        val legacyNapPrefs = context.getSharedPreferences("antiporn_nap_prefs", Context.MODE_PRIVATE)
+        legacyNapPrefs.edit()
+            .putBoolean("key_nap_active", true)
+            .putLong("key_nap_start_elapsed", 5_000L)
+            .putLong("key_nap_end_elapsed", 3_605_000L)
+            .putLong("key_nap_end_wall_ms", 1_790_003_500_000L)
+            .putInt("key_nap_boot_count", 6)
+            .commit()
 
-        assertFalse(napPrefs.getBoolean(NapConfig.KEY_NAP_ACTIVE, true))
-        assertEquals(0L, napPrefs.getLong(NapConfig.KEY_NAP_START_ELAPSED, -1L))
-        assertEquals(0L, napPrefs.getLong(NapConfig.KEY_NAP_END_ELAPSED, -1L))
-        assertEquals(0L, napPrefs.getLong(NapConfig.KEY_NAP_END_WALL_MS, -1L))
-        assertEquals(-1, napPrefs.getInt(NapConfig.KEY_NAP_BOOT_COUNT, 0))
-        assertFalse(NapController.isNapActive(context))
+        FortressSessionController.migrateLegacyNapSessionIfNeeded(context)
+        FortressSessionController.clearForTeardown(context)
+
+        assertFalse(fortressPrefs.getBoolean(FortressSessionPrefsStore.KEY_ACTIVE, true))
+        assertFalse(fortressPrefs.contains(FortressSessionPrefsStore.KEY_FORTRESS_ID))
+        assertEquals(0L, fortressPrefs.getLong(FortressSessionPrefsStore.KEY_START_ELAPSED, -1L))
+        assertEquals(0L, fortressPrefs.getLong(FortressSessionPrefsStore.KEY_END_ELAPSED, -1L))
+        assertEquals(0L, fortressPrefs.getLong(FortressSessionPrefsStore.KEY_END_WALL_MS, -1L))
+        assertEquals(-1, fortressPrefs.getInt(FortressSessionPrefsStore.KEY_BOOT_COUNT, 0))
+        assertFalse(legacyNapPrefs.getBoolean("key_nap_active", true))
+        assertTrue(legacyNapPrefs.getBoolean("key_nap_migrated_to_fortress", false))
+        assertEquals(0L, legacyNapPrefs.getLong("key_nap_end_wall_ms", -1L))
+        assertFalse(FortressSessionController.isFortressActive(context))
     }
 
     @Test

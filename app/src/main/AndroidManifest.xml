@@ -149,6 +149,7 @@
             <intent-filter>
                 <action android:name="com.drmohammed.antiporn.ACTION_CURFEW_START" />
                 <action android:name="com.drmohammed.antiporn.ACTION_CURFEW_END" />
+                <action android:name="com.drmohammed.antiporn.ACTION_FORTRESS_END" />
                 <action android:name="com.drmohammed.antiporn.ACTION_NAP_END" />
             </intent-filter>
         </receiver>
@@ -184,10 +185,10 @@
         </receiver>
 
         <receiver
-            android:name=".curfew.notification.NapNotificationReceiver"
+            android:name=".fortress.notification.FortressNotificationReceiver"
             android:exported="false">
             <intent-filter>
-                <action android:name="com.drmohammed.antiporn.curfew.ACTION_EXTEND_NAP" />
+                <action android:name="com.drmohammed.antiporn.fortress.ACTION_EXTEND_FORTRESS" />
             </intent-filter>
         </receiver>
 
@@ -262,10 +263,26 @@
             android:exported="false"
             android:launchMode="singleTop" />
         <activity
+            android:name=".fortress.ui.FortressesListActivity"
+            android:exported="false"
+            android:launchMode="singleTop" />
+        <activity
+            android:name=".fortress.ui.FortressEditorActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
             android:name=".ui.control.web.WebFilterSettingsActivity"
             android:exported="false"
             android:launchMode="singleTop"
             android:windowSoftInputMode="adjustResize" />
+        <activity
+            android:name=".ui.control.web.LocalDnsFallbackConsentActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Antiporn.TranslucentDialog" />
         <activity
             android:name=".ui.control.other.OtherSettingsActivity"
             android:exported="false"
@@ -283,7 +300,7 @@
             android:exported="false"
             android:launchMode="singleTop"
             android:resizeableActivity="true"
-            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode|density|fontScale|locale|layoutDirection"
             android:label="@string/provisioning_wizard_title" />
 
         <!-- In-App Notification Center -->
@@ -292,6 +309,13 @@
             android:exported="false"
             android:launchMode="singleTop"
             android:label="@string/title_notification_center" />
+
+        <!-- Waqf Support (Sadaqah Jariyah) -->
+        <activity
+            android:name=".ui.waqf.WaqfSupportActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:label="@string/waqf_support_title" />
 
         <service
             android:name=".provisioning.service.AdbPairingNotificationService"

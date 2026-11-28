@@ -129,7 +129,7 @@ class AccountabilityFragment : Fragment() {
             val originalName = payload.getString(KEY_ORIGINAL_NAME).orEmpty()
             val newName = bundle.getString(TextInputDialogFragment.RESULT_TEXT)?.trim().orEmpty()
             if (partnerId.isNotBlank() && newName.isNotBlank() && newName != originalName) {
-                viewModel.renamePartner(partnerId, newName) { result ->
+                viewModel.renamePartner(partnerId, newName, PartnerEntity.ROLE_WARD) { result ->
                     if (!isAdded || _binding == null) return@renamePartner
                     result.onSuccess {
                         Toast.makeText(context, R.string.toast_name_saved, Toast.LENGTH_SHORT).show()
@@ -225,6 +225,18 @@ class AccountabilityFragment : Fragment() {
         renderGuardians(state.guardians, state)
 
         // 3. Pairing Code / Offline Local Mode handling (Shown only if NOT supervised)
+        val pairingButtonEnabled = !state.isGeneratingPairingCode
+        binding.btnGeneratePairingCodeForMe.isEnabled = pairingButtonEnabled
+        binding.btnGeneratePairingCodeForMe.text = getString(
+            if (state.isGeneratingPairingCode) R.string.btn_generating_pairing_code
+            else R.string.btn_generate_pairing_code_for_me
+        )
+        binding.btnEnableSupervisionWard.isEnabled = pairingButtonEnabled
+        binding.btnEnableSupervisionWard.text = getString(
+            if (state.isGeneratingPairingCode) R.string.btn_generating_pairing_code
+            else R.string.btn_enable_supervision_ward
+        )
+
         if (state.isSupervised || state.isPairingCodeLocked || state.myPairingCode == AccountabilityRepository.CODE_LOCKED) {
             binding.cardMyPairingCode.visibility = View.GONE
             binding.cardOfflineLocalMode.visibility = View.GONE
@@ -312,31 +324,17 @@ class AccountabilityFragment : Fragment() {
         }
 
         binding.btnEnableSupervisionWard.setOnClickListener {
-            binding.btnEnableSupervisionWard.isEnabled = false
-            viewModel.startTemporaryPairingSession { result ->
-                if (!isAdded || _binding == null) return@startTemporaryPairingSession
-                binding.btnEnableSupervisionWard.isEnabled = true
-                if (result.isFailure) {
-                    val msg = result.exceptionOrNull()?.message ?: getString(R.string.error_unknown)
-                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
-                }
-            }
+            startPairingCodeGeneration(
+                button = binding.btnEnableSupervisionWard,
+                fallbackErrorRes = R.string.error_unknown
+            )
         }
 
         binding.btnGeneratePairingCodeForMe.setOnClickListener {
-            val now = SystemClock.elapsedRealtime()
-            if (now - lastGenerateCodeClickTime < 800L) return@setOnClickListener
-            lastGenerateCodeClickTime = now
-            binding.btnGeneratePairingCodeForMe.isEnabled = false
-            viewModel.startTemporaryPairingSession { result ->
-                if (!isAdded || _binding == null) return@startTemporaryPairingSession
-                binding.btnGeneratePairingCodeForMe.isEnabled = true
-                if (result.isFailure) {
-                    val msg = result.exceptionOrNull()?.message
-                        ?: getString(R.string.error_pairing_code_publish_failed)
-                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
-                }
-            }
+            startPairingCodeGeneration(
+                button = binding.btnGeneratePairingCodeForMe,
+                fallbackErrorRes = R.string.error_pairing_code_publish_failed
+            )
         }
 
         binding.btnEnableSupervisionGuardian.setOnClickListener {
@@ -350,6 +348,24 @@ class AccountabilityFragment : Fragment() {
                 if (!isAdded || _binding == null) return@cancelTemporaryPairingSession
                 binding.btnCancelPairingSession.isEnabled = true
                 Toast.makeText(context, R.string.pairing_session_cancelled, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun startPairingCodeGeneration(button: MaterialButton, fallbackErrorRes: Int) {
+        if (viewModel.uiState.value.isGeneratingPairingCode) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastGenerateCodeClickTime < 800L) return
+        lastGenerateCodeClickTime = now
+        button.isEnabled = false
+        viewModel.startTemporaryPairingSession { result ->
+            if (!isAdded || _binding == null) return@startTemporaryPairingSession
+            if (!viewModel.uiState.value.isGeneratingPairingCode && !button.isEnabled) {
+                render(viewModel.uiState.value)
+            }
+            if (result.isFailure) {
+                val msg = result.exceptionOrNull()?.message ?: getString(fallbackErrorRes)
+                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -833,9 +849,9 @@ class AccountabilityFragment : Fragment() {
         isPairingInProgress = true
         binding.btnAddPartner.isEnabled = false
         viewModel.pairWithCode(code, role) { result ->
+            isPairingInProgress = false
             if (!isAdded || _binding == null) return@pairWithCode
             binding.btnAddPartner.isEnabled = true
-            isPairingInProgress = false
             result.fold(
                 onSuccess = {
                     Toast.makeText(context, R.string.toast_partner_added, Toast.LENGTH_LONG).show()
@@ -891,6 +907,7 @@ class AccountabilityFragment : Fragment() {
 
     override fun onDestroyView() {
         super.onDestroyView()
+        isPairingInProgress = false
         breakoutCountdownTextView = null
         breakoutCompleteBtn = null
         lastRenderedGuardians = emptyList()

@@ -116,7 +116,7 @@ object BlackBoxRecorder {
         if (pendingWriteJobs.isEmpty()) return
         val startNs = System.nanoTime()
         while (true) {
-            val pending = pendingWriteJobs.toList().filter { !it.isCompleted }
+            val pending = pendingWriteJobs.asSequence().filter { !it.isCompleted }.toList()
             if (pending.isEmpty()) return
             val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
             val remaining = timeoutMs - elapsedMs
