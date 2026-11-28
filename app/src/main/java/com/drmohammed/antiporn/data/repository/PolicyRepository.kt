@@ -19,7 +19,8 @@ import com.drmohammed.antiporn.data.local.db.dao.DevicePolicyDao
 import com.drmohammed.antiporn.data.local.db.dao.PartnerDao
 import com.drmohammed.antiporn.data.local.db.entity.DevicePolicyEntity
 import com.drmohammed.antiporn.data.local.db.entity.PartnerEntity
-import com.drmohammed.antiporn.pageshield.engine.PageShieldAccessibilityHook
+import com.drmohammed.antiporn.accessibility.core.AccessibilityCoreBootstrap
+import com.drmohammed.antiporn.accessibility.core.AccessibilityModuleRegistry
 import com.drmohammed.antiporn.telemetry.AiTelemetryReporter
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import com.drmohammed.antiporn.ui.control.gate.SelfControlAccessGateRegistry
@@ -89,7 +90,9 @@ class PolicyRepository(
         val initialPolicy = cachedPolicy ?: DevicePolicyBundle.defaultPolicy()
         _currentPolicyFlow = MutableStateFlow(initialPolicy)
         currentPolicyFlow = _currentPolicyFlow.asStateFlow()
-        PageShieldAccessibilityHook.getInstance().updateConfig(initialPolicy.pageShieldConfig)
+        if (!AccessibilityCoreBootstrap.ensureInitializedInternal(appContext, initialPolicy)) {
+            AccessibilityModuleRegistry.notifyPolicyUpdated(initialPolicy)
+        }
         SelfControlAccessGateRegistry.isSelfControlAllowedWhenSupervised = initialPolicy.isSelfControlAllowed
 
         repositoryScope.launch {
@@ -104,7 +107,7 @@ class PolicyRepository(
             try {
                 val (reconciled, needsSave, migratedLegacy) = loadAndReconcilePolicy(initialPolicy, hasCachedPolicy)
                 didMigrateLegacyWhitelist = migratedLegacy
-                val adopted = synchronized(policyStateLock) {
+                val (adopted, effectivePolicy) = synchronized(policyStateLock) {
                     val current = _currentPolicyFlow.value
                     val noConcurrentUpdate = current == initialPolicy
                     val shouldAdoptInitialRoomLoad = !hasCachedPolicy && noConcurrentUpdate
@@ -116,7 +119,6 @@ class PolicyRepository(
                                     (noConcurrentUpdate && reconciled.updatedAt >= current.updatedAt))))
                     val didAdopt = if (isNewerOrEqualReconciled) {
                         _currentPolicyFlow.value = reconciled
-                        PageShieldAccessibilityHook.getInstance().updateConfig(reconciled.pageShieldConfig)
                         SelfControlAccessGateRegistry.isSelfControlAllowedWhenSupervised = reconciled.isSelfControlAllowed
                         if (needsSave || !hasCachedPolicy) {
                             schedulePolicyPersistenceLocked(reconciled)
@@ -129,16 +131,15 @@ class PolicyRepository(
                         false
                     }
                     isInitialPolicyLoaded = true
-                    didAdopt
+                    didAdopt to _currentPolicyFlow.value
                 }
-                val effectivePolicy = _currentPolicyFlow.value
                 effectivePolicyAfterReconcile = effectivePolicy
                 if (adopted && (needsSave || !hasCachedPolicy)) {
                     saveFastPolicyCache(effectivePolicy, syncCommit = true)
                 }
                 if (adopted || effectivePolicy != initialPolicy) {
-                    runCatching { PageShieldAccessibilityHook.getInstance().updateConfig(effectivePolicy.pageShieldConfig) }
-                        .onFailure { Timber.tag(TAG).w(it, "Failed updating PageShield config after cold-start Room reconcile") }
+                    runCatching { AccessibilityModuleRegistry.notifyPolicyUpdated(effectivePolicy) }
+                        .onFailure { Timber.tag(TAG).w(it, "Failed notifying accessibility modules after cold-start Room reconcile") }
                     runCatching { WaqfaSessionManager.getInstance(appContext).updateConfig(effectivePolicy.waqfaConfig) }
                         .onFailure { Timber.tag(TAG).w(it, "Failed updating Waqfa config after cold-start Room reconcile") }
                     runCatching { AccessibilityPolicyCoordinator.reconcile(appContext, effectivePolicy) }
@@ -268,6 +269,7 @@ class PolicyRepository(
             val hasGuardians = try {
                 partnerDao.getPartnersByRoleBlocking(PartnerEntity.ROLE_GUARDIAN).isNotEmpty()
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
                 Timber.tag(TAG).w(e, "Failed checking guardians in SQLite during cold boot reconcile")
                 false
             }
@@ -285,6 +287,7 @@ class PolicyRepository(
                     partnerDao.savePartnerBlocking(guardian)
                     Timber.tag(TAG).i("Reconciled missing guardian in SQLite on cold boot: %s", AiTelemetryReporter.maskIdentifier(loaded.guardianName))
                 } catch (e: Exception) {
+                    if (e is CancellationException) throw e
                     Timber.tag(TAG).e(e, "Failed reconciling missing guardian in SQLite")
                 }
             }
@@ -791,12 +794,14 @@ class PolicyRepository(
         private var instance: PolicyRepository? = null
 
         fun getInstance(context: Context): PolicyRepository {
+            val appContext = context.applicationContext ?: context
             return instance ?: synchronized(this) {
                 instance ?: (try {
                     org.koin.core.context.GlobalContext.getOrNull()?.get<PolicyRepository>()
-                } catch (_: Throwable) {
+                } catch (t: Throwable) {
+                    Timber.tag(TAG).d(t, "Koin PolicyRepository lookup unavailable; falling back to direct instance")
                     null
-                } ?: PolicyRepository(context.applicationContext)).also {
+                } ?: PolicyRepository(appContext)).also {
                     instance = it
                 }
             }

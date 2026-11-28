@@ -6,10 +6,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.PowerManager
-import android.os.SystemClock
 import com.drmohammed.antiporn.accessibility.bus.ForegroundAppEventBus
-import com.drmohammed.antiporn.accessibility.control.AccessibilityPolicyCoordinator
-import com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator
 import com.drmohammed.antiporn.banking.BankingCloakManager
 import com.drmohammed.antiporn.waqfa.model.WaqfaConfig
 import kotlinx.coroutines.CoroutineScope
@@ -23,8 +20,7 @@ import timber.log.Timber
  * مراقب التطبيق النشط في الواجهة لنظام «وَقْفَة».
  * يعمل بنمط هجين ذكي متوافق تماماً مع المادة 8 من الدستور (قانون الصفر بولينج):
  * - طالما أن [HisnAccessibilityService] متصلة ونشطة: يدخل في سبات تام (0% CPU / Zero Polling).
- * - في حال انقطاع الخدمة: يحاول أولاً الإفاقة الصامتة (مع مهلة تبريد 15 ثانية)،
- *   ثم ينشط كـ Fallback احتياطي بمعدل 400ms حصراً أثناء إضاءة الشاشة.
+ * - في حال انقطاع الخدمة: ينشط كـ Fallback احتياطي بمعدل 400ms حصراً أثناء إضاءة الشاشة.
  * - عند تفعيل وضع التخفي البنكي (BankingCloakManager.isCloaked)، يستمر المراقب بالعمل
  *   حتى لو كان نظام «وَقْفَة» معطلاً، لرصد مغادرة تطبيق البنك واستعادة الحماية فوراً.
  */
@@ -47,18 +43,19 @@ class WaqfaForegroundWatcher internal constructor(
         configProvider = null
     )
 
-    private val context = context.applicationContext
+    private val context = context.applicationContext ?: context
     private var handlerThread: HandlerThread? = null
     private var dynamicScheduler: WatcherScheduler? = injectedScheduler
 
-    private val scheduler: WatcherScheduler
-        get() = synchronized(this) {
-            dynamicScheduler ?: run {
-                val ht = HandlerThread("WaqfaWatcherThread").apply { start() }
-                handlerThread = ht
-                HandlerWatcherScheduler(Handler(ht.looper)).also { dynamicScheduler = it }
-            }
+    @Synchronized
+    private fun getOrCreateSchedulerLocked(): WatcherScheduler? {
+        if (!isRunning) return null
+        return dynamicScheduler ?: run {
+            val ht = HandlerThread("WaqfaWatcherThread").apply { start() }
+            handlerThread = ht
+            HandlerWatcherScheduler(Handler(ht.looper)).also { dynamicScheduler = it }
         }
+    }
 
     private val usageStatsManager: UsageStatsManager? =
         injectedUsageStatsManager ?: (this.context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager)
@@ -71,14 +68,6 @@ class WaqfaForegroundWatcher internal constructor(
 
     private fun getConfig(): WaqfaConfig =
         configProvider?.invoke(context) ?: getSessionManager().getConfig()
-
-    private fun getElapsedRealtime(): Long {
-        return try {
-            SystemClock.elapsedRealtime()
-        } catch (e: Throwable) {
-            System.currentTimeMillis()
-        }
-    }
 
     private var watcherScope: CoroutineScope? = null
     private var stateCollectorJob: Job? = null
@@ -96,29 +85,20 @@ class WaqfaForegroundWatcher internal constructor(
         internal set
 
     @Volatile
-    private var lastHealingAttemptTimeMs: Long = 0L
+    private var watcherGeneration: Long = 0L
 
     internal val checkRunnable = object : Runnable {
         override fun run() {
-            if (!isRunning || !isScreenOn) return
+            val runGen: Long
+            synchronized(this@WaqfaForegroundWatcher) {
+                if (!isRunning || !isScreenOn) return
+                runGen = watcherGeneration
+            }
 
             // قانون الصفر بولينج: إذا كانت خدمة الوصول نشطة، يتوقف الفحص الدوري تماماً
             if (eventBus.isAccessibilityActive.value) {
                 Timber.tag(TAG).d("HisnAccessibilityService is active; WaqfaForegroundWatcher dormant (Zero-Polling)")
                 return
-            }
-
-            // محاولة الإفاقة الذاتية الصامتة فقط إذا كانت خدمة الوصول مطلوبة وفق السياسة النشطة (مع مهلة تبريد 15 ثانية)
-            val now = getElapsedRealtime()
-            if (now - lastHealingAttemptTimeMs >= SELF_HEALING_COOLDOWN_MS) {
-                lastHealingAttemptTimeMs = now
-                if (AccessibilityPolicyCoordinator.isAccessibilityRequired(context) &&
-                    AccessibilitySelfActivator.enableSilently(context)
-                ) {
-                    Timber.tag(TAG).i("Self-healing triggered HisnAccessibilityService activation; holding polling loop")
-                    scheduler.postDelayed(this, checkIntervalMs * 2)
-                    return
-                }
             }
 
             val config = getConfig()
@@ -129,13 +109,20 @@ class WaqfaForegroundWatcher internal constructor(
             }
 
             evaluateForegroundPackage(config)
-            scheduler.postDelayed(this, checkIntervalMs)
+            synchronized(this@WaqfaForegroundWatcher) {
+                if (isRunning && runGen == watcherGeneration && isScreenOn && !eventBus.isAccessibilityActive.value) {
+                    val sched = getOrCreateSchedulerLocked()
+                    sched?.removeCallbacks(this)
+                    sched?.postDelayed(this, checkIntervalMs)
+                }
+            }
         }
     }
 
     @Synchronized
     fun start() {
         if (isRunning) return
+        watcherGeneration++
         isRunning = true
 
         stateCollectorJob?.cancel()
@@ -148,16 +135,17 @@ class WaqfaForegroundWatcher internal constructor(
         // مراقبة تفاعلية لحالة خدمة الوصول المركزية
         stateCollectorJob = scope.launch {
             eventBus.isAccessibilityActive.collect { active ->
-                if (!isRunning) return@collect
-                if (active) {
-                    synchronized(this@WaqfaForegroundWatcher) {
+                synchronized(this@WaqfaForegroundWatcher) {
+                    if (!isRunning) return@collect
+                    if (active) {
                         dynamicScheduler?.removeCallbacks(checkRunnable)
+                        Timber.tag(TAG).i("HisnAccessibilityService connected: Waqfa polling stopped (Zero-Polling Active)")
+                    } else if (isScreenOn) {
+                        Timber.tag(TAG).w("HisnAccessibilityService disconnected: Activating Waqfa fallback polling loop")
+                        val sched = getOrCreateSchedulerLocked()
+                        sched?.removeCallbacks(checkRunnable)
+                        sched?.post(checkRunnable)
                     }
-                    Timber.tag(TAG).i("HisnAccessibilityService connected: Waqfa polling stopped (Zero-Polling Active)")
-                } else if (isScreenOn) {
-                    Timber.tag(TAG).w("HisnAccessibilityService disconnected: Activating Waqfa fallback polling loop")
-                    scheduler.removeCallbacks(checkRunnable)
-                    scheduler.post(checkRunnable)
                 }
             }
         }
@@ -172,8 +160,9 @@ class WaqfaForegroundWatcher internal constructor(
         }
 
         if (!eventBus.isAccessibilityActive.value) {
-            scheduler.removeCallbacks(checkRunnable)
-            scheduler.post(checkRunnable)
+            val sched = getOrCreateSchedulerLocked()
+            sched?.removeCallbacks(checkRunnable)
+            sched?.post(checkRunnable)
             Timber.tag(TAG).i("WaqfaForegroundWatcher fallback started (interval: ${checkIntervalMs}ms)")
         } else {
             Timber.tag(TAG).i("WaqfaForegroundWatcher started in dormant state (Accessibility 0ms active)")
@@ -182,6 +171,7 @@ class WaqfaForegroundWatcher internal constructor(
 
     @Synchronized
     fun stop() {
+        watcherGeneration++
         isRunning = false
         dynamicScheduler?.removeCallbacks(checkRunnable)
         stateCollectorJob?.cancel()
@@ -197,28 +187,30 @@ class WaqfaForegroundWatcher internal constructor(
         Timber.tag(TAG).i("WaqfaForegroundWatcher stopped")
     }
 
+    @Synchronized
     fun notifyConfigChanged() {
         if (isRunning && isScreenOn && !eventBus.isAccessibilityActive.value) {
-            scheduler.removeCallbacks(checkRunnable)
+            val sched = getOrCreateSchedulerLocked() ?: return
+            sched.removeCallbacks(checkRunnable)
             val config = getConfig()
             val isCloaked = BankingCloakManager.isCloaked(context)
             if ((config.isEnabled && config.targetPackages.isNotEmpty()) || isCloaked) {
-                scheduler.post(checkRunnable)
+                sched.post(checkRunnable)
             }
         }
     }
 
+    @Synchronized
     fun onScreenStateChanged(screenOn: Boolean) {
         isScreenOn = screenOn
         if (screenOn) {
             if (isRunning && !eventBus.isAccessibilityActive.value) {
-                scheduler.removeCallbacks(checkRunnable)
-                scheduler.post(checkRunnable)
+                val sched = getOrCreateSchedulerLocked()
+                sched?.removeCallbacks(checkRunnable)
+                sched?.post(checkRunnable)
             }
         } else {
-            synchronized(this) {
-                dynamicScheduler?.removeCallbacks(checkRunnable)
-            }
+            dynamicScheduler?.removeCallbacks(checkRunnable)
             if (BankingCloakManager.isCloaked(context)) {
                 Timber.tag(TAG).d("Screen turned off while banking cloak active; keeping cloak active until user navigates away")
             }
@@ -272,14 +264,14 @@ class WaqfaForegroundWatcher internal constructor(
 
     companion object {
         private const val TAG = "AntiPorn_WaqfaWatcher"
-        private const val SELF_HEALING_COOLDOWN_MS = 15_000L // 15 ثانية
 
         @Volatile
         private var instance: WaqfaForegroundWatcher? = null
 
         fun getInstance(context: Context): WaqfaForegroundWatcher {
+            val appContext = context.applicationContext ?: context
             return instance ?: synchronized(this) {
-                instance ?: WaqfaForegroundWatcher(context.applicationContext).also { instance = it }
+                instance ?: WaqfaForegroundWatcher(appContext).also { instance = it }
             }
         }
 

@@ -17,6 +17,8 @@ import com.drmohammed.antiporn.accessibility.control.AccessibilityPolicyCoordina
 import com.drmohammed.antiporn.accessibility.control.AccessibilityReconcileResult
 import com.drmohammed.antiporn.accessibility.control.AccessibilityRequirementReason
 import com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator
+import com.drmohammed.antiporn.accessibility.core.AccessibilityCoreBootstrap
+import com.drmohammed.antiporn.accessibility.core.AccessibilityModuleRegistry
 import com.drmohammed.antiporn.ai.service.ScreenAiProjectionService
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.core.model.IslamicTimeZoneRegistry
@@ -216,7 +218,9 @@ internal class PolicyEnforcementHandler(
                     AppInventoryManager.getInstance(appContext).syncInventoryToCloud()
                 }
                 WaqfaSessionManager.getInstance(appContext).updateConfig(bundle.waqfaConfig)
-                com.drmohammed.antiporn.pageshield.engine.PageShieldAccessibilityHook.getInstance().updateConfig(bundle.pageShieldConfig)
+                if (!AccessibilityCoreBootstrap.ensureInitializedInternal(appContext, bundle)) {
+                    AccessibilityModuleRegistry.notifyPolicyUpdated(bundle)
+                }
                 reconcileAccessibilityAndCapabilities(bundle)
                 ProtectionNotificationCoordinator.syncProtectionNotification(appContext)
                 WardActiveModesTelemetrySyncer.syncAsync(appContext)
@@ -612,6 +616,7 @@ internal class PolicyEnforcementHandler(
                     AccessibilityRequirementReason.PAGE_SHIELD -> appContext.getString(R.string.feature_name_page_shield)
                     AccessibilityRequirementReason.WAQFA_INSTANT -> appContext.getString(R.string.feature_name_waqfa)
                     AccessibilityRequirementReason.VISION_AI -> appContext.getString(R.string.feature_name_vision_ai)
+                    AccessibilityRequirementReason.CUSTOM_SHIELD -> appContext.getString(R.string.feature_name_custom_shield)
                 }
             }.joinToString(separator)
 

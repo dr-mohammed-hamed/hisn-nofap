@@ -85,6 +85,7 @@ class AccessibilityOnboardingBottomSheet : BottomSheetDialogFragment() {
             REASON_PAGE_SHIELD -> getString(R.string.a11y_onboarding_reason_page_shield)
             REASON_WAQFA_INSTANT -> getString(R.string.a11y_onboarding_reason_waqfa)
             REASON_VISION_AI -> getString(R.string.a11y_onboarding_reason_vision_ai)
+            REASON_CUSTOM_SHIELD -> getString(R.string.a11y_onboarding_reason_custom_shield)
             else -> getString(R.string.a11y_onboarding_reason_general)
         }
     }
@@ -127,6 +128,7 @@ class AccessibilityOnboardingBottomSheet : BottomSheetDialogFragment() {
         const val REASON_PAGE_SHIELD = "PAGE_SHIELD"
         const val REASON_WAQFA_INSTANT = "WAQFA_INSTANT"
         const val REASON_VISION_AI = "VISION_AI"
+        const val REASON_CUSTOM_SHIELD = "CUSTOM_SHIELD"
         const val REASON_GUARDIAN = "GUARDIAN"
         const val REASON_GENERAL = "GENERAL"
 
@@ -154,6 +156,7 @@ class AccessibilityOnboardingBottomSheet : BottomSheetDialogFragment() {
                 reasons.contains(AccessibilityRequirementReason.PAGE_SHIELD) -> REASON_PAGE_SHIELD
                 reasons.contains(AccessibilityRequirementReason.WAQFA_INSTANT) -> REASON_WAQFA_INSTANT
                 reasons.contains(AccessibilityRequirementReason.VISION_AI) -> REASON_VISION_AI
+                reasons.contains(AccessibilityRequirementReason.CUSTOM_SHIELD) -> REASON_CUSTOM_SHIELD
                 else -> REASON_GENERAL
             }
         }

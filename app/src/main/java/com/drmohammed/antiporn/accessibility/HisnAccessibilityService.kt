@@ -13,14 +13,19 @@ import android.view.accessibility.AccessibilityWindowInfo
 import com.drmohammed.antiporn.accessibility.bus.ForegroundAppEventBus
 import com.drmohammed.antiporn.accessibility.control.AccessibilityPolicyCoordinator
 import com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator
+import com.drmohammed.antiporn.accessibility.core.AccessibilityCapabilitiesManager
+import com.drmohammed.antiporn.accessibility.core.AccessibilityCoreBootstrap
+import com.drmohammed.antiporn.accessibility.core.AccessibilityModuleRegistry
 import com.drmohammed.antiporn.accessibility.filter.TransientWindowEventFilter
 import com.drmohammed.antiporn.accessibility.hook.AccessibilityHookRegistry
+import com.drmohammed.antiporn.accessibility.util.AccessibilityTreeWalker
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import timber.log.Timber
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * محرك خدمة الوصول المركزي لتطبيق الحصن (Hisn Accessibility Service).
@@ -35,19 +40,31 @@ class HisnAccessibilityService : AccessibilityService() {
     private lateinit var windowFilter: TransientWindowEventFilter
     @Volatile
     private var standaloneCoordinator: com.drmohammed.antiporn.ai.service.AiInferenceCoordinator? = null
+    private val disconnectNotified = AtomicBoolean(false)
+
     @Volatile
-    private var disconnectNotified: Boolean = false
+    var currentForegroundPackage: String? = null
+        private set
+
+    fun refreshCapabilities() {
+        try {
+            AccessibilityCapabilitiesManager.syncServiceInfo(this) { currentForegroundPackage }
+        } catch (e: Exception) {
+            Timber.tag(TAG).w(e, "Error refreshing service capabilities")
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
         eventBus = ForegroundAppEventBus.getInstance(applicationContext)
         windowFilter = TransientWindowEventFilter.getInstance(applicationContext)
+        AccessibilityCoreBootstrap.ensureInitialized(applicationContext)
         Timber.tag(TAG).i("HisnAccessibilityService created")
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        disconnectNotified = false
+        disconnectNotified.set(false)
 
         val policyRepo = try {
             PolicyRepository.getInstance(applicationContext)
@@ -72,21 +89,8 @@ class HisnAccessibilityService : AccessibilityService() {
         }
 
         instance = this
-        try {
-            val info = serviceInfo ?: android.accessibilityservice.AccessibilityServiceInfo()
-            info.flags = info.flags or
-                android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
-                android.accessibilityservice.AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
-                android.accessibilityservice.AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
-            info.eventTypes = info.eventTypes or
-                AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
-                AccessibilityEvent.TYPE_WINDOWS_CHANGED or
-                AccessibilityEvent.TYPE_VIEW_SCROLLED
-            serviceInfo = info
-            com.drmohammed.antiporn.pageshield.engine.PageShieldAccessibilityHook.getInstance()
-        } catch (e: Exception) {
-            Timber.tag(TAG).w("Error updating serviceInfo: ${e.message}")
-        }
+        AccessibilityCapabilitiesManager.syncServiceInfo(this) { currentForegroundPackage }
+        AccessibilityModuleRegistry.notifyServiceConnected(this)
         eventBus.setAccessibilityActive(true)
 
         // مزامنة محرك حارس غض البصر المستقل على أندرويد 14+ وفقاً للسياسة النشطة فقط
@@ -113,12 +117,15 @@ class HisnAccessibilityService : AccessibilityService() {
                 handleWindowStateChanged(evt)
             }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
+                if (evt.isPassword) return
                 standaloneCoordinator?.onViewScrolled()
                     ?: com.drmohammed.antiporn.ai.service.AiInferenceCoordinator.activeInstance?.onViewScrolled()
+                AccessibilityModuleRegistry.dispatchEvent(this, evt)
                 AccessibilityHookRegistry.dispatchRawEvent(this, evt)
             }
             else -> {
-                // إتاحة معالجة الأحداث المتقدمة لخطافات المرحلة القادمة (Phase 2)
+                if (evt.isPassword) return
+                AccessibilityModuleRegistry.dispatchEvent(this, evt)
                 AccessibilityHookRegistry.dispatchRawEvent(this, evt)
             }
         }
@@ -127,12 +134,13 @@ class HisnAccessibilityService : AccessibilityService() {
     private fun handleWindowStateChanged(event: AccessibilityEvent) {
         val packageName = event.packageName?.toString() ?: run {
             try {
-                val win = windows.firstOrNull { it.isFocused && it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+                val win = windows?.firstOrNull { it != null && it.isFocused && it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
                 val root = win?.root
                 val pkg = root?.packageName?.toString()
-                try { root?.recycle() } catch (_: Exception) {}
+                AccessibilityTreeWalker.safeRecycle(root)
                 pkg
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Timber.tag(TAG).d(e, "Failed resolving foreground package from focused window")
                 null
             }
         } ?: return
@@ -143,14 +151,26 @@ class HisnAccessibilityService : AccessibilityService() {
             return
         }
 
-        // 2. فحص خطافات التوسع المستقبلي (مثل نظام التخفي الفوري لتطبيقات البنوك)
+        // 2. الخطافات التوافقية قادرة على استهلاك الحدث وفق عقدها المعلن
         if (AccessibilityHookRegistry.dispatchWindowState(this, packageName, className)) {
-            Timber.tag(TAG).d("Window state event consumed by registered hook for $packageName")
+            Timber.tag(TAG).d("Window state event consumed by legacy hook for $packageName")
             return
         }
 
         // 3. إرسال الحدث إلى الناقل المركزي لتغذية منظومة «وَقْفَة» ودرع الذكاء الاصطناعي
         eventBus.emitFromAccessibility(packageName, className)
+
+        // 4. تحديث الحزمة النشطة ومزامنة قدرات الخدمة بشكل ذري
+        AccessibilityCapabilitiesManager.withCapabilityLock {
+            currentForegroundPackage = packageName
+            AccessibilityCapabilitiesManager.syncServiceInfo(this) { currentForegroundPackage }
+        }
+
+        // 5. عدم فحص أحداث حقول كلمات المرور عبر الوحدات المسجلة
+        if (event.isPassword) return
+
+        // 6. توزيع تغير الواجهة على الوحدات المسجلة
+        AccessibilityModuleRegistry.dispatchForegroundChanged(this, packageName, className, event)
     }
 
     override fun onInterrupt() {
@@ -184,7 +204,9 @@ class HisnAccessibilityService : AccessibilityService() {
         stopStandaloneAiEngine()
         try {
             screenshotExecutor.shutdown()
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Timber.tag(TAG).d(e, "Ignored error shutting down screenshotExecutor")
+        }
         if (instance === this) {
             instance = null
         }
@@ -200,13 +222,11 @@ class HisnAccessibilityService : AccessibilityService() {
     }
 
     private fun notifyDisconnectedOnce() {
-        if (!disconnectNotified) {
-            disconnectNotified = true
-            try {
-                com.drmohammed.antiporn.pageshield.engine.PageShieldAccessibilityHook.getInstance().onServiceDisconnected()
-            } catch (e: Exception) {
-                Timber.tag(TAG).w(e, "Error notifying PageShieldAccessibilityHook of disconnect")
+        if (disconnectNotified.compareAndSet(false, true)) {
+            AccessibilityCapabilitiesManager.withCapabilityLock {
+                currentForegroundPackage = null
             }
+            AccessibilityModuleRegistry.notifyServiceDisconnected()
             AccessibilityPolicyCoordinator.onServiceDisconnected(applicationContext)
             AccessibilitySelfActivator.clearIntentionalDisable()
         }
@@ -226,14 +246,14 @@ class HisnAccessibilityService : AccessibilityService() {
     fun captureCleanWindowBitmap(onResult: (Bitmap?, Rect, Int) -> Unit) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             val interactiveWindow = try {
-                windows.mapNotNull { win ->
-                    if (win.type != AccessibilityWindowInfo.TYPE_APPLICATION) return@mapNotNull null
+                windows?.mapNotNull { win ->
+                    if (win == null || win.type != AccessibilityWindowInfo.TYPE_APPLICATION) return@mapNotNull null
                     val root = win.root
                     val pkg = root?.packageName?.toString()
-                    try { root?.recycle() } catch (_: Exception) {}
+                    AccessibilityTreeWalker.safeRecycle(root)
                     if (pkg == null || pkg == applicationContext.packageName) return@mapNotNull null
                     Pair(win, pkg)
-                }.maxByOrNull { (win, pkg) ->
+                }?.maxByOrNull { (win, pkg) ->
                     val b = Rect()
                     win.getBoundsInScreen(b)
                     val area = (b.right - b.left).toLong() * (b.bottom - b.top).toLong()
@@ -242,6 +262,7 @@ class HisnAccessibilityService : AccessibilityService() {
                     targetBonus + focusBonus + area
                 }?.first
             } catch (e: Exception) {
+                Timber.tag(TAG).d(e, "Failed inspecting interactive windows for screenshot")
                 null
             }
 
@@ -250,7 +271,7 @@ class HisnAccessibilityService : AccessibilityService() {
                 try {
                     interactiveWindow.getBoundsInScreen(windowBounds)
                 } catch (e: Exception) {
-                    Timber.tag(TAG).w("Error getting window bounds: ${e.message}")
+                    Timber.tag(TAG).w(e, "Error getting window bounds")
                 }
 
                 try {
@@ -259,31 +280,51 @@ class HisnAccessibilityService : AccessibilityService() {
                         screenshotExecutor,
                         object : TakeScreenshotCallback {
                             override fun onSuccess(screenshotResult: ScreenshotResult) {
-                                val hwBuffer = screenshotResult.hardwareBuffer
+                                val hwBuffer: android.hardware.HardwareBuffer? = try {
+                                    screenshotResult.hardwareBuffer
+                                } catch (e: Exception) {
+                                    Timber.tag(TAG).d(e, "Failed retrieving screenshot hardwareBuffer")
+                                    null
+                                }
+                                if (hwBuffer == null) {
+                                    onResult(null, windowBounds, -1)
+                                    return
+                                }
                                 val colorSpace = screenshotResult.colorSpace
                                 val bitmap = try {
                                     val wrapped = Bitmap.wrapHardwareBuffer(hwBuffer, colorSpace)
                                     if (wrapped != null) {
-                                        val origW = wrapped.width
-                                        val origH = wrapped.height
-                                        val maxDim = 924
-                                        val scale = minOf(1.0f, maxDim.toFloat() / maxOf(origW, origH).toFloat())
-                                        val targetW = (origW * scale).toInt().coerceAtLeast(1)
-                                        val targetH = (origH * scale).toInt().coerceAtLeast(1)
-                                        val scaled = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
-                                        val canvas = Canvas(scaled)
-                                        val paint = Paint(Paint.FILTER_BITMAP_FLAG)
-                                        canvas.drawBitmap(wrapped, null, Rect(0, 0, targetW, targetH), paint)
-                                        try { wrapped.recycle() } catch (_: Exception) {}
-                                        scaled
+                                        try {
+                                            val origW = wrapped.width
+                                            val origH = wrapped.height
+                                            val maxDim = 924
+                                            val scale = minOf(1.0f, maxDim.toFloat() / maxOf(origW, origH).toFloat())
+                                            val targetW = (origW * scale).toInt().coerceAtLeast(1)
+                                            val targetH = (origH * scale).toInt().coerceAtLeast(1)
+                                            val scaled = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
+                                            val canvas = Canvas(scaled)
+                                            val paint = Paint(Paint.FILTER_BITMAP_FLAG)
+                                            canvas.drawBitmap(wrapped, null, Rect(0, 0, targetW, targetH), paint)
+                                            scaled
+                                        } finally {
+                                            try {
+                                                wrapped.recycle()
+                                            } catch (e: Exception) {
+                                                Timber.tag(TAG).d(e, "Ignored error recycling wrapped hardware bitmap")
+                                            }
+                                        }
                                     } else {
                                         null
                                     }
                                 } catch (e: Exception) {
-                                    Timber.tag(TAG).w("Error converting hardware buffer to bitmap: ${e.message}")
+                                    Timber.tag(TAG).w(e, "Error converting hardware buffer to bitmap")
                                     null
                                 } finally {
-                                    try { hwBuffer.close() } catch (_: Exception) {}
+                                    try {
+                                        hwBuffer.close()
+                                    } catch (e: Exception) {
+                                        Timber.tag(TAG).d(e, "Ignored error closing screenshot hardwareBuffer")
+                                    }
                                 }
                                 onResult(bitmap, windowBounds, 0)
                             }

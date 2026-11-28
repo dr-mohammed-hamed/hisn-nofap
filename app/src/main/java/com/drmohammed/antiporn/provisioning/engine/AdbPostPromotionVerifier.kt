@@ -25,8 +25,8 @@ import timber.log.Timber
  * Mandatory post-promotion verification gate executed before disabling Wireless ADB.
  *
  * Ensures Device Owner activation actually took effect, repairs `user_setup_complete`,
- * heals any stranded frozen packages, verifies `WRITE_SECURE_SETTINGS` and Private DNS,
- * and triggers initial protection enforcement before closing `adb_wifi_enabled`.
+ * heals any stranded frozen packages, verifies `WRITE_SECURE_SETTINGS`, `GET_USAGE_STATS`,
+ * and Private DNS, and triggers initial protection enforcement before closing `adb_wifi_enabled`.
  */
 internal object AdbPostPromotionVerifier {
 
@@ -37,7 +37,8 @@ internal object AdbPostPromotionVerifier {
     /**
      * Runs the 7-step post-promotion verification gate.
      * Wireless ADB is disabled ONLY after steps 1–6 pass (including verified healing of all
-     * tracked frozen packages); if verification fails, Wireless ADB remains open for safe retry.
+     * tracked frozen packages and verified grant of every required capability); if verification
+     * fails, Wireless ADB remains open for safe retry.
      */
     suspend fun verifyAndFinalize(
         context: Context,
@@ -82,6 +83,7 @@ internal object AdbPostPromotionVerifier {
         shellExecutor: suspend (String) -> ShellResult,
         isDeviceOwnerChecker: (Context) -> Boolean = { SafeDpmGateway.isDeviceOwner(it) },
         canWriteSecureSettingsChecker: (Context) -> Boolean = { AccessibilitySelfActivator.canWriteSecureSettings(it) },
+        hasUsageStatsChecker: (Context) -> Boolean = { com.drmohammed.antiporn.curfew.CurfewForegroundWatcher.hasUsageStatsPermission(it) },
         privateDnsProvisioner: suspend (Context) -> Unit = {},
         applyEnforcement: suspend (Context) -> Unit = { appCtx ->
             withContext(Dispatchers.IO) {
@@ -147,11 +149,31 @@ internal object AdbPostPromotionVerifier {
         // 3. Ensure no tracked frozen packages remain disabled
         val allFrozenPackagesHealed = verifyAndHealFrozenPackages(appContext, shellExecutor)
 
-        // 4. Re-check WRITE_SECURE_SETTINGS and Private DNS
-        verifySecureSettingsAndPrivateDns(appContext, shellExecutor, canWriteSecureSettingsChecker, privateDnsProvisioner, sdkInt)
+        // 4. Re-check WRITE_SECURE_SETTINGS, GET_USAGE_STATS, and Private DNS
+        val capabilitiesVerified = verifySecureSettingsAndPrivateDns(
+            appContext,
+            shellExecutor,
+            canWriteSecureSettingsChecker,
+            hasUsageStatsChecker,
+            privateDnsProvisioner,
+            sdkInt
+        )
 
         // 5. Apply all shields and heal pre-installed OEM stores on Dispatchers.IO
         applyEnforcement(appContext)
+
+        if (!capabilitiesVerified) {
+            Timber.tag(TAG).e("Post-promotion gate keeping Wireless ADB open: a required capability is still missing.")
+            BlackBoxRecorder.recordPairing(
+                appContext,
+                "DO_POST_VERIFY_CAPABILITY_FAILED",
+                isSuccess = false,
+                error = "WRITE_SECURE_SETTINGS or GET_USAGE_STATS not granted"
+            )
+            val capabilityFailureMessage = appContext.safeGetString(R.string.provisioning_error_post_verify_failed)
+                ?: "Post-promotion capability verification failed."
+            return PromotionResult.Failure(capabilityFailureMessage)
+        }
 
         if (!allFrozenPackagesHealed) {
             Timber.tag(TAG).e("Post-promotion gate keeping Wireless ADB open: stranded frozen packages still remain.")
@@ -265,23 +287,59 @@ internal object AdbPostPromotionVerifier {
         appContext: Context,
         shellExecutor: suspend (String) -> ShellResult,
         canWriteSecureSettingsChecker: (Context) -> Boolean,
+        hasUsageStatsChecker: (Context) -> Boolean,
         privateDnsProvisioner: suspend (Context) -> Unit,
         sdkInt: Int
-    ) {
+    ): Boolean {
+        var capabilitiesVerified = true
+
         if (!canWriteSecureSettingsChecker(appContext)) {
+            var granted = false
             try {
                 val res = shellExecutor("pm grant ${appContext.packageName} android.permission.WRITE_SECURE_SETTINGS")
-                val granted = canWriteSecureSettingsChecker(appContext)
+                granted = canWriteSecureSettingsChecker(appContext)
                 BlackBoxRecorder.recordPairing(
                     appContext,
                     "ADB_WRITE_SECURE_SETTINGS_RETRY",
                     isSuccess = granted,
-                    details = res.combinedOutput().take(200).ifBlank { "granted=$granted" }
+                    details = AdbShellValidation.sanitizeUserFacingError(res.combinedOutput(), 200).ifBlank { "granted=$granted" }
                 )
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 Timber.tag(TAG).w(e, "Retry pm grant WRITE_SECURE_SETTINGS failed")
             }
+            if (!granted) capabilitiesVerified = false
+        }
+
+        if (!hasUsageStatsChecker(appContext)) {
+            var granted = false
+            try {
+                try {
+                    val restrictedRes = shellExecutor("appops set ${appContext.packageName} ACCESS_RESTRICTED_SETTINGS allow")
+                    if (!restrictedRes.isSuccess) {
+                        Timber.tag(TAG).w(
+                            "Retry appops ACCESS_RESTRICTED_SETTINGS failed (exit=${restrictedRes.exitCode}): ${
+                                AdbShellValidation.sanitizeUserFacingError(restrictedRes.combinedOutput(), 200)
+                            }"
+                        )
+                    }
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    Timber.tag(TAG).w(e, "Retry appops ACCESS_RESTRICTED_SETTINGS threw")
+                }
+                val res = shellExecutor("appops set ${appContext.packageName} GET_USAGE_STATS allow")
+                granted = hasUsageStatsChecker(appContext)
+                BlackBoxRecorder.recordPairing(
+                    appContext,
+                    "ADB_GET_USAGE_STATS_RETRY",
+                    isSuccess = granted,
+                    details = AdbShellValidation.sanitizeUserFacingError(res.combinedOutput(), 200).ifBlank { "granted=$granted" }
+                )
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                Timber.tag(TAG).w(e, "Retry appops GET_USAGE_STATS failed")
+            }
+            if (!granted) capabilitiesVerified = false
         }
 
         if (sdkInt >= Build.VERSION_CODES.Q) {
@@ -305,6 +363,7 @@ internal object AdbPostPromotionVerifier {
                 privateDnsProvisioner(appContext)
             }
         }
+        return capabilitiesVerified
     }
 
     private suspend fun disableWirelessAdbSilently(shellExecutor: suspend (String) -> ShellResult) {

@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import androidx.annotation.VisibleForTesting
 import com.drmohammed.antiporn.accessibility.HisnAccessibilityService
+import com.drmohammed.antiporn.accessibility.core.AccessibilityModuleRegistry
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
@@ -15,7 +16,8 @@ import timber.log.Timber
 enum class AccessibilityRequirementReason {
     PAGE_SHIELD,
     WAQFA_INSTANT,
-    VISION_AI
+    VISION_AI,
+    CUSTOM_SHIELD
 }
 
 /**
@@ -70,6 +72,7 @@ object AccessibilityPolicyCoordinator {
         if (policy.isScreenAiEnabledGlobally && sdkInt >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             reasons.add(AccessibilityRequirementReason.VISION_AI)
         }
+        reasons.addAll(AccessibilityModuleRegistry.collectRequiredReasons(policy, sdkInt))
         return reasons
     }
 
@@ -170,6 +173,11 @@ object AccessibilityPolicyCoordinator {
         // 6. الخدمة مطلوبة -> تحقق هل هي نشطة بالفعل أم تحتاج تفعيلاً صامتاً أو يدوياً
         if (isActiveOrEnabled) {
             return AccessibilityReconcileResult.AlreadyActive
+        }
+
+        if (!forceUncloak && policy == null && AccessibilitySelfActivator.isIntentionalDisableActive()) {
+            Timber.tag(TAG).d("reconcile skipped enableSilently: intentional disable grace window is active")
+            return AccessibilityReconcileResult.NotRequiredAlreadyOff
         }
 
         return if (AccessibilitySelfActivator.enableSilently(appContext, forceUncloak)) {

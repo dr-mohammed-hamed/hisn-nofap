@@ -38,8 +38,11 @@ object AccessibilitySelfActivator {
     @Volatile
     private var cloakExpiresAtMs: Long = 0L
 
+    private val intentionalDisableLock = Any()
+
     @Volatile
     var isIntentionalDisableInProgress: Boolean = false
+        private set
 
     @Volatile
     private var intentionalDisableMarkedAtMs: Long = -1L
@@ -73,25 +76,36 @@ object AccessibilitySelfActivator {
     }
 
     fun markIntentionalDisable() {
-        intentionalDisableMarkedAtMs = safeElapsedRealtime()
-        isIntentionalDisableInProgress = true
+        synchronized(intentionalDisableLock) {
+            intentionalDisableMarkedAtMs = safeElapsedRealtime()
+            isIntentionalDisableInProgress = true
+        }
     }
 
     fun clearIntentionalDisable() {
-        isIntentionalDisableInProgress = false
-        intentionalDisableMarkedAtMs = -1L
+        synchronized(intentionalDisableLock) {
+            isIntentionalDisableInProgress = false
+            intentionalDisableMarkedAtMs = -1L
+        }
     }
 
     fun isIntentionalDisableActive(): Boolean {
-        if (!isIntentionalDisableInProgress) return false
-        val markedAt = intentionalDisableMarkedAtMs
-        if (markedAt < 0L) return true
-        val elapsed = safeElapsedRealtime() - markedAt
-        if (elapsed < 0L || elapsed > INTENTIONAL_DISABLE_GRACE_MS) {
-            clearIntentionalDisable()
-            return false
+        synchronized(intentionalDisableLock) {
+            if (!isIntentionalDisableInProgress) return false
+            val markedAt = intentionalDisableMarkedAtMs
+            if (markedAt < 0L) {
+                isIntentionalDisableInProgress = false
+                intentionalDisableMarkedAtMs = -1L
+                return false
+            }
+            val elapsed = safeElapsedRealtime() - markedAt
+            if (elapsed < 0L || elapsed > INTENTIONAL_DISABLE_GRACE_MS) {
+                isIntentionalDisableInProgress = false
+                intentionalDisableMarkedAtMs = -1L
+                return false
+            }
+            return true
         }
-        return true
     }
 
     fun getServiceComponent(context: Context): ComponentName {
@@ -405,6 +419,9 @@ object AccessibilitySelfActivator {
         var settingsWriteSuccess = false
 
         markIntentionalDisable()
+        if (isTemporaryCloak) {
+            persistCloakState(appContext, cloakDurationMs)
+        }
         return try {
             val component = getServiceComponent(appContext)
             val longName = try {
@@ -480,9 +497,7 @@ object AccessibilitySelfActivator {
             val success = disableSelfCalled || settingsWriteSuccess || isTestOrHeadless || !serviceStillEnabled
 
             if (success) {
-                if (isTemporaryCloak) {
-                    persistCloakState(appContext, cloakDurationMs)
-                } else {
+                if (!isTemporaryCloak) {
                     clearCloakState(appContext)
                 }
                 Timber.tag(TAG).i(

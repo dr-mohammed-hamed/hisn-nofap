@@ -7,6 +7,10 @@ import android.os.Build
 import android.os.UserManager
 import android.provider.Settings
 import com.drmohammed.antiporn.R
+import com.drmohammed.antiporn.accessibility.HisnAccessibilityService
+import com.drmohammed.antiporn.accessibility.control.AccessibilityPolicyCoordinator
+import com.drmohammed.antiporn.accessibility.control.AccessibilityReconcileResult
+import com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator
 import com.drmohammed.antiporn.core.engine.ProtectionEngine
 import com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard
 import com.drmohammed.antiporn.core.model.ShieldStatus
@@ -89,6 +93,7 @@ internal object ProtectionAuditEngine {
         if (desyncReasons.isNotEmpty()) {
             reEnforceDesyncedProtection(appContext, desyncReasons)
         }
+        inspectAndReconcileAccessibility(appContext)
         ApprovalRepository.getInstance(appContext).syncZeroTrustBaselineAndReconcileAsync()
     }
 
@@ -353,6 +358,26 @@ internal object ProtectionAuditEngine {
             } catch (e: Exception) {
                 Timber.tag(TAG).e(e, "Error posting tamper alert notification")
             }
+        }
+    }
+
+    private fun inspectAndReconcileAccessibility(appContext: Context) {
+        if (ProtectionTransitionGuard.isTeardownInProgress) return
+        if (AccessibilitySelfActivator.isIntentionalDisableActive()) return
+        if (AccessibilitySelfActivator.isCloaked(appContext)) return
+        if (!AccessibilityPolicyCoordinator.isAccessibilityRequired(appContext)) return
+
+        val isActive = HisnAccessibilityService.instance != null ||
+            AccessibilitySelfActivator.isServiceEnabledInSettings(appContext)
+        if (!isActive && AccessibilitySelfActivator.canWriteSecureSettings(appContext)) {
+            val result = AccessibilityPolicyCoordinator.reconcile(appContext)
+            BlackBoxRecorder.recordA11y(
+                context = appContext,
+                action = "WATCHDOG_AUDIT_RECONCILE",
+                isSuccess = result is AccessibilityReconcileResult.EnabledSilently ||
+                    result is AccessibilityReconcileResult.AlreadyActive,
+                details = "result=${result::class.simpleName}"
+            )
         }
     }
 }

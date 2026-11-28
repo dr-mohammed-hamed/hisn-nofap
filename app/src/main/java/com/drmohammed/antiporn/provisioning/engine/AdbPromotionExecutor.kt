@@ -106,6 +106,7 @@ internal object AdbPromotionExecutor {
         reconnectProvider: (suspend () -> AdbClient?)? = null,
         isDeviceOwnerChecker: (Context) -> Boolean = { SafeDpmGateway.isDeviceOwner(it) },
         canWriteSecureSettingsChecker: (Context) -> Boolean = { AccessibilitySelfActivator.canWriteSecureSettings(it) },
+        hasUsageStatsChecker: (Context) -> Boolean = { com.drmohammed.antiporn.curfew.CurfewForegroundWatcher.hasUsageStatsPermission(it) },
         blockingUsersInspector: suspend (Context) -> List<BlockingSecondaryUser> = { AdbSecondaryUserInspector.inspectBlockingUsersWithShell(it, shellExecutor) },
         sdkVersionProvider: suspend () -> Int = { shellExecutor("getprop ro.build.version.sdk").stdoutText.trim().toIntOrNull() ?: Build.VERSION.SDK_INT },
         isXiaomi: Boolean = OemProvisioningHelper.isXiaomi(),
@@ -128,7 +129,9 @@ internal object AdbPromotionExecutor {
             Timber.tag(TAG).w("Found ${blockingUsers.size} blocking secondary user(s); pausing promotion")
             return PromotionResult.SecondaryUsersBlocking(blockingUsers)
         }
-        grantPrivilegedAppOpsAndPermissions(appContext, shellExecutor, canWriteSecureSettingsChecker, isXiaomi, isRealmeOrOppo)?.let { return it }
+        grantPrivilegedAppOpsAndPermissions(
+            appContext, shellExecutor, canWriteSecureSettingsChecker, hasUsageStatsChecker, isXiaomi, isRealmeOrOppo
+        )?.let { return it }
         provisionPrivateDnsViaAdbWithShell(appContext, shellExecutor)
         tryFastPathZeroAccountPromotion(appContext, shellExecutor, adminComponent, userId, isXiaomi, isRealmeOrOppo, blockingUsersInspector, postPromotionVerifier)?.let { return it }
 
@@ -198,9 +201,10 @@ internal object AdbPromotionExecutor {
         appContext: Context,
         shellExecutor: suspend (String) -> ShellResult,
         canWriteSecureSettingsChecker: (Context) -> Boolean,
+        hasUsageStatsChecker: (Context) -> Boolean,
         isXiaomi: Boolean,
         isRealmeOrOppo: Boolean
-    ): PromotionResult.OemPermissionRequired? {
+    ): PromotionResult? {
         if (isXiaomi) {
             runShellStep("Read Xiaomi persist.security.adbinput") {
                 val prop = shellExecutor("getprop persist.security.adbinput").stdoutText.trim()
@@ -230,6 +234,19 @@ internal object AdbPromotionExecutor {
             val res = shellExecutor("appops set ${appContext.packageName} ACCESS_RESTRICTED_SETTINGS allow")
             if (!res.isSuccess) Timber.tag(TAG).w("Grant ACCESS_RESTRICTED_SETTINGS failed (exit=${res.exitCode}): ${sanitizeUserFacingError(res.combinedOutput(), 200)}")
         }
+        runShellStep("Grant GET_USAGE_STATS") {
+            val res = shellExecutor("appops set ${appContext.packageName} GET_USAGE_STATS allow")
+            if (!res.isSuccess) Timber.tag(TAG).w("Grant GET_USAGE_STATS failed (exit=${res.exitCode}): ${sanitizeUserFacingError(res.combinedOutput(), 200)}")
+        }
+        if (!hasUsageStatsChecker(appContext)) {
+            Timber.tag(TAG).e("Grant GET_USAGE_STATS failed: capability is not granted")
+            BlackBoxRecorder.recordPairing(appContext, "ADB_GET_USAGE_STATS_GRANT", isSuccess = false)
+            return PromotionResult.Failure(
+                appContext.safeGetString(R.string.provisioning_error_post_verify_failed)
+                    ?: "Failed to grant usage stats access"
+            )
+        }
+        BlackBoxRecorder.recordPairing(appContext, "ADB_GET_USAGE_STATS_GRANT", isSuccess = true)
         runShellStep("Whitelist package in deviceidle") {
             val res = shellExecutor("dumpsys deviceidle whitelist +${appContext.packageName}")
             if (!res.isSuccess) Timber.tag(TAG).w("Whitelist package in deviceidle failed (exit=${res.exitCode}): ${sanitizeUserFacingError(res.combinedOutput(), 200)}")
