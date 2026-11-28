@@ -97,7 +97,7 @@ Developed by **Dr. Mohammed Hamed** (physician and systems engineer), this proje
 
 > ### 🌿 قال رسول الله ﷺ: «مَنْ صَنَعَ إِلَيْكُمْ مَعْرُوفاً فَكَافِئُوهُ، فَإِنْ لَمْ تَجِدُوا مَا تُكَافِئُونَهُ فَادْعُوا لَهُ»
 > 
-> بُني تطبيق **«حِصْن»** بجهدٍ فرديّ خالص وآلاف الساعات من العمل الطبي والبرمجي، ليكون متاحاً للجميع **مجاناً بنسبة 100% وبلا أي إعلانات أو اشتراكات مدفوعة**، عوناً لكل من يسعى لحفظ وقته وقلبه وأسرته من مخاطر الإباحية والإدمان الرقمي.
+> بُني تطبيق **«حِصْن»** بجهدٍ فرديّ خالص، ليكون خلاصةَ سنواتٍ من الدراسة الطبية والتجربة العملية الواقعية في مواجهة الإدمان الرقمي، تُوّجت بعملٍ برمجيّ متواصل لإخراجه للناس **مجاناً بنسبة 100% وبلا أي إعلانات أو اشتراكات مدفوعة**، عوناً لكل من يسعى لحفظ وقته وقلبه وأسرته من مخاطر الإباحية والإدمان الرقمي.
 > 
 > **استمرار هذا التطبيق قوياً ومتجدداً يتطلب وقتاً ونفقةً تشغيلية مستمرة** (استضافة خوادم التحديثات الهوائية السحابية عبر Cloudflare R2، وعتاد فحص وتدريب نماذج الذكاء الاصطناعي على الجهاز، وساعات البحث والتطوير المتواصلة).
 > 
@@ -108,7 +108,7 @@ Developed by **Dr. Mohammed Hamed** (physician and systems engineer), this proje
 </div>
 
 > **English Overview:**  
-> **«Hisn»** was built over thousands of hours by an independent developer to remain **100% free, open-source, and ad-free** for everyone seeking focus, self-discipline, and protection from digital addiction. Keeping the app actively maintained—covering Cloudflare R2 OTA hosting, on-device AI development hardware, and continuous engineering work—requires ongoing time and expenses. If Hisn has made a real difference in your life and you wish to thank God for that benefit and appreciate the developer's work, your voluntary financial support directly helps keep this project alive and free for all.
+> **«Hisn»** was built by an independent developer—the culmination of years of medical study and real-world experience overcoming digital addiction, brought to life through continuous software engineering to remain **100% free, open-source, and ad-free** for everyone seeking focus, self-discipline, and protection from digital addiction. Keeping the app actively maintained—covering Cloudflare R2 OTA hosting, on-device AI development hardware, and continuous engineering work—requires ongoing time and expenses. If Hisn has made a real difference in your life and you wish to thank God for that benefit and appreciate the developer's work, your voluntary financial support directly helps keep this project alive and free for all.
 >
 > **Transparency Note:** Hisn is an independent open-source software project maintained by an individual developer—not a registered charity, NGO, fundraising campaign, or official endowment (Waqf). Any financial contribution is a **voluntary personal tip/sponsorship directly to the developer** to appreciate his work and help cover development and hosting costs.
 
