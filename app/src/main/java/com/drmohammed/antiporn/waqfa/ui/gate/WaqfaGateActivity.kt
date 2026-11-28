@@ -3,6 +3,7 @@ package com.drmohammed.antiporn.waqfa.ui.gate
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.os.Bundle
+import android.text.InputType
 import android.view.View
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
@@ -12,6 +13,8 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.databinding.ActivityWaqfaGateBinding
+import com.drmohammed.antiporn.ui.common.TextInputDialogFragment
+import com.drmohammed.antiporn.ui.common.showSafely
 import com.drmohammed.antiporn.waqfa.engine.WaqfaReactionExecutor
 import com.drmohammed.antiporn.waqfa.model.WaqfaIntentType
 import com.google.android.material.chip.Chip
@@ -48,10 +51,27 @@ class WaqfaGateActivity : AppCompatActivity() {
         }
 
         setupAntiBypassBackGuard()
+        setupFragmentResultListeners()
         setupViews()
         observeUiState()
 
-        viewModel.init(targetPackageName, appName)
+        viewModel.init(targetPackageName, appName, forceReset = false)
+    }
+
+    private fun setupFragmentResultListeners() {
+        supportFragmentManager.setFragmentResultListener(REQ_CUSTOM_DURATION, this) { _, bundle ->
+            if (bundle.getBoolean(TextInputDialogFragment.RESULT_CONFIRMED, false)) {
+                val mins = bundle.getString(TextInputDialogFragment.RESULT_TEXT)?.toIntOrNull()
+                if (mins != null && mins in 1..180) {
+                    viewModel.setCustomDuration(mins)
+                }
+            } else if (bundle.getBoolean(TextInputDialogFragment.RESULT_CANCELLED, false)) {
+                if (viewModel.uiState.value.customDurationMinutes == null) {
+                    lastRenderedDurationSignature = ""
+                    renderUi(viewModel.uiState.value)
+                }
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -70,7 +90,7 @@ class WaqfaGateActivity : AppCompatActivity() {
         targetPackageName = newPkg
         appName = newApp
         binding.tvTargetApp.text = getString(R.string.waqfa_attempting_open, appName)
-        viewModel.init(newPkg, newApp)
+        viewModel.init(newPkg, newApp, forceReset = true)
     }
 
     private fun setupAntiBypassBackGuard() {
@@ -125,6 +145,10 @@ class WaqfaGateActivity : AppCompatActivity() {
     private var lastRenderedDurationSignature = ""
 
     private fun renderUi(state: WaqfaGateUiState) {
+        if (state.isSessionStarted && !isFinishing && !isDestroyed) {
+            finish()
+            return
+        }
         // 1. تلوين أزرار النية وفقاً لمعايير Material 3 الدلالية والوضع الفاتح/الداكن
         val primaryColor = MaterialColors.getColor(binding.root, androidx.appcompat.R.attr.colorPrimary)
         val primaryContainer = MaterialColors.getColor(binding.root, com.google.android.material.R.attr.colorPrimaryContainer)
@@ -281,46 +305,25 @@ class WaqfaGateActivity : AppCompatActivity() {
 
     private fun showCustomDurationDialog() {
         val currentMins = viewModel.uiState.value.customDurationMinutes
-        val input = android.widget.EditText(this).apply {
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
-            hint = getString(R.string.waqfa_dialog_custom_duration_hint)
-            if (currentMins != null) {
-                setText(currentMins.toString())
-                setSelection(text.length)
-            }
+        supportFragmentManager.showSafely(TAG_CUSTOM_DURATION) {
+            TextInputDialogFragment.newInstance(
+                requestKey = REQ_CUSTOM_DURATION,
+                titleRes = R.string.waqfa_dialog_custom_duration_title,
+                hintRes = R.string.waqfa_dialog_custom_duration_hint,
+                initialText = currentMins?.toString().orEmpty(),
+                positiveRes = R.string.waqfa_btn_set,
+                negativeRes = R.string.waqfa_btn_cancel,
+                inputType = InputType.TYPE_CLASS_NUMBER,
+                singleLine = true,
+                validationMode = TextInputDialogFragment.VALIDATION_INT_RANGE_1_180
+            )
         }
-        val container = android.widget.FrameLayout(this).apply {
-            setPadding(64, 24, 64, 16)
-            addView(input)
-        }
-        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.waqfa_dialog_custom_duration_title)
-            .setView(container)
-            .setPositiveButton(R.string.waqfa_btn_set) { _, _ ->
-                val mins = input.text?.toString()?.toIntOrNull()
-                if (mins != null && mins in 1..180) {
-                    viewModel.setCustomDuration(mins)
-                } else {
-                    android.widget.Toast.makeText(this, getString(R.string.waqfa_error_invalid_duration), android.widget.Toast.LENGTH_SHORT).show()
-                }
-            }
-            .setNegativeButton(R.string.waqfa_btn_cancel) { _, _ ->
-                if (viewModel.uiState.value.customDurationMinutes == null) {
-                    lastRenderedDurationSignature = ""
-                    renderUi(viewModel.uiState.value)
-                }
-            }
-            .setOnCancelListener {
-                if (viewModel.uiState.value.customDurationMinutes == null) {
-                    lastRenderedDurationSignature = ""
-                    renderUi(viewModel.uiState.value)
-                }
-            }
-            .show()
     }
 
     companion object {
         const val EXTRA_PACKAGE_NAME = "extra_package_name"
         const val EXTRA_APP_NAME = "extra_app_name"
+        private const val REQ_CUSTOM_DURATION = "req_waqfa_custom_duration"
+        private const val TAG_CUSTOM_DURATION = "tag_waqfa_custom_duration"
     }
 }

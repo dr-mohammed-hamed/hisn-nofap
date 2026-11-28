@@ -73,6 +73,7 @@ open class AccountabilityViewModel(
     private val guardiansFlowRevision = AtomicLong(0L)
     private var loadPartnersJob: Job? = null
     private var loadPairingCodeJob: Job? = null
+    private var loadPendingApprovalsJob: Job? = null
     private var breakoutCountdownJob: Job? = null
     private var pairingCountdownJob: Job? = null
 
@@ -433,7 +434,8 @@ open class AccountabilityViewModel(
     }
 
     fun loadPendingApprovals() {
-        viewModelScope.launch(ioDispatcher) {
+        loadPendingApprovalsJob?.cancel()
+        loadPendingApprovalsJob = viewModelScope.launch(ioDispatcher) {
             try {
                 val activeWards = accountabilityRepo.getWards()
                     .filter { it.status == PartnerEntity.STATUS_ACTIVE }
@@ -610,6 +612,10 @@ open class AccountabilityViewModel(
         loadPartnersJob = null
         loadPairingCodeJob?.cancel()
         loadPairingCodeJob = null
+        loadPartnersJob?.cancel()
+        loadPartnersJob = null
+        loadPendingApprovalsJob?.cancel()
+        loadPendingApprovalsJob = null
         pairingCountdownJob?.cancel()
         pairingCountdownJob = null
         super.onCleared()

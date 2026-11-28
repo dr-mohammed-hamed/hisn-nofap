@@ -11,6 +11,7 @@ data class RemoteAppManagerUiState(
     val wardId: String = "",
     val wardName: String = "",
     val isLoading: Boolean = true,
+    val isPolicyLoadFailed: Boolean = false,
     val isSaving: Boolean = false,
     val isRepairing: Boolean = false,
     val allApps: List<InstalledAppDto> = emptyList(),
@@ -45,7 +46,7 @@ data class RemoteAppManagerUiState(
                 lockNewInstallsUntilApproved != initialLockNewInstalls
 
     val isSaveEnabled: Boolean
-        get() = hasUnsavedChanges && !isSaving && !isLoading && !isRepairing
+        get() = hasUnsavedChanges && !isSaving && !isLoading && !isRepairing && (isLocalMode || !isPolicyLoadFailed)
 
     val isEmptyState: Boolean
         get() = !isLoading && displayedApps.isEmpty()

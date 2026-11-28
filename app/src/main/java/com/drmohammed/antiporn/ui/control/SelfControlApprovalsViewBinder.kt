@@ -7,6 +7,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import com.drmohammed.antiporn.R
@@ -18,6 +19,7 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.color.MaterialColors
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -177,57 +179,59 @@ class SelfControlApprovalsViewBinder(
     ) {
         approveBtn?.isEnabled = false
         rejectBtn?.isEnabled = false
-        activity.lifecycleScope.launch(Dispatchers.IO) {
+        lifecycleOwner.lifecycleScope.launch {
             try {
-                val repo = ApprovalRepository.getInstance(activity.applicationContext)
-                val result = if (isApproved) {
-                    repo.unsuspendAndApprove(pkg, "SELF")
-                } else {
-                    repo.recordRejection(pkg, "SELF")
-                    null
+                val result = withContext(Dispatchers.IO + NonCancellable) {
+                    val repo = ApprovalRepository.getInstance(activity.applicationContext)
+                    if (isApproved) {
+                        repo.unsuspendAndApprove(pkg, "SELF")
+                    } else {
+                        repo.recordRejection(pkg, "SELF")
+                        null
+                    }
                 }
-                withContext(Dispatchers.Main) {
-                    if (activity.isFinishing || activity.isDestroyed) return@withContext
-                    when (result) {
-                        null,
-                        ApprovalDecisionResult.APPROVED,
-                        ApprovalDecisionResult.APPROVED_CURFEW_DEFERRED -> {
-                            onReloadRequested()
-                        }
-                        ApprovalDecisionResult.BLOCKED_REJECTED -> {
-                            approveBtn?.isEnabled = true
-                            rejectBtn?.isEnabled = true
-                            Toast.makeText(activity, R.string.toast_quick_unsuspend_rejected, Toast.LENGTH_LONG).show()
-                            onReloadRequested()
-                        }
-                        ApprovalDecisionResult.BLOCKED_BLACKLISTED -> {
-                            approveBtn?.isEnabled = true
-                            rejectBtn?.isEnabled = true
-                            Toast.makeText(activity, R.string.toast_quick_unsuspend_blacklisted, Toast.LENGTH_LONG).show()
-                            onReloadRequested()
-                        }
-                        ApprovalDecisionResult.BLOCKED_SELF_CONTROL_FORBIDDEN -> {
-                            approveBtn?.isEnabled = true
-                            rejectBtn?.isEnabled = true
-                            Toast.makeText(activity, R.string.toast_quick_unsuspend_forbidden, Toast.LENGTH_LONG).show()
-                        }
-                        ApprovalDecisionResult.FAILED_NOT_DEVICE_OWNER,
-                        ApprovalDecisionResult.FAILED_DPM_ERROR -> {
-                            approveBtn?.isEnabled = true
-                            rejectBtn?.isEnabled = true
-                            Toast.makeText(activity, R.string.toast_self_policy_save_failed, Toast.LENGTH_SHORT).show()
-                        }
+                if (activity.isFinishing || activity.isDestroyed ||
+                    !lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.CREATED)
+                ) {
+                    return@launch
+                }
+                when (result) {
+                    null,
+                    ApprovalDecisionResult.APPROVED,
+                    ApprovalDecisionResult.APPROVED_CURFEW_DEFERRED -> {
+                        onReloadRequested()
+                    }
+                    ApprovalDecisionResult.BLOCKED_REJECTED -> {
+                        approveBtn?.isEnabled = true
+                        rejectBtn?.isEnabled = true
+                        Toast.makeText(activity, R.string.toast_quick_unsuspend_rejected, Toast.LENGTH_LONG).show()
+                        onReloadRequested()
+                    }
+                    ApprovalDecisionResult.BLOCKED_BLACKLISTED -> {
+                        approveBtn?.isEnabled = true
+                        rejectBtn?.isEnabled = true
+                        Toast.makeText(activity, R.string.toast_quick_unsuspend_blacklisted, Toast.LENGTH_LONG).show()
+                        onReloadRequested()
+                    }
+                    ApprovalDecisionResult.BLOCKED_SELF_CONTROL_FORBIDDEN -> {
+                        approveBtn?.isEnabled = true
+                        rejectBtn?.isEnabled = true
+                        Toast.makeText(activity, R.string.toast_quick_unsuspend_forbidden, Toast.LENGTH_LONG).show()
+                    }
+                    ApprovalDecisionResult.FAILED_NOT_DEVICE_OWNER,
+                    ApprovalDecisionResult.FAILED_DPM_ERROR -> {
+                        approveBtn?.isEnabled = true
+                        rejectBtn?.isEnabled = true
+                        Toast.makeText(activity, R.string.toast_self_policy_save_failed, Toast.LENGTH_SHORT).show()
                     }
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.e(TAG, "Failed resolving approval for package $pkg (isApproved=$isApproved)", e)
-                withContext(Dispatchers.Main) {
-                    if (!activity.isFinishing && !activity.isDestroyed) {
-                        approveBtn?.isEnabled = true
-                        rejectBtn?.isEnabled = true
-                        Toast.makeText(activity, R.string.toast_self_policy_save_failed, Toast.LENGTH_SHORT).show()
-                    }
+                if (!activity.isFinishing && !activity.isDestroyed) {
+                    approveBtn?.isEnabled = true
+                    rejectBtn?.isEnabled = true
+                    Toast.makeText(activity, R.string.toast_self_policy_save_failed, Toast.LENGTH_SHORT).show()
                 }
             }
         }

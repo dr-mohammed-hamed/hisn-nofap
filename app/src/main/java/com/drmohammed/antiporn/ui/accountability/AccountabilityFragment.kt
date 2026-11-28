@@ -8,18 +8,16 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
 import android.os.SystemClock
-import android.util.Log
 import android.util.TypedValue
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
+import androidx.core.os.bundleOf
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -31,13 +29,15 @@ import com.drmohammed.antiporn.core.time.TrustedTimeProvider
 import com.drmohammed.antiporn.data.local.db.entity.PartnerEntity
 import com.drmohammed.antiporn.data.repository.AccountabilityRepository
 import com.drmohammed.antiporn.databinding.FragmentAccountabilityBinding
+import com.drmohammed.antiporn.ui.common.ConfirmActionDialogFragment
+import com.drmohammed.antiporn.ui.common.TextInputDialogFragment
+import com.drmohammed.antiporn.ui.common.showSafely
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.color.MaterialColors
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import com.google.android.material.textfield.TextInputLayout
 import kotlinx.coroutines.launch
 import org.koin.androidx.viewmodel.ext.android.viewModel
+import timber.log.Timber
 import java.util.Locale
 
 /**
@@ -53,7 +53,7 @@ class AccountabilityFragment : Fragment() {
     private var navListener: AccountabilityNavigationListener? = null
 
     private var _binding: FragmentAccountabilityBinding? = null
-    private val binding get() = _binding!!
+    private val binding get() = _binding ?: throw IllegalStateException("Binding is only valid between onCreateView and onDestroyView")
 
     private val accountabilityViewModel: AccountabilityViewModel by viewModel()
     private val viewModel get() = accountabilityViewModel
@@ -102,8 +102,95 @@ class AccountabilityFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        setupFragmentResultListeners()
         setupListeners()
         observeViewModel()
+    }
+
+    private fun setupFragmentResultListeners() {
+        childFragmentManager.setFragmentResultListener(REQ_ADD_PARTNER, viewLifecycleOwner) { _, bundle ->
+            if (bundle.getBoolean(TextInputDialogFragment.RESULT_CONFIRMED, false)) {
+                val code = bundle.getString(TextInputDialogFragment.RESULT_TEXT)?.trim().orEmpty()
+                if (code.isNotEmpty()) {
+                    performPairing(code, PartnerEntity.ROLE_WARD)
+                }
+            } else if (bundle.getBoolean(TextInputDialogFragment.RESULT_CANCELLED, false) && !isPairingInProgress) {
+                val app = activity?.application ?: context?.applicationContext
+                if (app != null) {
+                    com.drmohammed.antiporn.cloud.CloudSyncManager.checkAndAutoRollbackIfUnsupervised(app)
+                }
+            }
+        }
+
+        childFragmentManager.setFragmentResultListener(REQ_EDIT_WARD_NAME, viewLifecycleOwner) { _, bundle ->
+            if (!bundle.getBoolean(TextInputDialogFragment.RESULT_CONFIRMED, false)) return@setFragmentResultListener
+            val payload = bundle.getBundle(TextInputDialogFragment.RESULT_PAYLOAD) ?: return@setFragmentResultListener
+            val partnerId = payload.getString(KEY_PARTNER_ID).orEmpty()
+            val originalName = payload.getString(KEY_ORIGINAL_NAME).orEmpty()
+            val newName = bundle.getString(TextInputDialogFragment.RESULT_TEXT)?.trim().orEmpty()
+            if (partnerId.isNotBlank() && newName.isNotBlank() && newName != originalName) {
+                viewModel.renamePartner(partnerId, newName, PartnerEntity.ROLE_WARD) { result ->
+                    if (!isAdded || _binding == null) return@renamePartner
+                    result.onSuccess {
+                        Toast.makeText(context, R.string.toast_name_saved, Toast.LENGTH_SHORT).show()
+                    }.onFailure { e ->
+                        Timber.tag(TAG).e(e, "Failed to rename partner")
+                        Toast.makeText(
+                            context,
+                            getString(R.string.toast_partner_failed, e.localizedMessage ?: getString(R.string.error_unknown)),
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            }
+        }
+
+        childFragmentManager.setFragmentResultListener(REQ_EMERGENCY_BREAKOUT, viewLifecycleOwner) { _, bundle ->
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) == ConfirmActionDialogFragment.BUTTON_POSITIVE) {
+                viewModel.requestEmergencyBreakout { result ->
+                    if (!isAdded || _binding == null) return@requestEmergencyBreakout
+                    result.fold(
+                        onSuccess = {
+                            Toast.makeText(context, R.string.toast_breakout_requested, Toast.LENGTH_SHORT).show()
+                        },
+                        onFailure = { err ->
+                            Toast.makeText(context, err.localizedMessage ?: getString(R.string.error_unknown), Toast.LENGTH_LONG).show()
+                        }
+                    )
+                }
+            }
+        }
+
+        childFragmentManager.setFragmentResultListener(REQ_REVOKE_WARD, viewLifecycleOwner) { _, bundle ->
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) != ConfirmActionDialogFragment.BUTTON_POSITIVE) {
+                return@setFragmentResultListener
+            }
+            val partnerId = bundle.getBundle(ConfirmActionDialogFragment.RESULT_PAYLOAD)
+                ?.getString(KEY_PARTNER_ID)
+                .orEmpty()
+            if (partnerId.isBlank()) return@setFragmentResultListener
+            viewModel.revokeSupervision(partnerId) { result ->
+                if (!isAdded || _binding == null) return@revokeSupervision
+                result.fold(
+                    onSuccess = {
+                        Toast.makeText(context, R.string.toast_supervision_revoked, Toast.LENGTH_SHORT).show()
+                    },
+                    onFailure = { err ->
+                        Toast.makeText(
+                            context,
+                            getString(R.string.toast_partner_delete_failed, err.localizedMessage ?: getString(R.string.error_unknown)),
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                )
+            }
+        }
+
+        childFragmentManager.setFragmentResultListener(REQ_PROMPT_ACCOUNT_SECURITY, viewLifecycleOwner) { _, bundle ->
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) == ConfirmActionDialogFragment.BUTTON_POSITIVE) {
+                handleGoogleSecurityLinking()
+            }
+        }
     }
 
     override fun onResume() {
@@ -310,26 +397,15 @@ class AccountabilityFragment : Fragment() {
     }
 
     private fun showEmergencyBreakoutDialog() {
-        val ctx = context ?: return
-        MaterialAlertDialogBuilder(ctx)
-            .setTitle(R.string.dialog_breakout_title)
-            .setMessage(R.string.dialog_breakout_msg)
-            .setPositiveButton(R.string.dialog_breakout_confirm) { dialog, _ ->
-                dialog.dismiss()
-                viewModel.requestEmergencyBreakout { result ->
-                    if (!isAdded || _binding == null) return@requestEmergencyBreakout
-                    result.fold(
-                        onSuccess = {
-                            Toast.makeText(context, R.string.toast_breakout_requested, Toast.LENGTH_SHORT).show()
-                        },
-                        onFailure = { err ->
-                            Toast.makeText(context, err.localizedMessage ?: getString(R.string.error_unknown), Toast.LENGTH_LONG).show()
-                        }
-                    )
-                }
-            }
-            .setNegativeButton(R.string.dialog_btn_cancel, null)
-            .show()
+        childFragmentManager.showSafely(TAG_EMERGENCY_BREAKOUT) {
+            ConfirmActionDialogFragment.newInstance(
+                requestKey = REQ_EMERGENCY_BREAKOUT,
+                titleRes = R.string.dialog_breakout_title,
+                messageRes = R.string.dialog_breakout_msg,
+                positiveRes = R.string.dialog_breakout_confirm,
+                negativeRes = R.string.dialog_btn_cancel
+            )
+        }
     }
 
     private fun handleCancelBreakout(cancelBtn: View? = null) {
@@ -737,31 +813,16 @@ class AccountabilityFragment : Fragment() {
             setTextColor(ContextCompat.getColor(ctx, R.color.status_orange))
         }
         deleteBtn.setOnClickListener {
-            MaterialAlertDialogBuilder(ctx)
-                .setTitle(R.string.dialog_revoke_ward_title)
-                .setMessage(getString(R.string.dialog_revoke_ward_msg, partner.displayName))
-                .setPositiveButton(R.string.btn_delete_partner) { dialog, _ ->
-                    dialog.dismiss()
-                    deleteBtn.isEnabled = false
-                    viewModel.revokeSupervision(partner.id) { result ->
-                        if (!isAdded || _binding == null) return@revokeSupervision
-                        deleteBtn.isEnabled = true
-                        result.fold(
-                            onSuccess = {
-                                Toast.makeText(context, R.string.toast_supervision_revoked, Toast.LENGTH_SHORT).show()
-                            },
-                            onFailure = { err ->
-                                Toast.makeText(
-                                    context,
-                                    getString(R.string.toast_partner_delete_failed, err.localizedMessage ?: getString(R.string.error_unknown)),
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
-                        )
-                    }
-                }
-                .setNegativeButton(R.string.dialog_btn_cancel, null)
-                .show()
+            childFragmentManager.showSafely(TAG_REVOKE_WARD) {
+                ConfirmActionDialogFragment.newInstance(
+                    requestKey = REQ_REVOKE_WARD,
+                    titleRes = R.string.dialog_revoke_ward_title,
+                    messageText = getString(R.string.dialog_revoke_ward_msg, partner.displayName),
+                    positiveRes = R.string.btn_delete_partner,
+                    negativeRes = R.string.dialog_btn_cancel,
+                    payload = bundleOf(KEY_PARTNER_ID to partner.id)
+                )
+            }
         }
         btnRow.addView(deleteBtn)
         container.addView(btnRow)
@@ -771,39 +832,15 @@ class AccountabilityFragment : Fragment() {
     }
 
     private fun showAddPartnerDialog() {
-        val ctx = context ?: return
-        val dialogView = LayoutInflater.from(ctx).inflate(R.layout.dialog_add_partner, null)
-        val tilCode = dialogView.findViewById<TextInputLayout>(R.id.tilPartnerCode)
-        val etCode = dialogView.findViewById<EditText>(R.id.etPartnerCode)
-
-        val dialog = MaterialAlertDialogBuilder(ctx)
-            .setTitle(R.string.dialog_add_partner_title)
-            .setView(dialogView)
-            .setPositiveButton(R.string.dialog_btn_connect, null)
-            .setNegativeButton(R.string.dialog_btn_cancel, null)
-            .create()
-
-        dialog.setOnDismissListener {
-            if (!isPairingInProgress) {
-                val app = activity?.application ?: ctx.applicationContext
-                com.drmohammed.antiporn.cloud.CloudSyncManager.checkAndAutoRollbackIfUnsupervised(app)
-            }
-        }
-
-        dialog.show()
-
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            if (isPairingInProgress) return@setOnClickListener
-            val code = etCode.text?.toString()?.trim() ?: ""
-            val regex = Regex("^[A-Za-z0-9]{6}$")
-            if (!regex.matches(code)) {
-                tilCode?.error = getString(R.string.dialog_add_partner_code_hint)
-                return@setOnClickListener
-            }
-            tilCode?.error = null
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
-            dialog.dismiss()
-            performPairing(code, PartnerEntity.ROLE_WARD)
+        childFragmentManager.showSafely(TAG_ADD_PARTNER) {
+            TextInputDialogFragment.newInstance(
+                requestKey = REQ_ADD_PARTNER,
+                titleRes = R.string.dialog_add_partner_title,
+                positiveRes = R.string.dialog_btn_connect,
+                negativeRes = R.string.dialog_btn_cancel,
+                customLayoutMode = TextInputDialogFragment.CUSTOM_LAYOUT_PARTNER_CODE,
+                validationMode = TextInputDialogFragment.VALIDATION_PARTNER_CODE_6
+            )
         }
     }
 
@@ -838,53 +875,34 @@ class AccountabilityFragment : Fragment() {
     }
 
     private fun promptAccountSecurityAfterPairing() {
-        val ctx = context ?: return
-        MaterialAlertDialogBuilder(ctx)
-            .setTitle(R.string.title_account_security)
-            .setMessage(R.string.account_unsecured_warning)
-            .setPositiveButton(R.string.btn_secure_with_google) { dialog, _ ->
-                dialog.dismiss()
-                handleGoogleSecurityLinking()
-            }
-            .setNegativeButton(R.string.dialog_btn_cancel, null)
-            .show()
+        childFragmentManager.showSafely(TAG_PROMPT_ACCOUNT_SECURITY) {
+            ConfirmActionDialogFragment.newInstance(
+                requestKey = REQ_PROMPT_ACCOUNT_SECURITY,
+                titleRes = R.string.title_account_security,
+                messageRes = R.string.account_unsecured_warning,
+                positiveRes = R.string.btn_secure_with_google,
+                negativeRes = R.string.dialog_btn_cancel
+            )
+        }
     }
 
     private fun showEditWardNameDialog(partner: PartnerEntity) {
-        val ctx = context ?: return
-        val input = EditText(ctx).apply {
-            setText(partner.displayName)
-            setSelection(text?.length ?: 0)
-            hint = getString(R.string.dialog_edit_ward_name_hint)
-            setSingleLine(true)
-            filters = arrayOf(android.text.InputFilter.LengthFilter(28))
+        childFragmentManager.showSafely(TAG_EDIT_WARD_NAME) {
+            TextInputDialogFragment.newInstance(
+                requestKey = REQ_EDIT_WARD_NAME,
+                titleRes = R.string.dialog_edit_ward_name_title,
+                hintRes = R.string.dialog_edit_ward_name_hint,
+                initialText = partner.displayName,
+                positiveRes = R.string.btn_save,
+                negativeRes = R.string.dialog_btn_cancel,
+                maxLength = 28,
+                singleLine = true,
+                payload = bundleOf(
+                    KEY_PARTNER_ID to partner.id,
+                    KEY_ORIGINAL_NAME to partner.displayName
+                )
+            )
         }
-        val frame = android.widget.FrameLayout(ctx).apply {
-            val pad = (20 * resources.displayMetrics.density).toInt()
-            setPadding(pad, (8 * resources.displayMetrics.density).toInt(), pad, 0)
-            addView(input)
-        }
-
-        MaterialAlertDialogBuilder(ctx)
-            .setTitle(R.string.dialog_edit_ward_name_title)
-            .setView(frame)
-            .setPositiveButton(R.string.btn_save) { dialog, _ ->
-                val newName = input.text?.toString()?.trim() ?: ""
-                if (newName.isNotBlank() && newName != partner.displayName) {
-                    viewModel.renamePartner(partner.id, newName, PartnerEntity.ROLE_WARD) { result ->
-                        if (!isAdded || _binding == null) return@renamePartner
-                        result.onSuccess {
-                            Toast.makeText(context, R.string.toast_name_saved, Toast.LENGTH_SHORT).show()
-                        }.onFailure { e ->
-                            Log.e(TAG, "Failed to rename partner", e)
-                            Toast.makeText(context, getString(R.string.toast_partner_failed, e.localizedMessage), Toast.LENGTH_LONG).show()
-                        }
-                    }
-                }
-                dialog.dismiss()
-            }
-            .setNegativeButton(R.string.dialog_btn_cancel, null)
-            .show()
     }
 
     override fun onDestroyView() {
@@ -900,5 +918,17 @@ class AccountabilityFragment : Fragment() {
 
     companion object {
         private const val TAG = "AntiPorn_AccFrag"
+        private const val REQ_ADD_PARTNER = "req_acc_add_partner"
+        private const val TAG_ADD_PARTNER = "tag_acc_add_partner"
+        private const val REQ_EDIT_WARD_NAME = "req_acc_edit_ward_name"
+        private const val TAG_EDIT_WARD_NAME = "tag_acc_edit_ward_name"
+        private const val REQ_EMERGENCY_BREAKOUT = "req_acc_emergency_breakout"
+        private const val TAG_EMERGENCY_BREAKOUT = "tag_acc_emergency_breakout"
+        private const val REQ_REVOKE_WARD = "req_acc_revoke_ward"
+        private const val TAG_REVOKE_WARD = "tag_acc_revoke_ward"
+        private const val REQ_PROMPT_ACCOUNT_SECURITY = "req_acc_prompt_security"
+        private const val TAG_PROMPT_ACCOUNT_SECURITY = "tag_acc_prompt_security"
+        private const val KEY_PARTNER_ID = "key_partner_id"
+        private const val KEY_ORIGINAL_NAME = "key_original_name"
     }
 }

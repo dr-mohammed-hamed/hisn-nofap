@@ -1,15 +1,15 @@
 package com.drmohammed.antiporn.ui.control.curfew
 
+import android.content.res.Configuration
 import android.os.Bundle
-import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import androidx.annotation.VisibleForTesting
+import androidx.core.view.isVisible
 import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.lifecycleScope
-import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.RecyclerView
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.policy.AppPolicyRegistry
 import com.drmohammed.antiporn.curfew.CurfewAppResolver
@@ -17,8 +17,9 @@ import com.drmohammed.antiporn.curfew.CurfewConfig
 import com.drmohammed.antiporn.data.model.InstalledAppDto
 import com.drmohammed.antiporn.data.repository.AppInventoryManager
 import com.drmohammed.antiporn.databinding.BottomSheetCurfewAppPickerBinding
-import com.drmohammed.antiporn.databinding.ItemCurfewAppPickerBinding
-import com.drmohammed.antiporn.ui.accountability.AppIconResolver
+import com.drmohammed.antiporn.shields.AppSuspensionShield
+import com.drmohammed.antiporn.ui.common.applyBottomSheetInsets
+import com.drmohammed.antiporn.ui.common.configureLandscapeFriendlySheet
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
@@ -28,10 +29,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import timber.log.Timber
 
 /**
- * نافذة سفلية منبثقة مبسطة لاختيار التطبيقات المستثناة أثناء الحظر الليلي.
- * تتيح تحديد: «تشغيل» (فتح التطبيق) و«نت» (اتصال الإنترنت أثناء عزل الحظر).
+ * Ù†Ø§ÙØ°Ø© Ø³ÙÙ„ÙŠØ© Ù…Ù†Ø¨Ø«Ù‚Ø© Ù…Ø¨Ø³Ø·Ø© Ù„Ø§Ø®ØªÙŠØ§Ø± Ø§Ù„ØªØ·Ø¨ÙŠÙ‚Ø§Øª Ø§Ù„Ù…Ø³ØªØ«Ù†Ø§Ø© Ø£Ø«Ù†Ø§Ø¡ Ø§Ù„Ø­Ø¸Ø± Ø§Ù„Ù„ÙŠÙ„ÙŠ.
+ * ØªØªÙŠØ­ ØªØ­Ø¯ÙŠØ¯: Â«ØªØ´ØºÙŠÙ„Â» (ÙØªØ­ Ø§Ù„ØªØ·Ø¨ÙŠÙ‚) ÙˆÂ«Ù†ØªÂ» (Ø§ØªØµØ§Ù„ Ø§Ù„Ø¥Ù†ØªØ±Ù†Øª Ø£Ø«Ù†Ø§Ø¡ Ø¹Ø²Ù„ Ø§Ù„Ø­Ø¸Ø±).
  */
 class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
 
@@ -48,6 +50,21 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
     private val allApps = mutableListOf<CurfewAppItem>()
     private val filteredApps = mutableListOf<CurfewAppItem>()
     private lateinit var adapter: CurfewAppPickerAdapter
+    private var isAppsLoaded = false
+    private var savedRunPackages: Set<String>? = null
+    private var savedNetPackages: Set<String>? = null
+    private var savedSearchQuery: String = ""
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        if (savedInstanceState != null) {
+            if (savedInstanceState.getBoolean(KEY_STATE_LOADED, false)) {
+                savedRunPackages = savedInstanceState.getStringArrayList(KEY_SAVED_RUN)?.toSet() ?: emptySet()
+                savedNetPackages = savedInstanceState.getStringArrayList(KEY_SAVED_NET)?.toSet() ?: emptySet()
+            }
+            savedSearchQuery = savedInstanceState.getString(KEY_SEARCH_QUERY, "")
+        }
+    }
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -61,10 +78,18 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
+        configureLandscapeFriendlySheet(enableImeResize = true)
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        applyBottomSheetInsets(view, includeIme = true) { imeVisible ->
+            if (_binding != null && isLandscape) {
+                binding.btnConfirmSelection.isVisible = !imeVisible
+            }
+        }
+
         val isRemote = arguments?.getBoolean(ARG_IS_REMOTE) ?: false
         val allowNetSelection = arguments?.getBoolean(ARG_ALLOW_NET_SELECTION, true) ?: true
 
-        binding.tvPickerDesc.setText(
+        _binding?.tvPickerDesc?.setText(
             if (allowNetSelection) R.string.curfew_picker_desc else R.string.curfew_picker_desc_run_only
         )
 
@@ -99,9 +124,19 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
         binding.rvApps.layoutManager = LinearLayoutManager(requireContext())
         binding.rvApps.adapter = adapter
 
-        binding.etSearchApp.doAfterTextChanged { text ->
-            filterApps(text?.toString().orEmpty())
+        if (savedInstanceState != null && savedSearchQuery.isNotEmpty()) {
+            binding.etSearchApp.setText(savedSearchQuery)
         }
+
+        binding.etSearchApp.doAfterTextChanged { text ->
+            val query = text?.toString().orEmpty()
+            savedSearchQuery = query
+            filterApps(query)
+        }
+
+        isAppsLoaded = false
+        binding.btnConfirmSelection.isEnabled = false
+        binding.btnConfirmSelection.alpha = 0.5f
 
         binding.btnConfirmSelection.setOnClickListener {
             confirmSelection()
@@ -114,106 +149,127 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
         val appContext = context?.applicationContext ?: return
         val isRemote = arguments?.getBoolean(ARG_IS_REMOTE) ?: false
         val wardId = arguments?.getString(ARG_WARD_ID).orEmpty()
-        val initialWhitelist = arguments?.getStringArrayList(ARG_INITIAL_WHITELIST)?.toSet() ?: emptySet()
-        val initialVpnBypass = arguments?.getStringArrayList(ARG_INITIAL_VPN_BYPASS)?.toSet() ?: emptySet()
+        val initialWhitelist = savedRunPackages ?: (arguments?.getStringArrayList(ARG_INITIAL_WHITELIST)?.toSet() ?: emptySet())
+        val initialVpnBypass = savedNetPackages ?: (arguments?.getStringArrayList(ARG_INITIAL_VPN_BYPASS)?.toSet() ?: emptySet())
         val customBlacklist = arguments?.getStringArrayList(ARG_BLACKLIST)?.toSet() ?: emptySet()
 
         viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
-            val criticalPackages = CurfewAppResolver.resolveCoreSystemCriticalPackages(appContext)
-            val list = mutableListOf<CurfewAppItem>()
+            try {
+                val criticalPackages = CurfewAppResolver.resolveCoreSystemCriticalPackages(appContext)
+                val list = mutableListOf<CurfewAppItem>()
 
-            if (!isRemote) {
-                // Local Mode
-                val installed = AppInventoryManager.getInstance(appContext).getInstalledApps()
-                for (app in installed) {
-                    val pkg = app.packageName
-                    if (isPackageRestricted(pkg, appContext.packageName, criticalPackages, customBlacklist)) continue
+                if (!isRemote) {
+                    // Local Mode
+                    val installed = AppInventoryManager.getInstance(appContext).getInstalledApps()
+                    val seenPackages = mutableSetOf<String>()
+                    for (app in installed) {
+                        val pkg = app.packageName
+                        if (isPackageRestricted(pkg, appContext.packageName, criticalPackages, customBlacklist)) continue
+                        seenPackages.add(pkg)
 
-                    val isRun = initialWhitelist.contains(pkg)
-                    val isNet = isRun && initialVpnBypass.contains(pkg)
+                        val isRun = initialWhitelist.contains(pkg)
+                        val isNet = isRun && initialVpnBypass.contains(pkg)
 
-                    list.add(
-                        CurfewAppItem(
-                            packageName = pkg,
-                            appName = app.appName.ifBlank { pkg },
-                            isRunAllowed = isRun,
-                            isNetAllowed = isNet
+                        list.add(
+                            CurfewAppItem(
+                                packageName = pkg,
+                                appName = app.appName.ifBlank { pkg },
+                                isRunAllowed = isRun,
+                                isNetAllowed = isNet
+                            )
+                        )
+                    }
+
+                    // Append any previously saved packages not returned by getInstalledApps()
+                    list.addAll(
+                        buildOrphanedItems(
+                            initialWhitelist = initialWhitelist,
+                            initialVpnBypass = initialVpnBypass,
+                            seenPackages = seenPackages,
+                            isRestricted = { pkg ->
+                                isPackageRestricted(pkg, appContext.packageName, criticalPackages, customBlacklist)
+                            }
+                        )
+                    )
+                } else if (wardId.isBlank()) {
+                    Timber.tag(TAG).w("Refusing remote curfew app load: blank wardId")
+                    withContext(Dispatchers.Main) {
+                        if (isAdded) dismissAllowingStateLoss()
+                    }
+                    return@launch
+                } else {
+                    // Remote Mode (Guardian inspecting Ward)
+                    val firestore = FirebaseFirestore.getInstance()
+                    var inventoryDoc: DocumentSnapshot? = null
+                    try {
+                        inventoryDoc = firestore.collection("inventories").document(wardId).get().await()
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        try {
+                            inventoryDoc = firestore.collection("inventories").document(wardId).get(Source.CACHE).await()
+                        } catch (cacheEx: Exception) {
+                            if (cacheEx is CancellationException) throw cacheEx
+                            Timber.tag(TAG).w(cacheEx, "Failed to fetch ward inventory from cache")
+                        }
+                    }
+
+                    @Suppress("UNCHECKED_CAST")
+                    val rawApps = (inventoryDoc?.get("apps") as? List<*>) ?: emptyList<Any?>()
+                    val parsedApps = rawApps.mapNotNull { raw ->
+                        @Suppress("UNCHECKED_CAST")
+                        (raw as? Map<String, Any?>)?.let { InstalledAppDto.fromMap(it) }
+                    }.filter { it.packageName.isNotBlank() }
+
+                    val seenPackages = mutableSetOf<String>()
+                    for (app in parsedApps) {
+                        val pkg = app.packageName
+                        if (isPackageRestricted(pkg, appContext.packageName, criticalPackages, customBlacklist)) continue
+                        seenPackages.add(pkg)
+
+                        val isRun = initialWhitelist.contains(pkg)
+                        val isNet = isRun && initialVpnBypass.contains(pkg)
+
+                        list.add(
+                            CurfewAppItem(
+                                packageName = pkg,
+                                appName = app.appName.ifBlank { pkg },
+                                isRunAllowed = isRun,
+                                isNetAllowed = isNet
+                            )
+                        )
+                    }
+
+                    // Append any orphaned whitelisted apps not in inventory
+                    list.addAll(
+                        buildOrphanedItems(
+                            initialWhitelist = initialWhitelist,
+                            initialVpnBypass = initialVpnBypass,
+                            seenPackages = seenPackages,
+                            isRestricted = { pkg ->
+                                isPackageRestricted(pkg, appContext.packageName, criticalPackages, customBlacklist)
+                            }
                         )
                     )
                 }
-            } else if (wardId.isBlank()) {
-                Log.w(TAG, "Refusing remote curfew app load: blank wardId")
+
+                list.sortBy { it.appName.lowercase() }
+
                 withContext(Dispatchers.Main) {
-                    if (isAdded) dismissAllowingStateLoss()
-                }
-                return@launch
-            } else {
-                // Remote Mode (Guardian inspecting Ward)
-                val firestore = FirebaseFirestore.getInstance()
-                var inventoryDoc: DocumentSnapshot? = null
-                try {
-                    inventoryDoc = firestore.collection("inventories").document(wardId).get().await()
-                } catch (e: Exception) {
-                    if (e is CancellationException) throw e
-                    try {
-                        inventoryDoc = firestore.collection("inventories").document(wardId).get(Source.CACHE).await()
-                    } catch (cacheEx: Exception) {
-                        if (cacheEx is CancellationException) throw cacheEx
-                        Log.w(TAG, "Failed to fetch ward inventory from cache: ${cacheEx.message}")
+                    if (_binding != null) {
+                        allApps.clear()
+                        allApps.addAll(list)
+                        isAppsLoaded = true
+                        binding.btnConfirmSelection.isEnabled = true
+                        binding.btnConfirmSelection.alpha = 1.0f
+                        filterApps(binding.etSearchApp.text?.toString().orEmpty())
+                        updateConfirmButton()
                     }
                 }
-
-                @Suppress("UNCHECKED_CAST")
-                val rawApps = (inventoryDoc?.get("apps") as? List<*>) ?: emptyList<Any?>()
-                val parsedApps = rawApps.mapNotNull { raw ->
-                    @Suppress("UNCHECKED_CAST")
-                    (raw as? Map<String, Any?>)?.let { InstalledAppDto.fromMap(it) }
-                }.filter { it.packageName.isNotBlank() }
-
-                val seenPackages = mutableSetOf<String>()
-                for (app in parsedApps) {
-                    val pkg = app.packageName
-                    if (isPackageRestricted(pkg, appContext.packageName, criticalPackages, customBlacklist)) continue
-                    seenPackages.add(pkg)
-
-                    val isRun = initialWhitelist.contains(pkg)
-                    val isNet = isRun && initialVpnBypass.contains(pkg)
-
-                    list.add(
-                        CurfewAppItem(
-                            packageName = pkg,
-                            appName = app.appName.ifBlank { pkg },
-                            isRunAllowed = isRun,
-                            isNetAllowed = isNet
-                        )
-                    )
-                }
-
-                // Append any orphaned whitelisted apps not in inventory
-                val extraPackages = (initialWhitelist + initialVpnBypass) - seenPackages
-                for (orphan in extraPackages) {
-                    if (isPackageRestricted(orphan, appContext.packageName, criticalPackages, customBlacklist)) continue
-                    val isRun = initialWhitelist.contains(orphan)
-                    val isNet = isRun && initialVpnBypass.contains(orphan)
-                    list.add(
-                        CurfewAppItem(
-                            packageName = orphan,
-                            appName = orphan,
-                            isRunAllowed = isRun,
-                            isNetAllowed = isNet
-                        )
-                    )
-                }
-            }
-
-            list.sortBy { it.appName.lowercase() }
-
-            withContext(Dispatchers.Main) {
-                if (_binding != null) {
-                    allApps.clear()
-                    allApps.addAll(list)
-                    filterApps(binding.etSearchApp.text?.toString().orEmpty())
-                    updateConfirmButton()
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                Timber.tag(TAG).e(e, "Failed loading curfew apps")
+                withContext(Dispatchers.Main) {
+                    if (isAdded) dismissAllowingStateLoss()
                 }
             }
         }
@@ -258,6 +314,7 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
     }
 
     private fun confirmSelection() {
+        if (!isAppsLoaded) return
         val allowNetSelection = arguments?.getBoolean(ARG_ALLOW_NET_SELECTION, true) ?: true
         val newWhitelist = allApps.filter { it.isRunAllowed }.map { it.packageName }.toSet()
         val newVpnBypass = if (allowNetSelection) {
@@ -272,6 +329,27 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
         }
         parentFragmentManager.setFragmentResult(REQUEST_KEY, resultBundle)
         dismiss()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        if (isAppsLoaded) {
+            outState.putBoolean(KEY_STATE_LOADED, true)
+            outState.putStringArrayList(
+                KEY_SAVED_RUN,
+                ArrayList(allApps.filter { it.isRunAllowed }.map { it.packageName })
+            )
+            outState.putStringArrayList(
+                KEY_SAVED_NET,
+                ArrayList(allApps.filter { it.isRunAllowed && it.isNetAllowed }.map { it.packageName })
+            )
+        } else if (savedRunPackages != null) {
+            outState.putBoolean(KEY_STATE_LOADED, true)
+            outState.putStringArrayList(KEY_SAVED_RUN, ArrayList(savedRunPackages.orEmpty()))
+            outState.putStringArrayList(KEY_SAVED_NET, ArrayList(savedNetPackages.orEmpty()))
+        }
+        val query = _binding?.etSearchApp?.text?.toString() ?: savedSearchQuery
+        outState.putString(KEY_SEARCH_QUERY, query)
     }
 
     override fun onDestroyView() {
@@ -290,7 +368,37 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
         private const val ARG_INITIAL_WHITELIST = "arg_initial_whitelist"
         private const val ARG_INITIAL_VPN_BYPASS = "arg_initial_vpn_bypass"
         private const val ARG_BLACKLIST = "arg_blacklist"
+        private const val KEY_SEARCH_QUERY = "key_search_query"
         private const val ARG_ALLOW_NET_SELECTION = "arg_allow_net_selection"
+
+        private const val KEY_STATE_LOADED = "state_apps_loaded"
+        private const val KEY_SAVED_RUN = "state_saved_run_packages"
+        private const val KEY_SAVED_NET = "state_saved_net_packages"
+
+        @VisibleForTesting
+        internal fun buildOrphanedItems(
+            initialWhitelist: Set<String>,
+            initialVpnBypass: Set<String>,
+            seenPackages: Set<String>,
+            isRestricted: (String) -> Boolean
+        ): List<CurfewAppItem> {
+            val extraPackages = (initialWhitelist + initialVpnBypass) - seenPackages
+            val result = mutableListOf<CurfewAppItem>()
+            for (orphan in extraPackages) {
+                if (isRestricted(orphan)) continue
+                val isRun = initialWhitelist.contains(orphan)
+                val isNet = isRun && initialVpnBypass.contains(orphan)
+                result.add(
+                    CurfewAppItem(
+                        packageName = orphan,
+                        appName = orphan,
+                        isRunAllowed = isRun,
+                        isNetAllowed = isNet
+                    )
+                )
+            }
+            return result
+        }
 
         fun newInstance(
             isRemote: Boolean,
@@ -309,88 +417,6 @@ class CurfewAppPickerBottomSheet : BottomSheetDialogFragment() {
                     putStringArrayList(ARG_BLACKLIST, ArrayList(blacklist))
                     putBoolean(ARG_ALLOW_NET_SELECTION, allowNetSelection)
                 }
-            }
-        }
-    }
-
-    class CurfewAppPickerAdapter(
-        private val isLocalMode: Boolean,
-        private val allowNetSelection: Boolean,
-        private val onRunToggled: (CurfewAppItem, Boolean) -> Unit,
-        private val onNetToggled: (CurfewAppItem, Boolean) -> Unit
-    ) : RecyclerView.Adapter<CurfewAppPickerAdapter.ViewHolder>() {
-
-        private val items: MutableList<CurfewAppItem> = mutableListOf()
-
-        fun submitItems(newItems: List<CurfewAppItem>) {
-            val oldItems = items.toList()
-            val diffResult = DiffUtil.calculateDiff(object : DiffUtil.Callback() {
-                override fun getOldListSize(): Int = oldItems.size
-                override fun getNewListSize(): Int = newItems.size
-                override fun areItemsTheSame(oldPos: Int, newPos: Int): Boolean =
-                    oldItems[oldPos].packageName == newItems[newPos].packageName
-                override fun areContentsTheSame(oldPos: Int, newPos: Int): Boolean =
-                    oldItems[oldPos] == newItems[newPos]
-            })
-            items.clear()
-            items.addAll(newItems)
-            diffResult.dispatchUpdatesTo(this)
-        }
-
-        class ViewHolder(val binding: ItemCurfewAppPickerBinding) : RecyclerView.ViewHolder(binding.root)
-
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
-            val binding = ItemCurfewAppPickerBinding.inflate(
-                LayoutInflater.from(parent.context),
-                parent,
-                false
-            )
-            return ViewHolder(binding)
-        }
-
-        override fun getItemCount(): Int = items.size
-
-        override fun onViewRecycled(holder: ViewHolder) {
-            super.onViewRecycled(holder)
-            AppIconResolver.cancelLoad(holder.binding.ivAppIcon)
-        }
-
-        override fun onBindViewHolder(holder: ViewHolder, position: Int) {
-            val item = items[position]
-            val binding = holder.binding
-
-            binding.tvAppName.text = item.appName
-            binding.tvPackageName.text = item.packageName
-
-            AppIconResolver.loadIcon(
-                imageView = binding.ivAppIcon,
-                packageName = item.packageName,
-                appName = item.appName,
-                isLocalMode = isLocalMode
-            )
-
-            binding.cbRun.setOnCheckedChangeListener(null)
-            binding.cbNet.setOnCheckedChangeListener(null)
-
-            binding.cbRun.isChecked = item.isRunAllowed
-            binding.cbNet.isChecked = item.isNetAllowed
-            binding.cbNet.visibility = if (allowNetSelection) View.VISIBLE else View.GONE
-
-            // Net is enabled only when Run is allowed
-            binding.cbNet.isEnabled = allowNetSelection && item.isRunAllowed
-            binding.cbNet.alpha = if (item.isRunAllowed) 1.0f else 0.45f
-
-            binding.cbRun.setOnCheckedChangeListener { _, isChecked ->
-                onRunToggled(item, isChecked)
-            }
-
-            binding.cbNet.setOnCheckedChangeListener { _, isChecked ->
-                onNetToggled(item, isChecked)
-            }
-
-            binding.root.setOnClickListener {
-                val newChecked = !binding.cbRun.isChecked
-                binding.cbRun.isChecked = newChecked
             }
         }
     }

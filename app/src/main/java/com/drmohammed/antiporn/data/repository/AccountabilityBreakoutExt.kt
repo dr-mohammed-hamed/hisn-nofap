@@ -227,15 +227,13 @@ internal suspend fun AccountabilityRepository.executeEmergencyBreakoutInternal()
         }
 
         val currentVersion = snapshot.getLong("version") ?: 1L
-        val safeDefault = DevicePolicyBundle.defaultPolicy().copy(
-            guardianUid = null,
-            guardianName = null,
-            isSupervised = false,
-            breakoutStatus = DevicePolicyBundle.BREAKOUT_STATUS_COMPLETED,
-            breakoutRequestedAt = null,
-            breakoutUnlockAt = null,
-            version = currentVersion + 1,
-            updatedAt = now
+        val existingPolicy = snapshot.data?.let { DevicePolicyBundle.fromMap(it) }
+            ?: PolicyRepository.getInstance(appContext).getCurrentPolicy()
+        val safeDefault = AccountabilityRepository.buildPostSupervisionPolicy(
+            existingPolicy = existingPolicy,
+            nextVersion = currentVersion + 1,
+            now = now,
+            breakoutStatus = DevicePolicyBundle.BREAKOUT_STATUS_COMPLETED
         )
         docRef.set(safeDefault.toMap(), SetOptions.merge()).await()
         PolicyRepository.getInstance(appContext).updateLocalPolicyAndEnforce(safeDefault)

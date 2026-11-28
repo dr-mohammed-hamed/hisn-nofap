@@ -1,13 +1,14 @@
-package com.drmohammed.antiporn.ui.accountability
+﻿package com.drmohammed.antiporn.ui.accountability
 
 import android.app.Application
-import android.util.Log
+import androidx.annotation.VisibleForTesting
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.accessibility.HisnAccessibilityService
 import com.drmohammed.antiporn.ai.service.ScreenAiProjectionService
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
+import com.drmohammed.antiporn.core.model.PolicyMergeUtils
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
 import com.drmohammed.antiporn.curfew.CurfewEnforcer
 import com.drmohammed.antiporn.data.model.InstalledAppDto
@@ -16,15 +17,18 @@ import com.drmohammed.antiporn.data.repository.AppInventoryManager
 import com.drmohammed.antiporn.data.repository.ApprovalDecisionResult
 import com.drmohammed.antiporn.data.repository.ApprovalRepository
 import com.drmohammed.antiporn.data.repository.PolicyRepository
+import com.drmohammed.antiporn.shields.AppSuspensionShield
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Source
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,10 +36,9 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import timber.log.Timber
 
 /**
  * Clean MVVM ViewModel for RemoteAppManagerActivity.
@@ -57,9 +60,9 @@ class RemoteAppManagerViewModel(
     val events: Flow<RemoteAppManagerEvent> = _events.receiveAsFlow()
 
     private var inventoryListener: ListenerRegistration? = null
-    private var loadJob: Job? = null
-    private val mutationMutex = Mutex()
     private var isInitialized = false
+    // main: serialize policy/approval mutations so quick-unsuspend and save cannot interleave.
+    private val mutationMutex = Mutex()
 
     fun initialize(isLocalMode: Boolean, wardId: String, wardName: String) {
         if (isInitialized) return
@@ -141,11 +144,10 @@ class RemoteAppManagerViewModel(
     }
 
     fun loadData() {
-        loadJob?.cancel()
         _uiState.update { it.copy(isLoading = true) }
         val state = _uiState.value
 
-        loadJob = viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(Dispatchers.IO) {
             if (state.isLocalMode) {
                 loadLocalData()
             } else {
@@ -156,7 +158,7 @@ class RemoteAppManagerViewModel(
 
     private suspend fun loadLocalData() {
         try {
-            val policy = policyRepository.getCurrentPolicy()
+            val policy = policyRepository.awaitInitialPolicy()
             val localApps = appInventoryManager.getInstalledApps()
             val sortedList = localApps.sortedWith(
                 compareBy({ it.appName.lowercase() }, { it.packageName })
@@ -168,6 +170,8 @@ class RemoteAppManagerViewModel(
             _uiState.update {
                 it.copy(
                     isLoading = false,
+                    isPolicyLoadFailed = false,
+                    errorMessage = null,
                     currentPolicy = policy,
                     customBlacklist = policy.customBlacklistPackages.toSet(),
                     customCurfewWhitelist = policy.customCurfewWhitelistPackages.toSet(),
@@ -191,7 +195,7 @@ class RemoteAppManagerViewModel(
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            Log.e(TAG, "Failed loading local app manager data", e)
+            Timber.tag(TAG).e(e, "Failed loading local app manager data")
             _uiState.update { it.copy(isLoading = false, errorMessage = e.message) }
         }
     }
@@ -206,20 +210,36 @@ class RemoteAppManagerViewModel(
                 policySnapshot = firestore.collection("policies").document(wardId).get().await()
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                Log.w(TAG, "Network fetch failed for ward policy $wardId, trying cache", e)
+                Timber.tag(TAG).w(e, "Network fetch failed for ward policy %s, trying cache", wardId)
                 try {
                     policySnapshot = firestore.collection("policies").document(wardId).get(Source.CACHE).await()
                 } catch (cacheEx: Exception) {
-                    Log.w(TAG, "Cache fetch failed for ward policy $wardId", cacheEx)
+                    if (cacheEx is CancellationException) throw cacheEx
+                    Timber.tag(TAG).w(cacheEx, "Cache fetch failed for ward policy %s", wardId)
                 }
             }
 
             val policyData = policySnapshot?.data
-            val policy = if (policySnapshot != null && policySnapshot.exists() && policyData != null) {
-                DevicePolicyBundle.fromMap(policyData)
-            } else {
-                DevicePolicyBundle.defaultPolicy()
+            if (policySnapshot == null || !policySnapshot.exists() || policyData == null) {
+                val context = getApplication<Application>()
+                val errorText = context.getString(R.string.toast_guardian_policy_save_failed)
+                Timber.tag(TAG).e(
+                    "Failed loading remote policy for ward %s (snapshot=%s, exists=%s)",
+                    wardId,
+                    policySnapshot != null,
+                    policySnapshot?.exists()
+                )
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        isPolicyLoadFailed = true,
+                        errorMessage = errorText
+                    )
+                }
+                _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.toast_guardian_policy_save_failed, isLong = true))
+                return
             }
+            val policy = DevicePolicyBundle.fromMap(policyData)
 
             // 2. Fetch inventory
             var inventoryDoc: DocumentSnapshot? = null
@@ -227,11 +247,12 @@ class RemoteAppManagerViewModel(
                 inventoryDoc = firestore.collection("inventories").document(wardId).get().await()
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                Log.w(TAG, "Network fetch failed for inventory $wardId, trying cache", e)
+                Timber.tag(TAG).w(e, "Network fetch failed for inventory %s, trying cache", wardId)
                 try {
                     inventoryDoc = firestore.collection("inventories").document(wardId).get(Source.CACHE).await()
                 } catch (cacheEx: Exception) {
-                    Log.w(TAG, "Cache fetch failed for inventory $wardId", cacheEx)
+                    if (cacheEx is CancellationException) throw cacheEx
+                    Timber.tag(TAG).w(cacheEx, "Cache fetch failed for inventory %s", wardId)
                 }
             }
 
@@ -241,6 +262,8 @@ class RemoteAppManagerViewModel(
 
             _uiState.update {
                 it.copy(
+                    isPolicyLoadFailed = false,
+                    errorMessage = null,
                     currentPolicy = policy,
                     customBlacklist = policy.customBlacklistPackages.toSet(),
                     customCurfewWhitelist = policy.customCurfewWhitelistPackages.toSet(),
@@ -266,8 +289,8 @@ class RemoteAppManagerViewModel(
             attachRealtimeInventoryListener(firestore, wardId)
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            Log.e(TAG, "Failed loading remote app manager data", e)
-            _uiState.update { it.copy(errorMessage = e.message) }
+            Timber.tag(TAG).e(e, "Failed loading remote app manager data")
+            _uiState.update { it.copy(isPolicyLoadFailed = true, errorMessage = e.message) }
         } finally {
             _uiState.update { it.copy(isLoading = false) }
         }
@@ -313,20 +336,22 @@ class RemoteAppManagerViewModel(
         inventoryListener = firestore.collection("inventories").document(wardId)
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
-                    Log.w(TAG, "Real-time inventory listener error: ${error.message}")
+                    Timber.tag(TAG).w(error, "Real-time inventory listener error")
                     return@addSnapshotListener
                 }
                 if (snapshot != null && snapshot.exists() && snapshot.data != null) {
-                    val currentPolicy = _uiState.value.currentPolicy
-                    val sortedList = parseAndSortInventory(snapshot, currentPolicy)
-                    val query = _uiState.value.searchQuery.trim().lowercase()
-                    val filtered = filterAppsList(sortedList, query)
+                    viewModelScope.launch(Dispatchers.Default) {
+                        val state = _uiState.value
+                        val sortedList = parseAndSortInventory(snapshot, state.currentPolicy)
+                        val query = state.searchQuery.trim().lowercase()
+                        val filtered = filterAppsList(sortedList, query)
 
-                    _uiState.update {
-                        it.copy(
-                            allApps = sortedList,
-                            displayedApps = filtered
-                        )
+                        _uiState.update {
+                            it.copy(
+                                allApps = sortedList,
+                                displayedApps = filtered
+                            )
+                        }
                     }
                 }
             }
@@ -444,6 +469,12 @@ class RemoteAppManagerViewModel(
 
     fun executeQuickUnsuspend(app: InstalledAppDto) {
         val snapshot = _uiState.value
+        if (!snapshot.isLocalMode && snapshot.isPolicyLoadFailed) {
+            viewModelScope.launch {
+                _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.toast_guardian_policy_save_failed, isLong = true))
+            }
+            return
+        }
         if (snapshot.isLoading || snapshot.isSaving || snapshot.isRepairing) return
         val pkg = app.packageName
         val displayName = app.appName.ifBlank { pkg }
@@ -455,8 +486,14 @@ class RemoteAppManagerViewModel(
                 val context = getApplication<Application>()
                 try {
                     val state = _uiState.value
+                    if (!state.isLocalMode && state.isPolicyLoadFailed) {
+                        _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.toast_guardian_policy_save_failed, isLong = true))
+                        return@withLock
+                    }
                     if (state.isLocalMode) {
-                        val decision = approvalRepository.unsuspendAndApprove(pkg, decidedBy = "SELF", overrideRejected = true)
+                        val decision = withContext(NonCancellable) {
+                            approvalRepository.unsuspendAndApprove(pkg, decidedBy = "SELF", overrideRejected = true)
+                        }
                         when (decision) {
                             ApprovalDecisionResult.APPROVED -> {
                                 _uiState.update { current ->
@@ -518,42 +555,48 @@ class RemoteAppManagerViewModel(
                             }
                         }
                     } else {
-                        val updatedBlacklist = state.customBlacklist - pkg
                         val myUid = accountabilityRepository.getCachedUid()
                         val myName = accountabilityRepository.getMyDisplayName()
                             ?: context.getString(R.string.guardian_default_name)
 
-                        val updatedPolicy = state.currentPolicy.copy(
-                            guardianUid = state.currentPolicy.guardianUid?.takeIf { it.isNotBlank() } ?: myUid,
-                            guardianName = state.currentPolicy.guardianName?.takeIf { it.isNotBlank() } ?: myName,
-                            isSupervised = true,
-                            customBlacklistPackages = updatedBlacklist,
-                            updatedAt = TrustedTimeProvider.currentTimeMillis(context)
-                        )
-
                         // 1. Push policy FIRST so ward removes pkg from customBlacklistPackages before approval ticket arrives
-                        val success = policyRepository.pushPolicyToWard(state.wardId, updatedPolicy)
+                        val pushedPolicy = withContext(NonCancellable) {
+                            policyRepository.mergeAndPushRemotePolicyPatch(
+                                wardUid = state.wardId,
+                                fallbackPolicy = state.currentPolicy,
+                                guardianUidFallback = myUid,
+                                guardianNameFallback = myName
+                            ) { latest ->
+                                latest.copy(
+                                    customBlacklistPackages = latest.customBlacklistPackages - pkg,
+                                    version = latest.version + 1,
+                                    updatedAt = TrustedTimeProvider.currentTimeMillis(context)
+                                )
+                            }
+                        }
 
                         // 2. Resolve Zero-Trust approval on ward cloud ticket only after policy is successfully updated in cloud
-                        if (success) {
+                        if (pushedPolicy != null) {
                             val approvalSuccess = try {
-                                approvalRepository.resolveWardApproval(
-                                    wardUid = state.wardId,
-                                    packageName = pkg,
-                                    approve = true,
-                                    guardianName = myName
-                                )
+                                withContext(NonCancellable) {
+                                    approvalRepository.resolveWardApproval(
+                                        wardUid = state.wardId,
+                                        packageName = pkg,
+                                        approve = true,
+                                        guardianName = myName
+                                    )
+                                }
                             } catch (e: Exception) {
                                 if (e is CancellationException) throw e
-                                Log.e(TAG, "Quick unsuspend: Error resolving ward approval for $pkg", e)
+                                Timber.tag(TAG).e(e, "Quick unsuspend: Error resolving ward approval for %s", pkg)
                                 false
                             }
-                            Log.i(TAG, "Quick unsuspend: Auto-resolved ward approval for $pkg (success=$approvalSuccess)")
+                            Timber.tag(TAG).i("Quick unsuspend: Auto-resolved ward approval for %s (success=%s)", pkg, approvalSuccess)
 
                             _uiState.update { current ->
                                 current.copy(
                                     customBlacklist = current.customBlacklist - pkg,
-                                    currentPolicy = updatedPolicy,
+                                    currentPolicy = pushedPolicy,
                                     initialBlacklist = current.initialBlacklist - pkg,
                                     allApps = if (approvalSuccess) {
                                         current.allApps.map { if (it.packageName == pkg) it.copy(isSuspended = false) else it }
@@ -564,21 +607,12 @@ class RemoteAppManagerViewModel(
                                 )
                             }
 
-                            if (approvalSuccess) {
-                                _events.send(
-                                    RemoteAppManagerEvent.ShowToastString(
-                                        context.getString(R.string.toast_quick_unsuspend_remote_sent, displayName, state.wardName),
-                                        isLong = true
-                                    )
+                            _events.send(
+                                RemoteAppManagerEvent.ShowToastString(
+                                    context.getString(R.string.toast_quick_unsuspend_remote_sent, displayName, state.wardName),
+                                    isLong = true
                                 )
-                            } else {
-                                _events.send(
-                                    RemoteAppManagerEvent.ShowToastString(
-                                        context.getString(R.string.toast_quick_unsuspend_failed, context.getString(R.string.error_unknown)),
-                                        isLong = true
-                                    )
-                                )
-                            }
+                            )
                         } else {
                             _events.send(
                                 RemoteAppManagerEvent.ShowToastString(
@@ -590,7 +624,7 @@ class RemoteAppManagerViewModel(
                     }
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
-                    Log.e(TAG, "Quick unsuspend failed for $pkg", e)
+                    Timber.tag(TAG).e(e, "Quick unsuspend failed for %s", pkg)
                     _events.send(
                         RemoteAppManagerEvent.ShowToastString(
                             context.getString(R.string.toast_quick_unsuspend_failed, e.localizedMessage ?: context.getString(R.string.error_unknown)),
@@ -606,7 +640,7 @@ class RemoteAppManagerViewModel(
 
     fun executeRepairStuckApps() {
         val state = _uiState.value
-        if (state.isRepairing || state.isSaving || state.isLoading) return
+        if (state.isRepairing || state.isSaving) return
         if (state.hasUnsavedChanges) {
             viewModelScope.launch {
                 _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.dialog_unsaved_changes_msg))
@@ -617,8 +651,8 @@ class RemoteAppManagerViewModel(
         _uiState.update { it.copy(isRepairing = true, isLoading = true) }
 
         viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
             try {
-                val context = getApplication<Application>()
                 val count = CurfewEnforcer.repairStuckSuspendedApps(context)
                 if (count > 0) {
                     _events.send(
@@ -633,8 +667,8 @@ class RemoteAppManagerViewModel(
                 }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                Log.e(TAG, "Error repairing stuck suspended apps", e)
-                _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.toast_no_stuck_apps))
+                Timber.tag(TAG).e(e, "Failed repairing stuck suspended apps")
+                _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.toast_self_policy_save_failed))
             } finally {
                 _uiState.update { it.copy(isRepairing = false, isLoading = false) }
             }
@@ -643,6 +677,12 @@ class RemoteAppManagerViewModel(
 
     fun saveChanges() {
         val snapshot = _uiState.value
+        if (!snapshot.isLocalMode && snapshot.isPolicyLoadFailed) {
+            viewModelScope.launch {
+                _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.toast_guardian_policy_save_failed, isLong = true))
+            }
+            return
+        }
         if (snapshot.isSaving || snapshot.isLoading || snapshot.isRepairing || !snapshot.hasUnsavedChanges) return
 
         _uiState.update { it.copy(isSaving = true) }
@@ -652,62 +692,62 @@ class RemoteAppManagerViewModel(
                 val context = getApplication<Application>()
                 try {
                     val state = _uiState.value
+                    if (!state.isLocalMode && state.isPolicyLoadFailed) {
+                        _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.toast_guardian_policy_save_failed, isLong = true))
+                        return@withLock
+                    }
                     val myUid = if (!state.isLocalMode) accountabilityRepository.getCachedUid() else null
                     val myName = if (!state.isLocalMode) accountabilityRepository.getMyDisplayName() else null
                     val unFrozenPackages = state.initialBlacklist - state.customBlacklist
 
-                    val updatedPolicy: DevicePolicyBundle? = if (state.isLocalMode) {
-                        policyRepository.mergeAndSaveSelfPolicyPatch(awaitCloudSync = unFrozenPackages.isNotEmpty()) { current ->
-                            current.copy(
-                                customBlacklistPackages = state.customBlacklist,
-                                customCurfewWhitelistPackages = state.customCurfewWhitelist,
-                                customAiScanPackages = state.customAiScanPackages,
-                                excludedAiScanPackages = state.excludedAiScanPackages,
-                                curfewVpnBypassPackages = state.curfewVpnBypass,
-                                protectedAppPackages = state.protectedApps,
-                                lockNewInstallsUntilApproved = state.lockNewInstallsUntilApproved
-                            )
+                    val updatedPolicy: DevicePolicyBundle? = withContext(NonCancellable) {
+                        if (state.isLocalMode) {
+                            policyRepository.mergeAndSaveSelfPolicyPatch(awaitCloudSync = unFrozenPackages.isNotEmpty()) { current ->
+                                applyAppManagerDiffOntoLatest(current, state)
+                            }
+                        } else {
+                            policyRepository.mergeAndPushRemotePolicyPatch(
+                                wardUid = state.wardId,
+                                fallbackPolicy = state.currentPolicy,
+                                guardianUidFallback = myUid,
+                                guardianNameFallback = myName
+                            ) { latest ->
+                                applyAppManagerDiffOntoLatest(latest, state).copy(
+                                    version = latest.version + 1,
+                                    updatedAt = TrustedTimeProvider.currentTimeMillis(context)
+                                )
+                            }
                         }
-                    } else {
-                        val candidate = state.currentPolicy.copy(
-                            guardianUid = state.currentPolicy.guardianUid?.takeIf { it.isNotBlank() } ?: myUid,
-                            guardianName = state.currentPolicy.guardianName?.takeIf { it.isNotBlank() } ?: myName,
-                            isSupervised = true,
-                            customBlacklistPackages = state.customBlacklist,
-                            customCurfewWhitelistPackages = state.customCurfewWhitelist,
-                            customAiScanPackages = state.customAiScanPackages,
-                            excludedAiScanPackages = state.excludedAiScanPackages,
-                            curfewVpnBypassPackages = state.curfewVpnBypass,
-                            protectedAppPackages = state.protectedApps,
-                            lockNewInstallsUntilApproved = state.lockNewInstallsUntilApproved,
-                            version = state.currentPolicy.version + 1,
-                            updatedAt = TrustedTimeProvider.currentTimeMillis(context)
-                        )
-                        if (policyRepository.pushPolicyToWard(state.wardId, candidate)) candidate else null
                     }
 
                     if (updatedPolicy != null) {
-                        // Auto-resolve Zero-Trust approvals for any packages removed from 24/7 blacklist AFTER policy push succeeds
+                        // main: only report success when every un-frozen package's approval resolved.
                         var allResolved = true
                         for (pkg in unFrozenPackages) {
                             try {
                                 val resolved = if (state.isLocalMode) {
-                                    val res = approvalRepository.unsuspendAndApprove(pkg, decidedBy = "SELF", overrideRejected = true)
-                                    res == ApprovalDecisionResult.APPROVED || res == ApprovalDecisionResult.APPROVED_CURFEW_DEFERRED
+                                    val res = approvalRepository.unsuspendAndApprove(
+                                        pkg, decidedBy = "SELF", overrideRejected = true
+                                    )
+                                    res == ApprovalDecisionResult.APPROVED ||
+                                        res == ApprovalDecisionResult.APPROVED_CURFEW_DEFERRED
                                 } else {
-                                    approvalRepository.resolveWardApproval(state.wardId, pkg, approve = true, guardianName = myName ?: "GUARDIAN")
+                                    approvalRepository.resolveWardApproval(
+                                        state.wardId, pkg, approve = true, guardianName = myName ?: "GUARDIAN"
+                                    )
                                 }
                                 if (!resolved) allResolved = false
-                                Log.i(TAG, "saveChanges: Auto-approved un-frozen package '$pkg' (resolved=$resolved)")
+                                Timber.tag(TAG).i("saveChanges: auto-approved '%s' (resolved=%s)", pkg, resolved)
                             } catch (e: Exception) {
                                 if (e is CancellationException) throw e
                                 allResolved = false
-                                Log.e(TAG, "saveChanges: Error auto-approving package '$pkg'", e)
+                                Timber.tag(TAG).e(e, "saveChanges: error auto-approving '%s'", pkg)
                             }
                         }
 
                         _uiState.update {
                             it.copy(
+                                isSaving = false,
                                 currentPolicy = updatedPolicy,
                                 initialBlacklist = updatedPolicy.customBlacklistPackages.toSet(),
                                 initialCurfewWhitelist = updatedPolicy.customCurfewWhitelistPackages.toSet(),
@@ -725,14 +765,14 @@ class RemoteAppManagerViewModel(
                             _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.toast_app_manager_save_failed, isLong = true))
                         }
                     } else {
+                        _uiState.update { it.copy(isSaving = false) }
                         _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.toast_app_manager_save_failed, isLong = true))
                     }
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
-                    Log.e(TAG, "Error pushing updated policies from RemoteAppManagerViewModel", e)
-                    _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.toast_app_manager_save_failed, isLong = true))
-                } finally {
+                    Timber.tag(TAG).e(e, "Error pushing updated policies from RemoteAppManagerViewModel")
                     _uiState.update { it.copy(isSaving = false) }
+                    _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.toast_app_manager_save_failed, isLong = true))
                 }
             }
         }
@@ -747,5 +787,47 @@ class RemoteAppManagerViewModel(
 
     companion object {
         private const val TAG = "AntiPorn_RemoteAppVM"
+
+        @VisibleForTesting
+        internal fun applyAppManagerDiffOntoLatest(
+            latest: DevicePolicyBundle,
+            state: RemoteAppManagerUiState
+        ): DevicePolicyBundle = latest.copy(
+            customBlacklistPackages = PolicyMergeUtils.mergeSet(
+                latest.customBlacklistPackages,
+                state.initialBlacklist,
+                state.customBlacklist
+            ),
+            customCurfewWhitelistPackages = PolicyMergeUtils.mergeSet(
+                latest.customCurfewWhitelistPackages,
+                state.initialCurfewWhitelist,
+                state.customCurfewWhitelist
+            ),
+            customAiScanPackages = PolicyMergeUtils.mergeSet(
+                latest.customAiScanPackages,
+                state.initialAiScanPackages,
+                state.customAiScanPackages
+            ),
+            excludedAiScanPackages = PolicyMergeUtils.mergeSet(
+                latest.excludedAiScanPackages,
+                state.initialExcludedAiScanPackages,
+                state.excludedAiScanPackages
+            ),
+            curfewVpnBypassPackages = PolicyMergeUtils.mergeSet(
+                latest.curfewVpnBypassPackages,
+                state.initialCurfewVpnBypass,
+                state.curfewVpnBypass
+            ),
+            protectedAppPackages = PolicyMergeUtils.mergeSet(
+                latest.protectedAppPackages,
+                state.initialProtectedApps,
+                state.protectedApps
+            ),
+            lockNewInstallsUntilApproved = PolicyMergeUtils.pickIfChanged(
+                latest.lockNewInstallsUntilApproved,
+                state.initialLockNewInstalls,
+                state.lockNewInstallsUntilApproved
+            )
+        )
     }
 }

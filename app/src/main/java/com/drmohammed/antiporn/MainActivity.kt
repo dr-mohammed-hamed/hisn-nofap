@@ -1,6 +1,5 @@
 package com.drmohammed.antiporn
 
-import android.app.admin.DevicePolicyManager
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
@@ -15,7 +14,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
-import android.util.Log
+import android.view.View
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
@@ -24,6 +23,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.pm.PackageInfoCompat
 import androidx.core.net.toUri
+import androidx.core.os.bundleOf
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -59,14 +59,16 @@ import com.drmohammed.antiporn.ui.control.SelfControlFragment
 import com.drmohammed.antiporn.ui.home.HomeFragment
 import com.drmohammed.antiporn.ui.main.MainViewModel
 import org.koin.androidx.viewmodel.ext.android.viewModel
+import com.drmohammed.antiporn.ui.common.ConfirmActionDialogFragment
+import com.drmohammed.antiporn.ui.common.showSafely
 import com.drmohammed.antiporn.ui.settings.SettingsFragment
 import com.drmohammed.antiporn.ui.splash.SplashAnimationController
-import com.google.android.material.bottomnavigation.BottomNavigationView
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.navigation.NavigationBarView
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import timber.log.Timber
 
 /**
  * Main application dashboard activity hosting the Material 3 Bottom Navigation Hub.
@@ -83,7 +85,7 @@ class MainActivity : AppCompatActivity(),
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var viewPager: ViewPager2
-    private lateinit var bottomNav: BottomNavigationView
+    private lateinit var navBar: NavigationBarView
     private val mainViewModel: MainViewModel by viewModel()
 
     private var splashController: SplashAnimationController? = null
@@ -128,28 +130,44 @@ class MainActivity : AppCompatActivity(),
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
-        if (::bottomNav.isInitialized) {
-            outState.putInt(KEY_SELECTED_TAB, bottomNav.selectedItemId)
+        if (::navBar.isInitialized) {
+            outState.putInt(KEY_SELECTED_TAB, navBar.selectedItemId)
         }
+        outState.putBoolean(KEY_HAS_SHOWN_OTA_PROMPT, hasShownOtaPrompt)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        hasShownOtaPrompt = savedInstanceState?.getBoolean(KEY_HAS_SHOWN_OTA_PROMPT, false) ?: false
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
         viewPager = binding.viewPagerMain
-        bottomNav = binding.bottomNavigationView
+        navBar = binding.bottomNavigationView ?: binding.navigationRailView
+            ?: throw IllegalStateException("NavigationBarView missing from activity_main layout")
 
-        ViewCompat.setOnApplyWindowInsetsListener(binding.layoutMainRoot) { _, windowInsets ->
+        val isRailMode = binding.navigationRailView != null
+        ViewCompat.setOnApplyWindowInsetsListener(binding.layoutMainRoot) { root, windowInsets ->
             val insets = windowInsets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             )
-            viewPager.setPadding(insets.left, insets.top, insets.right, 0)
-            bottomNav.setPadding(0, 0, 0, insets.bottom)
-            windowInsets
+            if (isRailMode) {
+                val isRtl = ViewCompat.getLayoutDirection(root) == ViewCompat.LAYOUT_DIRECTION_RTL ||
+                    resources.configuration.layoutDirection == View.LAYOUT_DIRECTION_RTL
+                if (isRtl) {
+                    navBar.setPadding(0, insets.top, insets.right, insets.bottom)
+                    viewPager.setPadding(insets.left, insets.top, 0, insets.bottom)
+                } else {
+                    navBar.setPadding(insets.left, insets.top, 0, insets.bottom)
+                    viewPager.setPadding(0, insets.top, insets.right, insets.bottom)
+                }
+            } else {
+                viewPager.setPadding(insets.left, insets.top, insets.right, 0)
+                navBar.setPadding(insets.left, 0, insets.right, insets.bottom)
+            }
+            WindowInsetsCompat.CONSUMED
         }
 
         viewPager.adapter = MainPagerAdapter(this)
@@ -157,6 +175,22 @@ class MainActivity : AppCompatActivity(),
         viewPager.isUserInputEnabled = true
 
         onBackPressedDispatcher.addCallback(this, backPressedCallback)
+
+        supportFragmentManager.setFragmentResultListener(REQ_OTA_UPDATE_CONFIRM, this) { _, bundle ->
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) == ConfirmActionDialogFragment.BUTTON_POSITIVE) {
+                val infoJson = bundle.getBundle(ConfirmActionDialogFragment.RESULT_PAYLOAD)
+                    ?.getString(KEY_OTA_INFO_JSON)
+                    ?: return@setFragmentResultListener
+                val info = runCatching { OtaVersionInfo.fromJson(infoJson) }
+                    .onFailure { Timber.tag(TAG).w(it, "Failed parsing OTA info JSON from dialog payload") }
+                    .getOrNull()
+                    ?: return@setFragmentResultListener
+                val otaRepo = OtaRepository.getInstance(applicationContext)
+                lifecycleScope.launch {
+                    otaRepo.downloadAndInstall(applicationContext, info, showNotification = true)
+                }
+            }
+        }
 
         setupNavigation(savedInstanceState)
         handleIntentNavigation(intent)
@@ -190,15 +224,15 @@ class MainActivity : AppCompatActivity(),
             override fun onPageSelected(position: Int) {
                 super.onPageSelected(position)
                 val targetMenuId = positionToMenuId(position)
-                if (bottomNav.selectedItemId != targetMenuId) {
-                    bottomNav.selectedItemId = targetMenuId
+                if (navBar.selectedItemId != targetMenuId) {
+                    navBar.selectedItemId = targetMenuId
                 }
                 mainViewModel.selectTab(position)
                 backPressedCallback.isEnabled = (position != 0)
             }
         })
 
-        bottomNav.setOnItemSelectedListener { item ->
+        navBar.setOnItemSelectedListener { item ->
             val targetPosition = menuIdToPosition(item.itemId)
             if (viewPager.currentItem != targetPosition) {
                 viewPager.setCurrentItem(targetPosition, false)
@@ -210,7 +244,7 @@ class MainActivity : AppCompatActivity(),
         val restoredTabId = savedInstanceState?.getInt(KEY_SELECTED_TAB, R.id.nav_home) ?: R.id.nav_home
         val targetPosition = menuIdToPosition(restoredTabId)
         viewPager.setCurrentItem(targetPosition, false)
-        bottomNav.selectedItemId = restoredTabId
+        navBar.selectedItemId = restoredTabId
         mainViewModel.selectTab(targetPosition)
         backPressedCallback.isEnabled = (targetPosition != 0)
 
@@ -253,8 +287,8 @@ class MainActivity : AppCompatActivity(),
         if (viewPager.currentItem != targetPosition) {
             viewPager.setCurrentItem(targetPosition, false)
         }
-        if (bottomNav.selectedItemId != tabId) {
-            bottomNav.selectedItemId = tabId
+        if (navBar.selectedItemId != tabId) {
+            navBar.selectedItemId = tabId
         }
         mainViewModel.selectTab(targetPosition)
     }
@@ -315,7 +349,7 @@ class MainActivity : AppCompatActivity(),
         try {
             unregisterReceiver(uninstallStatusReceiver)
         } catch (e: Exception) {
-            Log.d(TAG, "Uninstall status receiver not registered: ${e.message}")
+            Timber.tag(TAG).d("Uninstall status receiver not registered: %s", e.message)
         }
     }
 
@@ -343,9 +377,14 @@ class MainActivity : AppCompatActivity(),
 
         lifecycleScope.launch {
             if (enable) {
-                val saved = policyRepo.saveAndEnforceSelfPolicy(updatedPolicy)
+                val savedPolicy = policyRepo.mergeAndSaveSelfPolicyPatch { latest ->
+                    latest.copy(
+                        isScreenAiEnabledGlobally = true,
+                        screenAiSchemaVersion = DevicePolicyBundle.CURRENT_SCREEN_AI_SCHEMA_VERSION
+                    )
+                }
                 if (isFinishing || isDestroyed) return@launch
-                if (!saved) {
+                if (savedPolicy == null) {
                     Toast.makeText(this@MainActivity, R.string.self_control_section_locked_by_guardian, Toast.LENGTH_SHORT).show()
                     refreshSettingsAiUi()
                     return@launch
@@ -353,7 +392,7 @@ class MainActivity : AppCompatActivity(),
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                     val reconcileResult = withContext(Dispatchers.IO) {
-                        AccessibilityPolicyCoordinator.reconcile(this@MainActivity, updatedPolicy)
+                        AccessibilityPolicyCoordinator.reconcile(this@MainActivity, savedPolicy)
                     }
                     if (isFinishing || isDestroyed) return@launch
                     when (reconcileResult) {
@@ -380,9 +419,14 @@ class MainActivity : AppCompatActivity(),
                 }
             } else {
                 stopService(Intent(this@MainActivity, ScreenAiProjectionService::class.java))
-                policyRepo.saveAndEnforceSelfPolicy(updatedPolicy)
+                val savedPolicy = policyRepo.mergeAndSaveSelfPolicyPatch { latest ->
+                    latest.copy(
+                        isScreenAiEnabledGlobally = false,
+                        screenAiSchemaVersion = DevicePolicyBundle.CURRENT_SCREEN_AI_SCHEMA_VERSION
+                    )
+                } ?: updatedPolicy
                 withContext(Dispatchers.IO) {
-                    AccessibilityPolicyCoordinator.reconcile(this@MainActivity, updatedPolicy)
+                    AccessibilityPolicyCoordinator.reconcile(this@MainActivity, savedPolicy)
                 }
                 if (!isFinishing && !isDestroyed) {
                     refreshSettingsAiUi()
@@ -420,11 +464,15 @@ class MainActivity : AppCompatActivity(),
         val policyRepo = PolicyRepository.getInstance(applicationContext)
         val current = policyRepo.getCurrentPolicy()
         if (current.isScreenAiEnabledGlobally) {
-            val reverted = current.copy(
+            val reverted = policyRepo.mergeAndSaveSelfPolicyPatch { latest ->
+                latest.copy(
+                    isScreenAiEnabledGlobally = false,
+                    screenAiSchemaVersion = DevicePolicyBundle.CURRENT_SCREEN_AI_SCHEMA_VERSION
+                )
+            } ?: current.copy(
                 isScreenAiEnabledGlobally = false,
                 screenAiSchemaVersion = DevicePolicyBundle.CURRENT_SCREEN_AI_SCHEMA_VERSION
             )
-            policyRepo.saveAndEnforceSelfPolicy(reverted)
             withContext(Dispatchers.IO) {
                 AccessibilityPolicyCoordinator.reconcile(this@MainActivity, reverted)
             }
@@ -494,11 +542,13 @@ class MainActivity : AppCompatActivity(),
         val otaRepo = OtaRepository.getInstance(applicationContext)
 
         lifecycleScope.launch {
-            otaRepo.updateState.collect { state ->
-                if (!isFinishing && !isDestroyed) {
-                    if (state is OtaUpdateState.UpdateAvailable && !hasShownOtaPrompt) {
-                        hasShownOtaPrompt = true
-                        showOtaUpdateDialog(state.info, otaRepo)
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                otaRepo.updateState.collect { state ->
+                    if (!isFinishing && !isDestroyed) {
+                        if (state is OtaUpdateState.UpdateAvailable && !hasShownOtaPrompt && !supportFragmentManager.isStateSaved) {
+                            hasShownOtaPrompt = true
+                            showOtaUpdateDialog(state.info, otaRepo)
+                        }
                     }
                 }
             }
@@ -514,20 +564,19 @@ class MainActivity : AppCompatActivity(),
 
     private fun showOtaUpdateDialog(info: OtaVersionInfo, otaRepo: OtaRepository) {
         if (isFinishing || isDestroyed) return
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.card_ota_title)
-            .setMessage(
-                getString(R.string.ota_update_available, info.versionName) +
-                (if (!info.releaseNotes.isNullOrBlank()) "\n\n${info.releaseNotes}\n" else "") +
-                "\n\n" + getString(R.string.ota_dialog_prompt)
+        val message = getString(R.string.ota_update_available, info.versionName) +
+            (if (!info.releaseNotes.isNullOrBlank()) "\n\n${info.releaseNotes}\n" else "") +
+            "\n\n" + getString(R.string.ota_dialog_prompt)
+        supportFragmentManager.showSafely(TAG_OTA_UPDATE_CONFIRM) {
+            ConfirmActionDialogFragment.newInstance(
+                requestKey = REQ_OTA_UPDATE_CONFIRM,
+                titleRes = R.string.card_ota_title,
+                messageText = message,
+                positiveRes = R.string.btn_download_update,
+                negativeRes = android.R.string.cancel,
+                payload = bundleOf(KEY_OTA_INFO_JSON to info.toJson())
             )
-            .setPositiveButton(R.string.btn_download_update) { _, _ ->
-                lifecycleScope.launch {
-                    otaRepo.downloadAndInstall(applicationContext, info, showNotification = true)
-                }
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
+        }
     }
 
     private fun triggerEnforcement(showToast: Boolean) {
@@ -551,5 +600,9 @@ class MainActivity : AppCompatActivity(),
     companion object {
         private const val TAG = "AntiPorn_MainActivity"
         private const val KEY_SELECTED_TAB = "key_selected_tab"
+        private const val KEY_HAS_SHOWN_OTA_PROMPT = "key_has_shown_ota_prompt"
+        private const val REQ_OTA_UPDATE_CONFIRM = "req_ota_update_confirm"
+        private const val TAG_OTA_UPDATE_CONFIRM = "tag_ota_update_confirm"
+        private const val KEY_OTA_INFO_JSON = "key_ota_info_json"
     }
 }

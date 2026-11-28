@@ -1,9 +1,11 @@
 package com.drmohammed.antiporn.ui.control
 
 import android.app.Application
+import androidx.annotation.VisibleForTesting
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
+import com.drmohammed.antiporn.core.model.PolicyMergeUtils
 import com.drmohammed.antiporn.curfew.CurfewEnforcer
 import com.drmohammed.antiporn.curfew.CurfewScheduler
 import com.drmohammed.antiporn.data.repository.ApprovalRepository
@@ -138,18 +140,26 @@ class SelfControlViewModel(
         policyToSave: DevicePolicyBundle,
         onComplete: ((Result<Unit>) -> Unit)? = null
     ) {
+        val baselineSnapshot = _uiState.value.initialSnapshot
         _uiState.update { it.copy(isSaving = true) }
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val success = policyRepository.saveAndEnforceSelfPolicy(policyToSave)
+                val savedPolicy = policyRepository.mergeAndSaveSelfPolicyPatch { latest ->
+                    applyDiffOntoLatest(
+                        latest = latest,
+                        baseline = baselineSnapshot,
+                        draft = policyToSave
+                    )
+                }
+                val success = savedPolicy != null
 
                 withContext(Dispatchers.Main) {
-                    if (success) {
+                    if (success && savedPolicy != null) {
                         _uiState.update { current ->
                             current.copy(
-                                policy = policyToSave,
-                                initialSnapshot = policyToSave,
+                                policy = savedPolicy,
+                                initialSnapshot = savedPolicy,
                                 isSaving = false,
                                 hasUnsavedChanges = false
                             )
@@ -263,5 +273,177 @@ class SelfControlViewModel(
 
     companion object {
         private const val TAG = "AntiPorn_SelfCtrlVM"
+
+        @VisibleForTesting
+        internal fun applyDiffOntoLatest(
+            latest: DevicePolicyBundle,
+            baseline: DevicePolicyBundle?,
+            draft: DevicePolicyBundle
+        ): DevicePolicyBundle {
+            if (baseline == null) return draft
+            if (baseline == draft) return latest
+
+            fun <T> pick(latestVal: T, baseVal: T, draftVal: T): T =
+                PolicyMergeUtils.pickIfChanged(latestVal, baseVal, draftVal)
+
+            fun mergeSet(
+                latestVal: Set<String>,
+                baseVal: Set<String>,
+                draftVal: Set<String>
+            ): Set<String> = PolicyMergeUtils.mergeSet(latestVal, baseVal, draftVal)
+
+            return latest.copy(
+                curfewStartHour = pick(latest.curfewStartHour, baseline.curfewStartHour, draft.curfewStartHour),
+                curfewStartMinute = pick(latest.curfewStartMinute, baseline.curfewStartMinute, draft.curfewStartMinute),
+                curfewEndHour = pick(latest.curfewEndHour, baseline.curfewEndHour, draft.curfewEndHour),
+                curfewEndMinute = pick(latest.curfewEndMinute, baseline.curfewEndMinute, draft.curfewEndMinute),
+                isCurfewEnabled = pick(latest.isCurfewEnabled, baseline.isCurfewEnabled, draft.isCurfewEnabled),
+                isInstantInternetKillEnabled = pick(
+                    latest.isInstantInternetKillEnabled,
+                    baseline.isInstantInternetKillEnabled,
+                    draft.isInstantInternetKillEnabled
+                ),
+                isWeekendCurfewEnabled = pick(
+                    latest.isWeekendCurfewEnabled,
+                    baseline.isWeekendCurfewEnabled,
+                    draft.isWeekendCurfewEnabled
+                ),
+                weekendCurfewStartHour = pick(
+                    latest.weekendCurfewStartHour,
+                    baseline.weekendCurfewStartHour,
+                    draft.weekendCurfewStartHour
+                ),
+                weekendCurfewStartMinute = pick(
+                    latest.weekendCurfewStartMinute,
+                    baseline.weekendCurfewStartMinute,
+                    draft.weekendCurfewStartMinute
+                ),
+                weekendCurfewEndHour = pick(
+                    latest.weekendCurfewEndHour,
+                    baseline.weekendCurfewEndHour,
+                    draft.weekendCurfewEndHour
+                ),
+                weekendCurfewEndMinute = pick(
+                    latest.weekendCurfewEndMinute,
+                    baseline.weekendCurfewEndMinute,
+                    draft.weekendCurfewEndMinute
+                ),
+                isVpnBlackholeEnabled = pick(
+                    latest.isVpnBlackholeEnabled,
+                    baseline.isVpnBlackholeEnabled,
+                    draft.isVpnBlackholeEnabled
+                ),
+                isIncognitoBlocked = pick(
+                    latest.isIncognitoBlocked,
+                    baseline.isIncognitoBlocked,
+                    draft.isIncognitoBlocked
+                ),
+                lockNewInstallsUntilApproved = pick(
+                    latest.lockNewInstallsUntilApproved,
+                    baseline.lockNewInstallsUntilApproved,
+                    draft.lockNewInstallsUntilApproved
+                ),
+                isScreenAiEnabledGlobally = pick(
+                    latest.isScreenAiEnabledGlobally,
+                    baseline.isScreenAiEnabledGlobally,
+                    draft.isScreenAiEnabledGlobally
+                ),
+                screenAiSchemaVersion = pick(
+                    latest.screenAiSchemaVersion,
+                    baseline.screenAiSchemaVersion,
+                    draft.screenAiSchemaVersion
+                ),
+                customBlacklistPackages = mergeSet(
+                    latest.customBlacklistPackages,
+                    baseline.customBlacklistPackages,
+                    draft.customBlacklistPackages
+                ),
+                customCurfewWhitelistPackages = mergeSet(
+                    latest.customCurfewWhitelistPackages,
+                    baseline.customCurfewWhitelistPackages,
+                    draft.customCurfewWhitelistPackages
+                ),
+                customAiScanPackages = mergeSet(
+                    latest.customAiScanPackages,
+                    baseline.customAiScanPackages,
+                    draft.customAiScanPackages
+                ),
+                excludedAiScanPackages = mergeSet(
+                    latest.excludedAiScanPackages,
+                    baseline.excludedAiScanPackages,
+                    draft.excludedAiScanPackages
+                ),
+                curfewVpnBypassPackages = mergeSet(
+                    latest.curfewVpnBypassPackages,
+                    baseline.curfewVpnBypassPackages,
+                    draft.curfewVpnBypassPackages
+                ),
+                protectedAppPackages = mergeSet(
+                    latest.protectedAppPackages,
+                    baseline.protectedAppPackages,
+                    draft.protectedAppPackages
+                ),
+                browserFilterMode = pick(
+                    latest.browserFilterMode,
+                    baseline.browserFilterMode,
+                    draft.browserFilterMode
+                ),
+                isFullSystemFilteringEnabled = pick(
+                    latest.isFullSystemFilteringEnabled,
+                    baseline.isFullSystemFilteringEnabled,
+                    draft.isFullSystemFilteringEnabled
+                ),
+                customBlockedUrls = mergeSet(
+                    latest.customBlockedUrls,
+                    baseline.customBlockedUrls,
+                    draft.customBlockedUrls
+                ),
+                customAllowedUrls = mergeSet(
+                    latest.customAllowedUrls,
+                    baseline.customAllowedUrls,
+                    draft.customAllowedUrls
+                ),
+                dnsHost = pick(latest.dnsHost, baseline.dnsHost, draft.dnsHost),
+                isYouTubeRestrictedModeEnabled = pick(
+                    latest.isYouTubeRestrictedModeEnabled,
+                    baseline.isYouTubeRestrictedModeEnabled,
+                    draft.isYouTubeRestrictedModeEnabled
+                ),
+                isAdBlockingEnabled = pick(
+                    latest.isAdBlockingEnabled,
+                    baseline.isAdBlockingEnabled,
+                    draft.isAdBlockingEnabled
+                ),
+                isLocalVpnFallbackEnabled = pick(
+                    latest.isLocalVpnFallbackEnabled,
+                    baseline.isLocalVpnFallbackEnabled,
+                    draft.isLocalVpnFallbackEnabled
+                ),
+                isTelegramWebBlocked = pick(
+                    latest.isTelegramWebBlocked,
+                    baseline.isTelegramWebBlocked,
+                    draft.isTelegramWebBlocked
+                ),
+                isBlockExternalVpnEnabled = pick(
+                    latest.isBlockExternalVpnEnabled,
+                    baseline.isBlockExternalVpnEnabled,
+                    draft.isBlockExternalVpnEnabled
+                ),
+                isDateTimeLocked = pick(
+                    latest.isDateTimeLocked,
+                    baseline.isDateTimeLocked,
+                    draft.isDateTimeLocked
+                ),
+                isClearAppDataAllowed = pick(
+                    latest.isClearAppDataAllowed,
+                    baseline.isClearAppDataAllowed,
+                    draft.isClearAppDataAllowed
+                ),
+                timeZoneId = pick(latest.timeZoneId, baseline.timeZoneId, draft.timeZoneId),
+                waqfaConfig = pick(latest.waqfaConfig, baseline.waqfaConfig, draft.waqfaConfig),
+                pageShieldConfig = pick(latest.pageShieldConfig, baseline.pageShieldConfig, draft.pageShieldConfig),
+                fortressesConfig = pick(latest.fortressesConfig, baseline.fortressesConfig, draft.fortressesConfig)
+            )
+        }
     }
 }

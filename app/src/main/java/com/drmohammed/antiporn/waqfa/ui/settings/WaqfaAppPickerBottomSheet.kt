@@ -1,11 +1,12 @@
 package com.drmohammed.antiporn.waqfa.ui.settings
 
 import android.content.Intent
+import android.content.res.Configuration
 import android.os.Bundle
-import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import androidx.core.view.isVisible
 import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -17,6 +18,8 @@ import com.drmohammed.antiporn.data.model.InstalledAppDto
 import com.drmohammed.antiporn.databinding.BottomSheetWaqfaAppPickerBinding
 import com.drmohammed.antiporn.databinding.ItemWaqfaAppPickerBinding
 import com.drmohammed.antiporn.ui.accountability.AppIconResolver
+import com.drmohammed.antiporn.ui.common.applyBottomSheetInsets
+import com.drmohammed.antiporn.ui.common.configureLandscapeFriendlySheet
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
@@ -26,29 +29,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import timber.log.Timber
 
 /**
  * نافذة سفلية منبثقة لاختيار التطبيقات الخاضعة لنظام «وَقْفَة».
  * تدعم وضع الإشراف المحلي والتحكم عن بعد (Remote Supervision) عبر استرداد مستودع تطبيقات الجهاز المدار من Firestore.
  */
-class WaqfaAppPickerBottomSheet() : BottomSheetDialogFragment() {
+class WaqfaAppPickerBottomSheet : BottomSheetDialogFragment() {
 
     private var _binding: BottomSheetWaqfaAppPickerBinding? = null
     private val binding get() = _binding ?: throw IllegalStateException("Binding is only valid between onCreateView and onDestroyView")
-
-    private var legacyOnConfirmed: ((Set<String>) -> Unit)? = null
-
-    constructor(
-        initiallySelected: Set<String>,
-        onConfirmed: (Set<String>) -> Unit
-    ) : this() {
-        arguments = Bundle().apply {
-            putBoolean(ARG_IS_REMOTE, false)
-            putString(ARG_WARD_ID, "")
-            putStringArrayList(ARG_INITIAL_TARGETS, ArrayList(initiallySelected))
-        }
-        this.legacyOnConfirmed = onConfirmed
-    }
 
     data class AppItem(
         val packageName: String,
@@ -70,8 +60,14 @@ class WaqfaAppPickerBottomSheet() : BottomSheetDialogFragment() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
-        val selected = allApps.filter { it.isSelected }.map { it.packageName }
-        outState.putStringArrayList(KEY_CURRENT_SELECTIONS, ArrayList(selected))
+        if (allApps.isNotEmpty()) {
+            val selected = allApps.filter { it.isSelected }.map { it.packageName }
+            outState.putStringArrayList(KEY_CURRENT_SELECTIONS, ArrayList(selected))
+        } else {
+            currentSavedSelections?.let {
+                outState.putStringArrayList(KEY_CURRENT_SELECTIONS, ArrayList(it))
+            }
+        }
     }
 
     override fun onCreateView(
@@ -85,6 +81,14 @@ class WaqfaAppPickerBottomSheet() : BottomSheetDialogFragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+
+        configureLandscapeFriendlySheet(enableImeResize = true)
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        applyBottomSheetInsets(view, includeIme = true) { imeVisible ->
+            if (_binding != null && isLandscape) {
+                binding.btnConfirmSelection.isVisible = !imeVisible
+            }
+        }
 
         val isRemote = arguments?.getBoolean(ARG_IS_REMOTE) ?: false
 
@@ -104,6 +108,7 @@ class WaqfaAppPickerBottomSheet() : BottomSheetDialogFragment() {
             filterApps(text?.toString().orEmpty())
         }
 
+        binding.btnConfirmSelection.isEnabled = false
         binding.btnConfirmSelection.setOnClickListener {
             binding.btnConfirmSelection.isEnabled = false
             val selected = allApps.filter { it.isSelected }.map { it.packageName }.toSet()
@@ -113,7 +118,6 @@ class WaqfaAppPickerBottomSheet() : BottomSheetDialogFragment() {
                     putStringArrayList(RESULT_TARGETS, ArrayList(selected))
                 }
             )
-            legacyOnConfirmed?.invoke(selected)
             dismiss()
         }
 
@@ -128,109 +132,118 @@ class WaqfaAppPickerBottomSheet() : BottomSheetDialogFragment() {
             ?: arguments?.getStringArrayList(ARG_INITIAL_TARGETS)?.toSet() ?: emptySet()
 
         viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
-            val criticalPackages = CurfewAppResolver.resolveCoreSystemCriticalPackages(appContext)
-            val list = mutableListOf<AppItem>()
-            val seenPackages = mutableSetOf<String>()
+            try {
+                val criticalPackages = CurfewAppResolver.resolveCoreSystemCriticalPackages(appContext)
+                val list = mutableListOf<AppItem>()
+                val seenPackages = mutableSetOf<String>()
 
-            if (!isRemote) {
-                val pm = appContext.packageManager
-                val intent = Intent(Intent.ACTION_MAIN, null).apply {
-                    addCategory(Intent.CATEGORY_LAUNCHER)
-                }
-                val activities = pm.queryIntentActivities(intent, 0)
-                for (resolveInfo in activities) {
-                    val pkg = resolveInfo.activityInfo?.packageName ?: continue
-                    if (seenPackages.contains(pkg) || isPackageRestricted(pkg, appContext.packageName, criticalPackages)) {
-                        continue
+                if (!isRemote) {
+                    val pm = appContext.packageManager
+                    val intent = Intent(Intent.ACTION_MAIN, null).apply {
+                        addCategory(Intent.CATEGORY_LAUNCHER)
                     }
-                    seenPackages.add(pkg)
+                    val activities = pm.queryIntentActivities(intent, 0)
+                    for (resolveInfo in activities) {
+                        val pkg = resolveInfo.activityInfo?.packageName ?: continue
+                        if (seenPackages.contains(pkg) || isPackageRestricted(pkg, appContext.packageName, criticalPackages)) {
+                            continue
+                        }
+                        seenPackages.add(pkg)
 
-                    val name = resolveInfo.loadLabel(pm).toString()
-                    list.add(
-                        AppItem(
-                            packageName = pkg,
-                            appName = name,
-                            isSelected = initialTargets.contains(pkg)
+                        val name = resolveInfo.loadLabel(pm).toString()
+                        list.add(
+                            AppItem(
+                                packageName = pkg,
+                                appName = name,
+                                isSelected = initialTargets.contains(pkg)
+                            )
                         )
-                    )
+                    }
+
+                    val extraPackages = initialTargets - seenPackages
+                    for (orphan in extraPackages) {
+                        if (isPackageRestricted(orphan, appContext.packageName, criticalPackages)) continue
+                        list.add(
+                            AppItem(
+                                packageName = orphan,
+                                appName = orphan,
+                                isSelected = true
+                            )
+                        )
+                    }
+                } else if (wardId.isBlank()) {
+                    Timber.tag(TAG).w("Refusing remote waqfa app load: blank wardId")
+                    withContext(Dispatchers.Main) {
+                        if (isAdded) dismissAllowingStateLoss()
+                    }
+                    return@launch
+                } else {
+                    val firestore = FirebaseFirestore.getInstance()
+                    var inventoryDoc: DocumentSnapshot? = null
+                    try {
+                        inventoryDoc = firestore.collection("inventories").document(wardId).get().await()
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        Timber.tag(TAG).w(e, "Failed fetching remote inventory from server, falling back to cache")
+                        try {
+                            inventoryDoc = firestore.collection("inventories").document(wardId).get(Source.CACHE).await()
+                        } catch (cacheEx: Exception) {
+                            if (cacheEx is CancellationException) throw cacheEx
+                            Timber.tag(TAG).w(cacheEx, "Failed fetching inventory from cache")
+                        }
+                    }
+
+                    @Suppress("UNCHECKED_CAST")
+                    val rawApps = (inventoryDoc?.get("apps") as? List<*>) ?: emptyList<Any?>()
+                    val parsedApps = rawApps.mapNotNull { raw ->
+                        @Suppress("UNCHECKED_CAST")
+                        (raw as? Map<String, Any?>)?.let { InstalledAppDto.fromMap(it) }
+                    }.filter { it.packageName.isNotBlank() }
+
+                    for (app in parsedApps) {
+                        val pkg = app.packageName
+                        if (seenPackages.contains(pkg) || isPackageRestricted(pkg, appContext.packageName, criticalPackages)) {
+                            continue
+                        }
+                        seenPackages.add(pkg)
+                        list.add(
+                            AppItem(
+                                packageName = pkg,
+                                appName = app.appName.ifBlank { pkg },
+                                isSelected = initialTargets.contains(pkg)
+                            )
+                        )
+                    }
+
+                    val extraPackages = initialTargets - seenPackages
+                    for (orphan in extraPackages) {
+                        if (isPackageRestricted(orphan, appContext.packageName, criticalPackages)) continue
+                        list.add(
+                            AppItem(
+                                packageName = orphan,
+                                appName = orphan,
+                                isSelected = true
+                            )
+                        )
+                    }
                 }
 
-                val extraPackages = initialTargets - seenPackages
-                for (orphan in extraPackages) {
-                    if (isPackageRestricted(orphan, appContext.packageName, criticalPackages)) continue
-                    list.add(
-                        AppItem(
-                            packageName = orphan,
-                            appName = orphan,
-                            isSelected = true
-                        )
-                    )
+                list.sortBy { it.appName.lowercase() }
+
+                withContext(Dispatchers.Main) {
+                    if (_binding != null) {
+                        allApps.clear()
+                        allApps.addAll(list)
+                        filterApps(binding.etSearchApp.text?.toString().orEmpty())
+                        binding.btnConfirmSelection.isEnabled = true
+                        updateConfirmButton()
+                    }
                 }
-            } else if (wardId.isBlank()) {
-                Log.w(TAG, "Refusing remote waqfa app load: blank wardId")
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                Timber.tag(TAG).e(e, "Failed loading waqfa target apps")
                 withContext(Dispatchers.Main) {
                     if (isAdded) dismissAllowingStateLoss()
-                }
-                return@launch
-            } else {
-                val firestore = FirebaseFirestore.getInstance()
-                var inventoryDoc: DocumentSnapshot? = null
-                try {
-                    inventoryDoc = firestore.collection("inventories").document(wardId).get().await()
-                } catch (e: Exception) {
-                    if (e is CancellationException) throw e
-                    Log.w(TAG, "Failed fetching remote inventory from server, falling back to cache: ${e.message}", e)
-                    try {
-                        inventoryDoc = firestore.collection("inventories").document(wardId).get(Source.CACHE).await()
-                    } catch (cacheEx: Exception) {
-                        if (cacheEx is CancellationException) throw cacheEx
-                        Log.w(TAG, "Failed fetching inventory from cache: ${cacheEx.message}")
-                    }
-                }
-
-                @Suppress("UNCHECKED_CAST")
-                val rawApps = (inventoryDoc?.get("apps") as? List<*>) ?: emptyList<Any?>()
-                val parsedApps = rawApps.mapNotNull { raw ->
-                    @Suppress("UNCHECKED_CAST")
-                    (raw as? Map<String, Any?>)?.let { InstalledAppDto.fromMap(it) }
-                }.filter { it.packageName.isNotBlank() }
-
-                for (app in parsedApps) {
-                    val pkg = app.packageName
-                    if (seenPackages.contains(pkg) || isPackageRestricted(pkg, appContext.packageName, criticalPackages)) {
-                        continue
-                    }
-                    seenPackages.add(pkg)
-                    list.add(
-                        AppItem(
-                            packageName = pkg,
-                            appName = app.appName.ifBlank { pkg },
-                            isSelected = initialTargets.contains(pkg)
-                        )
-                    )
-                }
-
-                val extraPackages = initialTargets - seenPackages
-                for (orphan in extraPackages) {
-                    if (isPackageRestricted(orphan, appContext.packageName, criticalPackages)) continue
-                    list.add(
-                        AppItem(
-                            packageName = orphan,
-                            appName = orphan,
-                            isSelected = true
-                        )
-                    )
-                }
-            }
-
-            list.sortBy { it.appName.lowercase() }
-
-            withContext(Dispatchers.Main) {
-                if (_binding != null) {
-                    allApps.clear()
-                    allApps.addAll(list)
-                    filterApps(binding.etSearchApp.text?.toString().orEmpty())
-                    updateConfirmButton()
                 }
             }
         }

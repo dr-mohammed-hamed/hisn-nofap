@@ -3,13 +3,17 @@ package com.drmohammed.antiporn.ui.accountability
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
+import android.view.LayoutInflater
 import android.view.View
+import android.view.ViewGroup
+import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.os.bundleOf
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
@@ -20,10 +24,12 @@ import androidx.recyclerview.widget.RecyclerView
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.data.model.InstalledAppDto
 import com.drmohammed.antiporn.data.repository.PolicyRepository
+import com.drmohammed.antiporn.shields.AppSuspensionShield
+import com.drmohammed.antiporn.ui.common.ConfirmActionDialogFragment
+import com.drmohammed.antiporn.ui.common.showSafely
 import com.drmohammed.antiporn.ui.control.gate.SelfControlAccessGateRegistry
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.textfield.TextInputEditText
 import kotlinx.coroutines.launch
@@ -52,7 +58,6 @@ class RemoteAppManagerActivity : AppCompatActivity() {
 
     private lateinit var adapter: RemoteAppsAdapter
     private var pendingChangedPosition: Int? = null
-    private var activeQuickUnsuspendDialog: androidx.appcompat.app.AlertDialog? = null
 
     private val backPressedCallback = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() {
@@ -89,11 +94,47 @@ class RemoteAppManagerActivity : AppCompatActivity() {
 
         onBackPressedDispatcher.addCallback(this, backPressedCallback)
 
+        setupFragmentResultListeners()
         initViews()
         setupListeners()
         observeViewModel()
 
         viewModel.initialize(isLocalMode, wardId, wardName)
+    }
+
+    private fun setupFragmentResultListeners() {
+        supportFragmentManager.setFragmentResultListener(REQ_FREEZE_NEW_INSTALLS, this) { _, bundle ->
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) == ConfirmActionDialogFragment.BUTTON_POSITIVE) {
+                viewModel.setLockNewInstalls(true)
+            } else {
+                switchLockNewInstalls.setOnCheckedChangeListener(null)
+                switchLockNewInstalls.isChecked = false
+                switchLockNewInstalls.setOnCheckedChangeListener { _, isChecked ->
+                    onLockNewInstallsSwitched(isChecked)
+                }
+                viewModel.setLockNewInstalls(false)
+            }
+        }
+
+        supportFragmentManager.setFragmentResultListener(REQ_DISCARD_CHANGES, this) { _, bundle ->
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) == ConfirmActionDialogFragment.BUTTON_POSITIVE) {
+                backPressedCallback.isEnabled = false
+                finish()
+            }
+        }
+
+        supportFragmentManager.setFragmentResultListener(REQ_QUICK_UNSUSPEND, this) { _, bundle ->
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) == ConfirmActionDialogFragment.BUTTON_POSITIVE) {
+                val payload = bundle.getBundle(ConfirmActionDialogFragment.RESULT_PAYLOAD)
+                    ?: return@setFragmentResultListener
+                val pkg = payload.getString(KEY_UNSUSPEND_PKG).orEmpty()
+                val appName = payload.getString(KEY_UNSUSPEND_APP_NAME).orEmpty()
+                if (pkg.isBlank()) return@setFragmentResultListener
+                val matched = viewModel.uiState.value.displayedApps.firstOrNull { it.packageName == pkg }
+                    ?: InstalledAppDto(packageName = pkg, appName = appName, isSuspended = true)
+                viewModel.executeQuickUnsuspend(matched)
+            }
+        }
     }
 
     private fun applyWindowInsets() {
@@ -212,6 +253,7 @@ class RemoteAppManagerActivity : AppCompatActivity() {
                 launch {
                     PolicyRepository.getInstance(applicationContext).currentPolicyFlow.collect {
                         if (isFinishing || isDestroyed) return@collect
+                        // main's section-level permission check, alongside dev's active-gate guard.
                         if (isLocalMode && (!SelfControlAccessGateRegistry.getActiveGate().canAccess(this@RemoteAppManagerActivity) ||
                                 !SelfControlAccessGateRegistry.isSectionPermitted(
                                     this@RemoteAppManagerActivity,
@@ -234,9 +276,10 @@ class RemoteAppManagerActivity : AppCompatActivity() {
 
         val dirty = state.hasUnsavedChanges
         btnSaveAppManagerChanges.isEnabled = state.isSaveEnabled
-        btnSaveAppManagerChanges.alpha = if (dirty) 1.0f else 0.5f
-        backPressedCallback.isEnabled = dirty
+        btnSaveAppManagerChanges.alpha = if (state.isSaveEnabled) 1.0f else 0.5f
+        backPressedCallback.isEnabled = dirty && (state.isLocalMode || !state.isPolicyLoadFailed)
 
+        switchLockNewInstalls.isEnabled = state.isLocalMode || !state.isPolicyLoadFailed
         switchLockNewInstalls.setOnCheckedChangeListener(null)
         switchLockNewInstalls.isChecked = state.lockNewInstallsUntilApproved
         switchLockNewInstalls.setOnCheckedChangeListener { _, isChecked ->
@@ -288,65 +331,55 @@ class RemoteAppManagerActivity : AppCompatActivity() {
 
     private fun showFreezeNewInstallsConfirmationDialog() {
         if (isFinishing || isDestroyed) return
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.dialog_freeze_new_installs_title)
-            .setMessage(R.string.dialog_freeze_new_installs_msg)
-            .setCancelable(false)
-            .setNegativeButton(android.R.string.cancel) { dialog, _ ->
-                dialog.dismiss()
-                switchLockNewInstalls.setOnCheckedChangeListener(null)
-                switchLockNewInstalls.isChecked = false
-                switchLockNewInstalls.setOnCheckedChangeListener { _, isChecked ->
-                    onLockNewInstallsSwitched(isChecked)
-                }
-                viewModel.setLockNewInstalls(false)
-            }
-            .setPositiveButton(R.string.btn_confirm_freeze_new_installs) { dialog, _ ->
-                dialog.dismiss()
-                viewModel.setLockNewInstalls(true)
-            }
-            .show()
+        supportFragmentManager.showSafely(TAG_FREEZE_NEW_INSTALLS) {
+            ConfirmActionDialogFragment.newInstance(
+                requestKey = REQ_FREEZE_NEW_INSTALLS,
+                titleRes = R.string.dialog_freeze_new_installs_title,
+                messageRes = R.string.dialog_freeze_new_installs_msg,
+                positiveRes = R.string.btn_confirm_freeze_new_installs,
+                negativeRes = android.R.string.cancel,
+                cancelable = false
+            )
+        }
     }
 
     private fun showDiscardConfirmationDialog() {
         if (isFinishing || isDestroyed) return
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.dialog_unsaved_changes_title)
-            .setMessage(R.string.dialog_unsaved_changes_msg)
-            .setNegativeButton(R.string.btn_keep_editing) { dialog, _ ->
-                dialog.dismiss()
-            }
-            .setPositiveButton(R.string.btn_discard_changes) { dialog, _ ->
-                dialog.dismiss()
-                backPressedCallback.isEnabled = false
-                finish()
-            }
-            .show()
+        supportFragmentManager.showSafely(TAG_DISCARD_CHANGES) {
+            ConfirmActionDialogFragment.newInstance(
+                requestKey = REQ_DISCARD_CHANGES,
+                titleRes = R.string.dialog_unsaved_changes_title,
+                messageRes = R.string.dialog_unsaved_changes_msg,
+                positiveRes = R.string.btn_discard_changes,
+                negativeRes = R.string.btn_keep_editing
+            )
+        }
     }
 
     private fun confirmAndExecuteQuickUnsuspend(app: InstalledAppDto) {
         if (isFinishing || isDestroyed) return
-        if (activeQuickUnsuspendDialog?.isShowing == true) return
         val pkg = app.packageName
         val displayName = app.appName.ifBlank { pkg }
 
-        val title = getString(R.string.dialog_quick_unsuspend_title)
         val message = if (isLocalMode) {
             getString(R.string.dialog_quick_unsuspend_msg_local, displayName)
         } else {
             getString(R.string.dialog_quick_unsuspend_msg_remote, displayName, wardName)
         }
 
-        activeQuickUnsuspendDialog = MaterialAlertDialogBuilder(this)
-            .setTitle(title)
-            .setMessage(message)
-            .setNegativeButton(android.R.string.cancel) { dialog, _ -> dialog.dismiss() }
-            .setPositiveButton(R.string.btn_unsuspend_action) { dialog, _ ->
-                dialog.dismiss()
-                viewModel.executeQuickUnsuspend(app)
-            }
-            .setOnDismissListener { activeQuickUnsuspendDialog = null }
-            .show()
+        supportFragmentManager.showSafely(TAG_QUICK_UNSUSPEND) {
+            ConfirmActionDialogFragment.newInstance(
+                requestKey = REQ_QUICK_UNSUSPEND,
+                titleRes = R.string.dialog_quick_unsuspend_title,
+                messageText = message,
+                positiveRes = R.string.btn_unsuspend_action,
+                negativeRes = android.R.string.cancel,
+                payload = bundleOf(
+                    KEY_UNSUSPEND_PKG to pkg,
+                    KEY_UNSUSPEND_APP_NAME to displayName
+                )
+            )
+        }
     }
 
     override fun onResume() {
@@ -364,5 +397,225 @@ class RemoteAppManagerActivity : AppCompatActivity() {
         const val EXTRA_WARD_ID = "extra_ward_id"
         const val EXTRA_WARD_NAME = "extra_ward_name"
         const val EXTRA_IS_LOCAL = "extra_is_local"
+        private const val REQ_FREEZE_NEW_INSTALLS = "req_ram_freeze_new_installs"
+        private const val TAG_FREEZE_NEW_INSTALLS = "tag_ram_freeze_new_installs"
+        private const val REQ_DISCARD_CHANGES = "req_ram_discard_changes"
+        private const val TAG_DISCARD_CHANGES = "tag_ram_discard_changes"
+        private const val REQ_QUICK_UNSUSPEND = "req_ram_quick_unsuspend"
+        private const val TAG_QUICK_UNSUSPEND = "tag_ram_quick_unsuspend"
+        private const val KEY_UNSUSPEND_PKG = "key_unsuspend_pkg"
+        private const val KEY_UNSUSPEND_APP_NAME = "key_unsuspend_app_name"
+    }
+
+    /**
+     * Clean RecyclerView Adapter displaying installed applications with reactive state bindings.
+     */
+    private class RemoteAppsAdapter(
+        private val isLocalMode: Boolean,
+        private val onFreezeToggled: (String, Int, Boolean) -> Unit,
+        private val onCurfewWhitelistToggled: (String, Int, Boolean) -> Unit,
+        private val onCurfewVpnBypassToggled: (String, Int, Boolean) -> Unit,
+        private val onProtectToggled: (String, Int, Boolean) -> Unit,
+        private val onAiScanToggled: (String, Int, Boolean) -> Unit,
+        private val onQuickUnsuspendClicked: (InstalledAppDto) -> Unit
+    ) : RecyclerView.Adapter<RemoteAppsAdapter.AppViewHolder>() {
+
+        private var apps: List<InstalledAppDto> = emptyList()
+        private var customBlacklist: Set<String> = emptySet()
+        private var customCurfewWhitelist: Set<String> = emptySet()
+        private var customAiScanPackages: Set<String> = emptySet()
+        private var excludedAiScanPackages: Set<String> = emptySet()
+        private var curfewVpnBypass: Set<String> = emptySet()
+        private var protectedApps: Set<String> = emptySet()
+        private var initialCurfewWhitelist: Set<String> = emptySet()
+        private var initialCurfewVpnBypass: Set<String> = emptySet()
+        private var isScreenAiEnabledGlobally: Boolean = false
+
+        fun submitData(
+            apps: List<InstalledAppDto>,
+            customBlacklist: Set<String>,
+            customCurfewWhitelist: Set<String>,
+            customAiScanPackages: Set<String>,
+            excludedAiScanPackages: Set<String>,
+            curfewVpnBypass: Set<String>,
+            protectedApps: Set<String>,
+            initialCurfewWhitelist: Set<String>,
+            initialCurfewVpnBypass: Set<String>,
+            isScreenAiEnabledGlobally: Boolean,
+            changedPosition: Int? = null
+        ) {
+            val listChanged = this.apps !== apps && this.apps != apps
+            this.apps = apps
+            this.customBlacklist = customBlacklist
+            this.customCurfewWhitelist = customCurfewWhitelist
+            this.customAiScanPackages = customAiScanPackages
+            this.excludedAiScanPackages = excludedAiScanPackages
+            this.curfewVpnBypass = curfewVpnBypass
+            this.protectedApps = protectedApps
+            this.initialCurfewWhitelist = initialCurfewWhitelist
+            this.initialCurfewVpnBypass = initialCurfewVpnBypass
+            this.isScreenAiEnabledGlobally = isScreenAiEnabledGlobally
+
+            if (changedPosition != null && !listChanged && changedPosition in apps.indices) {
+                notifyItemChanged(changedPosition)
+            } else {
+                notifyDataSetChanged()
+            }
+        }
+
+        class AppViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+            val ivAppIcon: ImageView = view.findViewById(R.id.ivAppIcon)
+            val tvAppName: TextView = view.findViewById(R.id.tvAppName)
+            val tvPackageName: TextView = view.findViewById(R.id.tvPackageName)
+            val tvHighRiskBadge: TextView = view.findViewById(R.id.tvHighRiskBadge)
+            val layoutPhysicalSuspensionAlert: View = view.findViewById(R.id.layoutPhysicalSuspensionAlert)
+            val tvPhysicalStatus: TextView = view.findViewById(R.id.tvPhysicalStatus)
+            val btnQuickUnsuspend: MaterialButton = view.findViewById(R.id.btnQuickUnsuspend)
+            val switchFreeze247: MaterialSwitch = view.findViewById(R.id.switchFreeze247)
+            val switchAllowInCurfew: MaterialSwitch = view.findViewById(R.id.switchAllowInCurfew)
+            val tvCurfewDisabledHint: TextView = view.findViewById(R.id.tvCurfewDisabledHint)
+            val switchAllowCurfewInternet: MaterialSwitch = view.findViewById(R.id.switchAllowCurfewInternet)
+            val tvCurfewInternetDisabledHint: TextView = view.findViewById(R.id.tvCurfewInternetDisabledHint)
+            val switchProtect: MaterialSwitch = view.findViewById(R.id.switchProtect)
+            val switchAiScanTarget: MaterialSwitch = view.findViewById(R.id.switchAiScanTarget)
+            val tvAiScanDisabledHint: TextView = view.findViewById(R.id.tvAiScanDisabledHint)
+        }
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): AppViewHolder {
+            val view = LayoutInflater.from(parent.context).inflate(
+                R.layout.item_remote_app_card,
+                parent,
+                false
+            )
+            return AppViewHolder(view)
+        }
+
+        override fun getItemCount(): Int = apps.size
+
+        override fun onViewRecycled(holder: AppViewHolder) {
+            super.onViewRecycled(holder)
+            AppIconResolver.cancelLoad(holder.ivAppIcon)
+        }
+
+        override fun onBindViewHolder(holder: AppViewHolder, position: Int) {
+            val app = apps[position]
+            val pkg = app.packageName
+            val displayName = app.appName.ifBlank { pkg }
+
+            holder.tvAppName.text = displayName
+            holder.tvPackageName.text = pkg
+
+            val isHighRisk = com.drmohammed.antiporn.core.policy.AppPolicyRegistry.isHighRisk(pkg)
+            holder.tvHighRiskBadge.visibility = if (isHighRisk) View.VISIBLE else View.GONE
+
+            AppIconResolver.loadIcon(
+                imageView = holder.ivAppIcon,
+                packageName = pkg,
+                appName = displayName,
+                isLocalMode = isLocalMode
+            )
+
+            holder.switchFreeze247.setOnCheckedChangeListener(null)
+            holder.switchAllowInCurfew.setOnCheckedChangeListener(null)
+            holder.switchAllowCurfewInternet.setOnCheckedChangeListener(null)
+            holder.switchProtect.setOnCheckedChangeListener(null)
+            holder.switchAiScanTarget.setOnCheckedChangeListener(null)
+
+            val isFrozen = customBlacklist.contains(pkg)
+            holder.switchFreeze247.isChecked = isFrozen
+
+            val isPhysicallySuspended = app.isSuspended
+            val canQuickUnsuspend = isPhysicallySuspended && !isFrozen && !AppSuspensionShield.isBlacklisted(pkg)
+
+            if (canQuickUnsuspend) {
+                holder.layoutPhysicalSuspensionAlert.visibility = View.VISIBLE
+                holder.btnQuickUnsuspend.visibility = View.VISIBLE
+                holder.btnQuickUnsuspend.setOnClickListener { onQuickUnsuspendClicked(app) }
+            } else if (isPhysicallySuspended && !isFrozen) {
+                holder.layoutPhysicalSuspensionAlert.visibility = View.VISIBLE
+                holder.btnQuickUnsuspend.visibility = View.GONE
+                holder.btnQuickUnsuspend.setOnClickListener(null)
+            } else {
+                holder.layoutPhysicalSuspensionAlert.visibility = View.GONE
+                holder.btnQuickUnsuspend.setOnClickListener(null)
+            }
+
+            val isCurfewAllowed = !isFrozen && customCurfewWhitelist.contains(pkg)
+
+            if (isFrozen) {
+                holder.switchAllowInCurfew.isChecked = false
+                holder.switchAllowInCurfew.isEnabled = false
+                holder.switchAllowInCurfew.alpha = 0.4f
+                holder.tvCurfewDisabledHint.visibility = View.VISIBLE
+            } else {
+                holder.switchAllowInCurfew.isEnabled = true
+                holder.switchAllowInCurfew.alpha = 1.0f
+                holder.tvCurfewDisabledHint.visibility = View.GONE
+                holder.switchAllowInCurfew.isChecked = customCurfewWhitelist.contains(pkg)
+            }
+
+            if (!isCurfewAllowed) {
+                holder.switchAllowCurfewInternet.isChecked = false
+                holder.switchAllowCurfewInternet.isEnabled = false
+                holder.switchAllowCurfewInternet.alpha = 0.4f
+                holder.tvCurfewInternetDisabledHint.visibility = View.VISIBLE
+            } else {
+                holder.switchAllowCurfewInternet.isEnabled = true
+                holder.switchAllowCurfewInternet.alpha = 1.0f
+                holder.tvCurfewInternetDisabledHint.visibility = View.GONE
+                holder.switchAllowCurfewInternet.isChecked = curfewVpnBypass.contains(pkg)
+            }
+
+            holder.switchProtect.isChecked = protectedApps.contains(pkg)
+
+            val isAiTarget = (customAiScanPackages.contains(pkg) || com.drmohammed.antiporn.ai.core.policy.AiExemptionRegistry.isTarget(pkg)) && !excludedAiScanPackages.contains(pkg)
+
+            if (!isScreenAiEnabledGlobally) {
+                holder.switchAiScanTarget.isChecked = false
+                holder.switchAiScanTarget.isEnabled = false
+                holder.switchAiScanTarget.alpha = 0.4f
+                holder.tvAiScanDisabledHint.visibility = View.VISIBLE
+            } else {
+                holder.switchAiScanTarget.isEnabled = true
+                holder.switchAiScanTarget.alpha = 1.0f
+                holder.tvAiScanDisabledHint.visibility = View.GONE
+                holder.switchAiScanTarget.isChecked = isAiTarget
+            }
+
+            holder.switchFreeze247.setOnCheckedChangeListener { _, isChecked ->
+                val pos = holder.bindingAdapterPosition
+                if (pos != RecyclerView.NO_POSITION) {
+                    onFreezeToggled(pkg, pos, isChecked)
+                }
+            }
+
+            holder.switchAllowInCurfew.setOnCheckedChangeListener { _, isChecked ->
+                val pos = holder.bindingAdapterPosition
+                if (pos != RecyclerView.NO_POSITION) {
+                    onCurfewWhitelistToggled(pkg, pos, isChecked)
+                }
+            }
+
+            holder.switchAllowCurfewInternet.setOnCheckedChangeListener { _, isChecked ->
+                val pos = holder.bindingAdapterPosition
+                if (pos != RecyclerView.NO_POSITION) {
+                    onCurfewVpnBypassToggled(pkg, pos, isChecked)
+                }
+            }
+
+            holder.switchProtect.setOnCheckedChangeListener { _, isChecked ->
+                val pos = holder.bindingAdapterPosition
+                if (pos != RecyclerView.NO_POSITION) {
+                    onProtectToggled(pkg, pos, isChecked)
+                }
+            }
+
+            holder.switchAiScanTarget.setOnCheckedChangeListener { _, isChecked ->
+                val pos = holder.bindingAdapterPosition
+                if (pos != RecyclerView.NO_POSITION) {
+                    onAiScanToggled(pkg, pos, isChecked)
+                }
+            }
+        }
     }
 }

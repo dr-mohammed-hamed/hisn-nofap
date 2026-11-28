@@ -10,7 +10,10 @@ import com.drmohammed.antiporn.core.engine.DeviceOwnerTeardownManager
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.core.policy.AppPolicyRegistry
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
+import com.drmohammed.antiporn.curfew.CurfewAppResolver
 import com.drmohammed.antiporn.curfew.CurfewConfig
+import com.drmohammed.antiporn.curfew.CurfewEnforcer
+import com.drmohammed.antiporn.curfew.LegacyCurfewWhitelistMigrator
 import com.drmohammed.antiporn.data.local.db.HisnRoomDatabase
 import com.drmohammed.antiporn.data.local.db.dao.DevicePolicyDao
 import com.drmohammed.antiporn.data.local.db.dao.PartnerDao
@@ -22,6 +25,7 @@ import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import com.drmohammed.antiporn.ui.control.gate.SelfControlAccessGateRegistry
 import com.drmohammed.antiporn.waqfa.engine.WaqfaSessionManager
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -73,6 +77,11 @@ class PolicyRepository(
     var isInitialPolicyLoaded: Boolean = false
         private set
 
+    private val initialPolicyReady = CompletableDeferred<Unit>()
+
+    val isInitialReconciliationComplete: Boolean
+        get() = initialPolicyReady.isCompleted
+
     init {
         val cachedPolicy = loadFastPolicyFromCache()
         val hasCachedPolicy = cachedPolicy != null
@@ -90,57 +99,90 @@ class PolicyRepository(
         }
 
         repositoryScope.launch {
-            val (reconciled, needsSave) = loadAndReconcilePolicy(initialPolicy)
-            val adopted = synchronized(policyStateLock) {
-                val current = _currentPolicyFlow.value
-                val noConcurrentUpdate = current == initialPolicy
-                val shouldAdoptInitialRoomLoad = !hasCachedPolicy && noConcurrentUpdate
-                val isNewerOrEqualReconciled = reconciled != current &&
-                    (shouldAdoptInitialRoomLoad ||
-                        reconciled.version > current.version ||
-                        (reconciled.version == current.version &&
-                            (reconciled.updatedAt > current.updatedAt ||
-                                (noConcurrentUpdate && reconciled.updatedAt >= current.updatedAt))))
-                val didAdopt = if (isNewerOrEqualReconciled) {
-                    _currentPolicyFlow.value = reconciled
-                    PageShieldAccessibilityHook.getInstance().updateConfig(reconciled.pageShieldConfig)
-                    SelfControlAccessGateRegistry.isSelfControlAllowedWhenSupervised = reconciled.isSelfControlAllowed
-                    if (needsSave || !hasCachedPolicy) {
-                        schedulePolicyPersistenceLocked(reconciled)
+            var didMigrateLegacyWhitelist = false
+            var effectivePolicyAfterReconcile = initialPolicy
+            try {
+                val (reconciled, needsSave, migratedLegacy) = loadAndReconcilePolicy(initialPolicy, hasCachedPolicy)
+                didMigrateLegacyWhitelist = migratedLegacy
+                val adopted = synchronized(policyStateLock) {
+                    val current = _currentPolicyFlow.value
+                    val noConcurrentUpdate = current == initialPolicy
+                    val shouldAdoptInitialRoomLoad = !hasCachedPolicy && noConcurrentUpdate
+                    val isNewerOrEqualReconciled = reconciled != current &&
+                        (shouldAdoptInitialRoomLoad ||
+                            reconciled.version > current.version ||
+                            (reconciled.version == current.version &&
+                                (reconciled.updatedAt > current.updatedAt ||
+                                    (noConcurrentUpdate && reconciled.updatedAt >= current.updatedAt))))
+                    val didAdopt = if (isNewerOrEqualReconciled) {
+                        _currentPolicyFlow.value = reconciled
+                        PageShieldAccessibilityHook.getInstance().updateConfig(reconciled.pageShieldConfig)
+                        SelfControlAccessGateRegistry.isSelfControlAllowedWhenSupervised = reconciled.isSelfControlAllowed
+                        if (needsSave || !hasCachedPolicy) {
+                            schedulePolicyPersistenceLocked(reconciled)
+                        }
+                        true
+                    } else if (!hasCachedPolicy && reconciled == current) {
+                        schedulePolicyPersistenceLocked(current)
+                        true
+                    } else {
+                        false
                     }
-                    true
-                } else if (!hasCachedPolicy && reconciled == current) {
-                    schedulePolicyPersistenceLocked(current)
-                    true
-                } else {
-                    false
+                    isInitialPolicyLoaded = true
+                    didAdopt
                 }
+                val effectivePolicy = _currentPolicyFlow.value
+                effectivePolicyAfterReconcile = effectivePolicy
+                if (adopted && (needsSave || !hasCachedPolicy)) {
+                    saveFastPolicyCache(effectivePolicy, syncCommit = true)
+                }
+                if (adopted || effectivePolicy != initialPolicy) {
+                    runCatching { PageShieldAccessibilityHook.getInstance().updateConfig(effectivePolicy.pageShieldConfig) }
+                        .onFailure { Timber.tag(TAG).w(it, "Failed updating PageShield config after cold-start Room reconcile") }
+                    runCatching { WaqfaSessionManager.getInstance(appContext).updateConfig(effectivePolicy.waqfaConfig) }
+                        .onFailure { Timber.tag(TAG).w(it, "Failed updating Waqfa config after cold-start Room reconcile") }
+                    runCatching { AccessibilityPolicyCoordinator.reconcile(appContext, effectivePolicy) }
+                        .onFailure { Timber.tag(TAG).w(it, "Failed reconciling accessibility after cold-start Room reconcile") }
+                }
+                if (adopted) {
+                    remoteTeardownHandler.checkAndApplyRemoteSelfControlReset(reconciled)
+                    RemoteModeUnlockHandler.checkAndApplyRemoteModeUnlock(appContext, reconciled)
+                }
+            } finally {
                 isInitialPolicyLoaded = true
-                didAdopt
+                initialPolicyReady.complete(Unit)
             }
-            val effectivePolicy = _currentPolicyFlow.value
-            if (adopted || effectivePolicy != initialPolicy) {
-                runCatching { PageShieldAccessibilityHook.getInstance().updateConfig(effectivePolicy.pageShieldConfig) }
-                    .onFailure { Timber.tag(TAG).w(it, "Failed updating PageShield config after cold-start Room reconcile") }
-                runCatching { WaqfaSessionManager.getInstance(appContext).updateConfig(effectivePolicy.waqfaConfig) }
-                    .onFailure { Timber.tag(TAG).w(it, "Failed updating Waqfa config after cold-start Room reconcile") }
-                runCatching { AccessibilityPolicyCoordinator.reconcile(appContext, effectivePolicy) }
-                    .onFailure { Timber.tag(TAG).w(it, "Failed reconciling accessibility after cold-start Room reconcile") }
-            }
-            if (adopted) {
-                remoteTeardownHandler.checkAndApplyRemoteSelfControlReset(reconciled)
-                RemoteModeUnlockHandler.checkAndApplyRemoteModeUnlock(appContext, reconciled)
-            }
-        }
 
-        try {
-            if (CloudSyncManager.isCloudSyncEnabled(appContext)) {
-                startFirestoreSync()
-            } else {
-                safeLogInfo("Cloud sync is disabled; skipping startup Firestore sync (pure offline mode)")
+            if (didMigrateLegacyWhitelist) {
+                runCatching {
+                    CurfewAppResolver.invalidateCache()
+                    if (CurfewEnforcer.isEffectiveBlockActive(appContext)) {
+                        CurfewEnforcer.syncBlockState(appContext)
+                    }
+                }.onFailure {
+                    Timber.tag(TAG).w(it, "Failed syncing curfew state after legacy whitelist migration")
+                }
+
+                if (CloudSyncManager.isCloudSyncEnabled(appContext) &&
+                    (!effectivePolicyAfterReconcile.isSupervised ||
+                        (effectivePolicyAfterReconcile.isSelfControlAllowed && effectivePolicyAfterReconcile.selfControlCurfewAllowed))
+                ) {
+                    cloudSyncBridge.syncPolicyToCloudAsync(
+                        AccountabilityRepository.getInstance(appContext).getCachedUid(),
+                        effectivePolicyAfterReconcile
+                    )
+                }
             }
-        } catch (t: Throwable) {
-            safeLogWarn("Skipped startup cloud sync initialization: ${t.message}")
+
+            try {
+                if (CloudSyncManager.isCloudSyncEnabled(appContext)) {
+                    startFirestoreSync()
+                } else {
+                    safeLogInfo("Cloud sync is disabled; skipping startup Firestore sync (pure offline mode)")
+                }
+            } catch (t: Throwable) {
+                safeLogWarn("Skipped startup cloud sync initialization: ${t.message}")
+            }
         }
     }
 
@@ -209,9 +251,20 @@ class PolicyRepository(
         }
     }
 
-    private suspend fun loadAndReconcilePolicy(initialPolicy: DevicePolicyBundle): Pair<DevicePolicyBundle, Boolean> {
+    private data class ReconcileResult(
+        val policy: DevicePolicyBundle,
+        val needsSave: Boolean,
+        val didMigrateLegacyWhitelist: Boolean
+    )
+
+    private suspend fun loadAndReconcilePolicy(
+        initialPolicy: DevicePolicyBundle,
+        hasCachedPolicy: Boolean
+    ): ReconcileResult {
         return try {
-            val loaded = policyDao.getDevicePolicyBlocking()?.toBundle() ?: initialPolicy
+            val roomBundle = policyDao.getDevicePolicyBlocking()?.toBundle()
+            val hasPersistedPolicy = roomBundle != null || hasCachedPolicy
+            val loaded = roomBundle ?: initialPolicy
             val hasGuardians = try {
                 partnerDao.getPartnersByRoleBlocking(PartnerEntity.ROLE_GUARDIAN).isNotEmpty()
             } catch (e: Exception) {
@@ -250,18 +303,32 @@ class PolicyRepository(
                 workingPolicy = workingPolicy.withAllSelfControlPermissionsEnabled()
                 needsSave = true
             }
+            var didMigrateLegacyWhitelist = false
+            val migration = LegacyCurfewWhitelistMigrator.migrateIfNeeded(appContext, workingPolicy, hasPersistedPolicy)
+            if (migration.addedPackages.isNotEmpty()) {
+                workingPolicy = migration.policy
+                needsSave = true
+                didMigrateLegacyWhitelist = true
+            }
             if (needsSave) {
-                val reconciled = workingPolicy.copy(updatedAt = TrustedTimeProvider.currentTimeMillis(appContext))
+                val reconciled = workingPolicy.copy(
+                    updatedAt = maxOf(TrustedTimeProvider.currentTimeMillis(appContext), workingPolicy.updatedAt)
+                )
                 Timber.tag(TAG).i("Prepared standalone device policy reconciliation on cold boot (version=%d)", reconciled.version)
-                reconciled to true
+                ReconcileResult(reconciled, needsSave = true, didMigrateLegacyWhitelist = didMigrateLegacyWhitelist)
             } else {
-                loaded to false
+                ReconcileResult(loaded, needsSave = false, didMigrateLegacyWhitelist = false)
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             Timber.tag(TAG).e(e, "Error in loadAndReconcilePolicy")
-            initialPolicy to false
+            ReconcileResult(initialPolicy, needsSave = false, didMigrateLegacyWhitelist = false)
         }
+    }
+
+    suspend fun awaitInitialPolicy(): DevicePolicyBundle {
+        initialPolicyReady.await()
+        return _currentPolicyFlow.value
     }
 
     fun getCurrentPolicy(): DevicePolicyBundle = _currentPolicyFlow.value
@@ -355,7 +422,7 @@ class PolicyRepository(
             appContext,
             "POLICY_ENFORCED_LOCALLY",
             isSuccess = true,
-            details = "v${bundle.version}, curfew=${bundle.isCurfewEnabled}(${bundle.curfewStartHour}:${bundle.curfewStartMinute}-${bundle.curfewEndHour}:${bundle.curfewEndMinute}), weekend=${bundle.isWeekendCurfewEnabled}(${bundle.weekendCurfewStartHour}:${bundle.weekendCurfewStartMinute}), vpn=${bundle.isVpnBlackholeEnabled}, dns=${bundle.dnsHost}, supervised=${bundle.isSupervised}"
+            details = "v${bundle.version}, curfew=${bundle.isCurfewEnabled}(${bundle.curfewStartHour}:${bundle.curfewStartMinute}-${bundle.curfewEndHour}:${bundle.curfewEndMinute}), weekend=${bundle.isWeekendCurfewEnabled}(${bundle.weekendCurfewStartHour}:${bundle.weekendCurfewStartMinute}), vpn=${bundle.isVpnBlackholeEnabled}, dns=${bundle.dnsHost}, supervised=${bundle.isSupervised}, wlCount=${bundle.customCurfewWhitelistPackages.size}, vpnBypassCount=${bundle.curfewVpnBypassPackages.size}"
         )
 
         if (previous.isSupervised && !bundle.isSupervised) {
@@ -412,6 +479,7 @@ class PolicyRepository(
         transform: (DevicePolicyBundle) -> DevicePolicyBundle
     ): DevicePolicyBundle? = withContext(Dispatchers.IO) {
         try {
+            initialPolicyReady.await()
             val repoSupervised = try {
                 AccountabilityRepository.getInstance(appContext).isSupervised()
             } catch (e: Exception) {
@@ -487,7 +555,7 @@ class PolicyRepository(
                 appContext,
                 "SELF_CONTROL_POLICY_SAVED",
                 isSuccess = true,
-                details = "v${updated.version}, curfew=${updated.isCurfewEnabled}(${updated.curfewStartHour}:${updated.curfewStartMinute})"
+                details = "v${updated.version}, curfew=${updated.isCurfewEnabled}(${updated.curfewStartHour}:${updated.curfewStartMinute}), wlCount=${updated.customCurfewWhitelistPackages.size}, vpnBypassCount=${updated.curfewVpnBypassPackages.size}"
             )
             val myUid = AccountabilityRepository.getInstance(appContext).getCachedUid()
             val syncJob = cloudSyncBridge.syncPolicyToCloudAsync(myUid, updated)
@@ -508,6 +576,7 @@ class PolicyRepository(
      */
     suspend fun approveLocalVpnFallbackLocally(): DevicePolicyBundle? = withContext(Dispatchers.IO) {
         try {
+            initialPolicyReady.await()
             var alreadyEnabled: DevicePolicyBundle? = null
             val acceptedPair = synchronized(policyStateLock) {
                 val current = _currentPolicyFlow.value
@@ -635,6 +704,7 @@ class PolicyRepository(
     suspend fun addAppToCurfewWhitelist(packageName: String): Boolean = withContext(Dispatchers.IO) {
         if (packageName.isBlank()) return@withContext false
         try {
+            initialPolicyReady.await()
             var alreadyWhitelisted = false
             val acceptedPair = synchronized(policyStateLock) {
                 val current = _currentPolicyFlow.value

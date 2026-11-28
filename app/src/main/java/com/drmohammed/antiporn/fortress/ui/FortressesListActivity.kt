@@ -46,6 +46,7 @@ class FortressesListActivity : AppCompatActivity() {
     private var wardId: String = ""
     private var wardActiveFortressId: String? = null
     private var wardActiveFortressEndsAtWall: Long = 0L
+    private var cachedLocalActiveFortressId: String? = null
     private lateinit var currentPolicy: DevicePolicyBundle
     private var isMutating = false
     private var deleteDialog: AlertDialog? = null
@@ -108,6 +109,7 @@ class FortressesListActivity : AppCompatActivity() {
             )
         } else {
             currentPolicy = PolicyRepository.getInstance(applicationContext).getCurrentPolicy()
+            cachedLocalActiveFortressId = FortressSessionController.getActiveSession(this)?.fortressId
         }
 
         setupUi()
@@ -124,6 +126,7 @@ class FortressesListActivity : AppCompatActivity() {
         }
         if (!isRemote) {
             currentPolicy = PolicyRepository.getInstance(applicationContext).getCurrentPolicy()
+            cachedLocalActiveFortressId = FortressSessionController.getActiveSession(this)?.fortressId
             renderList()
         } else {
             adapter.refreshActiveStates()
@@ -182,8 +185,12 @@ class FortressesListActivity : AppCompatActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch {
-                    FortressSessionController.activeSessionFlow.collect {
-                        adapter.refreshActiveStates()
+                    FortressSessionController.activeSessionFlow.collect { session ->
+                        val nextActiveId = session?.fortressId
+                        if (nextActiveId != cachedLocalActiveFortressId) {
+                            cachedLocalActiveFortressId = nextActiveId
+                            adapter.refreshActiveStates()
+                        }
                     }
                 }
                 launch {
@@ -206,13 +213,17 @@ class FortressesListActivity : AppCompatActivity() {
                 wardActiveFortressId == profileId &&
                 wardActiveFortressEndsAtWall > TrustedTimeProvider.currentTimeMillis(applicationContext)
         } else {
-            FortressSessionController.getActiveSession(this)?.fortressId == profileId
+            cachedLocalActiveFortressId == profileId
         }
     }
 
+    private fun isLocalProfileActiveLive(profileId: String): Boolean =
+        if (isRemote) isProfileCurrentlyActive(profileId)
+        else FortressSessionController.getActiveSession(this)?.fortressId == profileId
+
     private fun handleEditClicked(profile: FortressProfile) {
         if (isMutating) return
-        if (isProfileCurrentlyActive(profile.id)) {
+        if (isLocalProfileActiveLive(profile.id)) {
             Toast.makeText(this, R.string.fortress_active_edit_blocked_toast, Toast.LENGTH_LONG).show()
             return
         }
@@ -221,7 +232,7 @@ class FortressesListActivity : AppCompatActivity() {
 
     private fun handleDeleteClicked(profile: FortressProfile) {
         if (isMutating || profile.isEmergency) return
-        if (isProfileCurrentlyActive(profile.id)) {
+        if (isLocalProfileActiveLive(profile.id)) {
             Toast.makeText(this, R.string.fortress_active_edit_blocked_toast, Toast.LENGTH_LONG).show()
             return
         }

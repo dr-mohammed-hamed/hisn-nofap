@@ -3,17 +3,17 @@ plugins {
     alias(libs.plugins.google.services)
     alias(libs.plugins.ksp)
 }
+import java.io.StringReader
 import java.util.Properties
-import java.io.FileInputStream
 
 val localProps = Properties().apply {
-    val localPropsFile = rootProject.file("local.properties")
-    if (localPropsFile.exists()) {
-        FileInputStream(localPropsFile).use { load(it) }
-    }
+    providers.fileContents(rootProject.layout.projectDirectory.file("local.properties"))
+        .asText
+        .orNull
+        ?.let { load(StringReader(it)) }
 }
 val otaBaseUrl = localProps.getProperty("ota.base.url")
-    ?: System.getenv("OTA_BASE_URL")
+    ?: providers.environmentVariable("OTA_BASE_URL").orNull
     ?: "https://example-releases.r2.dev"
 
 val googleServicesFile = file("google-services.json")
@@ -47,6 +47,8 @@ if (!googleServicesFile.exists()) {
     """.trimIndent())
 }
 
+val supportedAbis = listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+
 android {
     namespace = "com.drmohammed.antiporn"
     compileSdk {
@@ -65,16 +67,18 @@ android {
         buildConfigField("String", "OTA_BASE_URL", "\"$otaBaseUrl\"")
         ndk {
             abiFilters.clear()
-            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64"))
+            abiFilters.addAll(supportedAbis)
         }
     }
 
     signingConfigs {
         // Local/dev key: load rotated key from keystore/key.properties if present, fallback to AOSP testkey or debug key.
-        val keyPropsFile = file("keystore/key.properties")
-        if (keyPropsFile.exists()) {
+        val keyPropsText = providers.fileContents(layout.projectDirectory.file("keystore/key.properties"))
+            .asText
+            .orNull
+        if (keyPropsText != null) {
             val keyProps = Properties().apply {
-                FileInputStream(keyPropsFile).use { load(it) }
+                load(StringReader(keyPropsText))
             }
             create("rotatedDevKey") {
                 storeFile = file("keystore/${keyProps.getProperty("storeFile", "antiporn-release.jks")}")
@@ -94,13 +98,13 @@ android {
         }
         // Production key comes exclusively from CI secrets (never committed).
         // Set KEYSTORE_PATH/KEYSTORE_PASSWORD/KEY_ALIAS/KEY_PASSWORD to sign releases.
-        val prodKeystorePath = System.getenv("KEYSTORE_PATH")
+        val prodKeystorePath = providers.environmentVariable("KEYSTORE_PATH").orNull
         if (!prodKeystorePath.isNullOrBlank()) {
             create("prod") {
                 storeFile = file(prodKeystorePath)
-                storePassword = System.getenv("KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("KEY_ALIAS")
-                keyPassword = System.getenv("KEY_PASSWORD")
+                storePassword = providers.environmentVariable("KEYSTORE_PASSWORD").orNull
+                keyAlias = providers.environmentVariable("KEY_ALIAS").orNull
+                keyPassword = providers.environmentVariable("KEY_PASSWORD").orNull
             }
         }
     }
@@ -110,11 +114,24 @@ android {
             signingConfig = signingConfigs.findByName("rotatedDevKey")
                 ?: signingConfigs.findByName("aospTestKey")
                 ?: signingConfigs.getByName("debug")
+            providers.gradleProperty("devAbi").orNull?.trim()?.takeIf { it.isNotEmpty() }?.let { prop ->
+                val devAbis = if (prop == "all") {
+                    supportedAbis
+                } else {
+                    prop.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                }
+                if (devAbis.isNotEmpty()) {
+                    ndk {
+                        abiFilters.clear()
+                        abiFilters.addAll(devAbis)
+                    }
+                }
+            }
         }
         release {
             // Uses "prod" when KEYSTORE_PATH is set (CI); otherwise falls back to
             // active dev signing so local assembleRelease still works but is NOT shippable.
-            signingConfig = if (System.getenv("KEYSTORE_PATH").isNullOrBlank()) {
+            signingConfig = if (providers.environmentVariable("KEYSTORE_PATH").orNull.isNullOrBlank()) {
                 signingConfigs.findByName("rotatedDevKey")
                     ?: signingConfigs.findByName("aospTestKey")
                     ?: signingConfigs.getByName("debug")
@@ -159,6 +176,22 @@ android {
             excludes += "/META-INF/LICENSE.md"
             excludes += "/META-INF/NOTICE.md"
             excludes += "/META-INF/INDEX.LIST"
+        }
+    }
+
+    testOptions {
+        unitTests.all {
+            it.maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceAtLeast(1)
+            it.forkEvery = 100
+            it.maxHeapSize = "512m"
+        }
+    }
+}
+
+androidComponents {
+    beforeVariants(selector().withBuildType("debug")) { variantBuilder ->
+        providers.gradleProperty("devMinSdk").orNull?.toIntOrNull()?.let {
+            variantBuilder.minSdk = it
         }
     }
 }

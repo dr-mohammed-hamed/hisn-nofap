@@ -38,6 +38,15 @@ class EffectiveRestrictionResolverTest {
     @Before
     fun setUp() {
         resetSingletons()
+        TrustedTimeProvider.elapsedRealtimeProvider = { fakeElapsedMs }
+        TrustedTimeProvider.wallTimeProvider = { fakeWallMs }
+        TrustedTimeProvider.setAnchorForTesting(fakeWallMs, fakeElapsedMs)
+
+        FortressSessionController.elapsedProvider = { fakeElapsedMs }
+        FortressSessionController.wallProvider = { fakeWallMs }
+        FortressSessionController.bootCountProvider = { 1 }
+        CurfewAppResolver.elapsedRealtimeProvider = { fakeElapsedMs }
+
         context = FakeTestApplicationContext()
         repository = PolicyRepository(context, FakeTestDevicePolicyDao(), FakeTestPartnerDao())
         runBlocking {
@@ -48,15 +57,6 @@ class EffectiveRestrictionResolverTest {
             }
         }
         PolicyRepository.setInstance(repository)
-
-        TrustedTimeProvider.elapsedRealtimeProvider = { fakeElapsedMs }
-        TrustedTimeProvider.wallTimeProvider = { fakeWallMs }
-        TrustedTimeProvider.setAnchorForTesting(fakeWallMs, fakeElapsedMs)
-
-        FortressSessionController.elapsedProvider = { fakeElapsedMs }
-        FortressSessionController.wallProvider = { fakeWallMs }
-        FortressSessionController.bootCountProvider = { 1 }
-        CurfewAppResolver.elapsedRealtimeProvider = { fakeElapsedMs }
     }
 
     @After
@@ -207,6 +207,7 @@ class EffectiveRestrictionResolverTest {
             curfewStartMinute = 0,
             curfewEndHour = 7,
             curfewEndMinute = 0,
+            timeZoneId = CurfewConfig.DEFAULT_TIMEZONE_ID,
             isSupervised = false,
             customCurfewWhitelistPackages = setOf("com.whatsapp")
         )

@@ -7,9 +7,12 @@ import com.drmohammed.antiporn.cloud.CloudSyncManager
 import com.drmohammed.antiporn.cloud.fcm.AntiPornFirebaseMessagingService
 import com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
+import com.drmohammed.antiporn.core.policy.AppPolicyRegistry
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
+import com.drmohammed.antiporn.curfew.LegacyCurfewWhitelistMigrator
 import com.drmohammed.antiporn.data.local.db.dao.PartnerDao
 import com.drmohammed.antiporn.data.local.db.entity.PartnerEntity
+import com.drmohammed.antiporn.fortress.model.FortressesConfig
 import com.drmohammed.antiporn.telemetry.AiTelemetryReporter
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import com.google.firebase.auth.FirebaseAuth
@@ -178,7 +181,11 @@ internal class PolicyCloudSyncBridge(
                 cloudPolicy
             }
             val isFromGuardian = candidateCloudPolicy.isSupervised && !candidateCloudPolicy.guardianUid.isNullOrBlank()
-            val supervisoryChanged = isFromGuardian && hasSupervisoryDiff(candidateCloudPolicy, current)
+            val migratedExemptPackages = LegacyCurfewWhitelistMigrator.getPendingMigratedExemptPackages(
+                appContext,
+                candidateCloudPolicy.version
+            )
+            val supervisoryChanged = isFromGuardian && hasSupervisoryDiff(candidateCloudPolicy, current, migratedExemptPackages)
             val statusChanged = candidateCloudPolicy.breakoutStatus != current.breakoutStatus ||
                 candidateCloudPolicy.deactivationStatus != current.deactivationStatus
             val supervisionChanged = current.isSupervised != candidateCloudPolicy.isSupervised
@@ -203,8 +210,18 @@ internal class PolicyCloudSyncBridge(
             )
 
             val isUnchanged = !(isVersionNewer || isTimeNewer || supervisoryChanged || statusChanged || supervisionChanged)
+            val hasLocalAheadSelfControlEdits = isFromGuardian &&
+                candidateCloudPolicy.version <= current.version &&
+                candidateCloudPolicy.remoteSelfControlResetRequestedAt == current.remoteSelfControlResetRequestedAt &&
+                current.isSelfControlAllowed &&
+                ((current.selfControlCurfewAllowed &&
+                    (current.customCurfewWhitelistPackages != candidateCloudPolicy.customCurfewWhitelistPackages ||
+                        current.curfewVpnBypassPackages != candidateCloudPolicy.curfewVpnBypassPackages)) ||
+                    (current.selfControlFortressesAllowed &&
+                        candidateCloudPolicy.fortressesConfig.getCustomFortresses().isEmpty() &&
+                        current.fortressesConfig.getCustomFortresses().isNotEmpty()))
             if (isUnchanged) {
-                if (preservedOfflineLocalFallback) {
+                if (preservedOfflineLocalFallback || hasLocalAheadSelfControlEdits) {
                     syncPolicyToCloudAsync(uid, current)
                 }
                 val sig = "${candidateCloudPolicy.version}:${candidateCloudPolicy.updatedAt}:${candidateCloudPolicy.hashCode()}:${current.version}"
@@ -220,7 +237,7 @@ internal class PolicyCloudSyncBridge(
                 appContext,
                 "POLICY_RECEIVED",
                 isSuccess = true,
-                details = "uid=$maskedUid, v${candidateCloudPolicy.version}, isSupervised=${candidateCloudPolicy.isSupervised}, curfew=${candidateCloudPolicy.isCurfewEnabled}(${candidateCloudPolicy.curfewStartHour}:${candidateCloudPolicy.curfewStartMinute}), isVersionNewer=$isVersionNewer, isTimeNewer=$isTimeNewer"
+                details = "uid=$maskedUid, v${candidateCloudPolicy.version}, isSupervised=${candidateCloudPolicy.isSupervised}, curfew=${candidateCloudPolicy.isCurfewEnabled}(${candidateCloudPolicy.curfewStartHour}:${candidateCloudPolicy.curfewStartMinute}), isVersionNewer=$isVersionNewer, isTimeNewer=$isTimeNewer, wlCount=${candidateCloudPolicy.customCurfewWhitelistPackages.size}, vpnBypassCount=${candidateCloudPolicy.curfewVpnBypassPackages.size}"
             )
 
             if (isUnchanged) {
@@ -228,12 +245,47 @@ internal class PolicyCloudSyncBridge(
             }
 
             val isTransitionToSupervised = !current.isSupervised && candidateCloudPolicy.isSupervised
-            val effectiveCloudPolicy = reconcileTransitionRules(current, candidateCloudPolicy, isTransitionToSupervised)
+            val cloudFieldPresence = CloudFieldPresence(
+                hasCurfewWhitelist = data.containsKey("customCurfewWhitelistPackages"),
+                hasCurfewVpnBypass = data.containsKey("curfewVpnBypassPackages"),
+                hasFortressesConfig = data.containsKey("fortressesConfig"),
+                hasCurfewSchedule = data.containsKey("isCurfewEnabled")
+            )
+            val effectiveCloudPolicy = reconcileTransitionRules(
+                current = current,
+                cloudPolicy = candidateCloudPolicy,
+                isTransitionToSupervised = isTransitionToSupervised,
+                cloudFieldPresence = cloudFieldPresence
+            )
+            val preservation = preserveWardSelfEditableFieldsOnEqualVersion(
+                current = current,
+                effectiveCloudPolicy = effectiveCloudPolicy,
+                candidateCloudVersion = candidateCloudPolicy.version,
+                isFromGuardian = isFromGuardian,
+                migratedExemptPackages = migratedExemptPackages
+            )
+            val protectedPolicy = preservation.policy
+            if (preservation.preservedCustomFortresses) {
+                BlackBoxRecorder.recordCloudSync(
+                    appContext,
+                    "FORTRESS_PRESERVED_ON_EQUAL_VERSION_SYNC",
+                    isSuccess = true,
+                    details = "cloudV=${candidateCloudPolicy.version}, localV=${current.version}, preservedCustoms=${current.fortressesConfig.getCustomFortresses().size}"
+                )
+            }
+            if (preservation.preservedCurfewLists) {
+                BlackBoxRecorder.recordCloudSync(
+                    appContext,
+                    "CURFEW_LISTS_PRESERVED_ON_EQUAL_VERSION_SYNC",
+                    isSuccess = true,
+                    details = "cloudV=${candidateCloudPolicy.version}, localV=${current.version}, wlCount=${protectedPolicy.customCurfewWhitelistPackages.size}, vpnBypassCount=${protectedPolicy.curfewVpnBypassPackages.size}"
+                )
+            }
             val forceOverride = isFromGuardian && (supervisoryChanged || statusChanged || supervisionChanged)
             val enforcedPolicy = if (forceOverride) {
-                effectiveCloudPolicy.copy(version = maxOf(effectiveCloudPolicy.version, current.version + 1))
+                protectedPolicy.copy(version = maxOf(protectedPolicy.version, current.version + 1))
             } else {
-                effectiveCloudPolicy
+                protectedPolicy
             }
 
             Timber.tag(TAG).i(
@@ -244,6 +296,14 @@ internal class PolicyCloudSyncBridge(
             )
             val adopted = onApplyCloudPolicy(enforcedPolicy, forceOverride)
             val adoptedPolicy = currentPolicyProvider()
+            if (adopted && enforcedPolicy.fortressesConfig != current.fortressesConfig) {
+                BlackBoxRecorder.recordCloudSync(
+                    appContext,
+                    "FORTRESS_CONFIG_UPDATED_FROM_CLOUD",
+                    isSuccess = true,
+                    details = "cloudV=${candidateCloudPolicy.version}, localV=${current.version}, customCount=${enforcedPolicy.fortressesConfig.getCustomFortresses().size}"
+                )
+            }
             if (adopted &&
                 adoptedPolicy.version == enforcedPolicy.version &&
                 adoptedPolicy.isSupervised &&
@@ -253,7 +313,7 @@ internal class PolicyCloudSyncBridge(
             }
 
             if (adopted && isFromGuardian) {
-                acknowledgeCloudPolicyAsync(uid, maskedUid, candidateCloudPolicy, enforcedPolicy, isTransitionToSupervised, effectiveCloudPolicy != candidateCloudPolicy || preservedOfflineLocalFallback)
+                acknowledgeCloudPolicyAsync(uid, maskedUid, candidateCloudPolicy, enforcedPolicy, isTransitionToSupervised, protectedPolicy != candidateCloudPolicy || preservedOfflineLocalFallback)
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -261,7 +321,11 @@ internal class PolicyCloudSyncBridge(
         }
     }
 
-    private fun hasSupervisoryDiff(cloudPolicy: DevicePolicyBundle, current: DevicePolicyBundle): Boolean {
+    private fun hasSupervisoryDiff(
+        cloudPolicy: DevicePolicyBundle,
+        current: DevicePolicyBundle,
+        migratedExemptPackages: Set<String> = emptySet()
+    ): Boolean {
         return cloudPolicy.isSelfControlAllowed != current.isSelfControlAllowed ||
             cloudPolicy.selfControlCurfewAllowed != current.selfControlCurfewAllowed ||
             cloudPolicy.selfControlWebAllowed != current.selfControlWebAllowed ||
@@ -284,10 +348,9 @@ internal class PolicyCloudSyncBridge(
             cloudPolicy.lockNewInstallsUntilApproved != current.lockNewInstallsUntilApproved ||
             cloudPolicy.isScreenAiEnabledGlobally != current.isScreenAiEnabledGlobally ||
             cloudPolicy.customBlacklistPackages != current.customBlacklistPackages ||
-            cloudPolicy.customCurfewWhitelistPackages != current.customCurfewWhitelistPackages ||
+            isCurfewListSupervisoryDiff(cloudPolicy, current, migratedExemptPackages) ||
             cloudPolicy.customAiScanPackages != current.customAiScanPackages ||
             cloudPolicy.excludedAiScanPackages != current.excludedAiScanPackages ||
-            cloudPolicy.curfewVpnBypassPackages != current.curfewVpnBypassPackages ||
             cloudPolicy.protectedAppPackages != current.protectedAppPackages ||
             cloudPolicy.isDateTimeLocked != current.isDateTimeLocked ||
             cloudPolicy.isClearAppDataAllowed != current.isClearAppDataAllowed ||
@@ -309,38 +372,43 @@ internal class PolicyCloudSyncBridge(
             cloudPolicy.selfControlFortressesAllowed != current.selfControlFortressesAllowed ||
             cloudPolicy.selfControlFortressUnlockAllowed != current.selfControlFortressUnlockAllowed ||
             cloudPolicy.selfControlOtherSettingsAllowed != current.selfControlOtherSettingsAllowed ||
-            cloudPolicy.fortressesConfig != current.fortressesConfig ||
+            isFortressSupervisoryDiff(cloudPolicy, current) ||
             cloudPolicy.remoteModeUnlockTarget != current.remoteModeUnlockTarget ||
             cloudPolicy.remoteModeUnlockRequestedAt != current.remoteModeUnlockRequestedAt ||
             cloudPolicy.remoteSelfControlResetRequestedAt != current.remoteSelfControlResetRequestedAt ||
             cloudPolicy.remoteTeardownRequestedAt != current.remoteTeardownRequestedAt
     }
 
-    private fun reconcileTransitionRules(
-        current: DevicePolicyBundle,
-        cloudPolicy: DevicePolicyBundle,
-        isTransitionToSupervised: Boolean
-    ): DevicePolicyBundle {
-        if (!isTransitionToSupervised) return cloudPolicy
-        val preserveBlocked = cloudPolicy.customBlockedUrls.isEmpty() && current.customBlockedUrls.isNotEmpty()
-        val preserveAllowed = cloudPolicy.customAllowedUrls.isEmpty() && current.customAllowedUrls.isNotEmpty()
-        if (!preserveBlocked && !preserveAllowed) return cloudPolicy
+    private fun isFortressSupervisoryDiff(cloudPolicy: DevicePolicyBundle, current: DevicePolicyBundle): Boolean {
+        if (cloudPolicy.fortressesConfig == current.fortressesConfig) return false
+        val isNotReset = cloudPolicy.remoteSelfControlResetRequestedAt == current.remoteSelfControlResetRequestedAt
+        val allowWardSelfFortresses = isNotReset && current.isSelfControlAllowed && current.selfControlFortressesAllowed
+        return !(allowWardSelfFortresses && cloudPolicy.version <= current.version)
+    }
 
-        val restoredBlocked = if (preserveBlocked) current.customBlockedUrls else cloudPolicy.customBlockedUrls
-        val restoredAllowed = if (preserveAllowed) current.customAllowedUrls else cloudPolicy.customAllowedUrls
-        val restoredFilterMode = if (cloudPolicy.browserFilterMode == DevicePolicyBundle.BROWSER_FILTER_OFF && current.browserFilterMode != DevicePolicyBundle.BROWSER_FILTER_OFF) {
-            current.browserFilterMode
-        } else if (cloudPolicy.browserFilterMode == DevicePolicyBundle.BROWSER_FILTER_OFF && (restoredBlocked.isNotEmpty() || restoredAllowed.isNotEmpty())) {
-            DevicePolicyBundle.BROWSER_FILTER_BLOCKLIST
-        } else {
-            cloudPolicy.browserFilterMode
+    private fun isCurfewListSupervisoryDiff(
+        cloudPolicy: DevicePolicyBundle,
+        current: DevicePolicyBundle,
+        migratedExemptPackages: Set<String> = emptySet()
+    ): Boolean {
+        if (cloudPolicy.customCurfewWhitelistPackages == current.customCurfewWhitelistPackages &&
+            cloudPolicy.curfewVpnBypassPackages == current.curfewVpnBypassPackages
+        ) return false
+        val isNotReset = cloudPolicy.remoteSelfControlResetRequestedAt == current.remoteSelfControlResetRequestedAt
+        val allowWardSelfCurfew = isNotReset && current.isSelfControlAllowed && current.selfControlCurfewAllowed
+        if (allowWardSelfCurfew && cloudPolicy.version <= current.version) return false
+        if (isNotReset &&
+            cloudPolicy.version <= current.version &&
+            migratedExemptPackages.isNotEmpty() &&
+            cloudPolicy.curfewVpnBypassPackages == current.curfewVpnBypassPackages
+        ) {
+            val symmetricDiff = (current.customCurfewWhitelistPackages - cloudPolicy.customCurfewWhitelistPackages) +
+                (cloudPolicy.customCurfewWhitelistPackages - current.customCurfewWhitelistPackages)
+            if (symmetricDiff.all { it in migratedExemptPackages && AppPolicyRegistry.isExemptFromCurfew(it) }) {
+                return false
+            }
         }
-        Timber.tag(TAG).i("[PairingSync] Reconciled initial supervised policy: preserving %d blocked URLs and %d allowed URLs (mode=%d)", restoredBlocked.size, restoredAllowed.size, restoredFilterMode)
-        return cloudPolicy.copy(
-            customBlockedUrls = restoredBlocked,
-            customAllowedUrls = restoredAllowed,
-            browserFilterMode = restoredFilterMode
-        )
+        return true
     }
 
     private fun safeLog(priority: Int, message: String, throwable: Throwable? = null) {
@@ -409,12 +477,16 @@ internal class PolicyCloudSyncBridge(
                 if (e is CancellationException) throw e
                 safeLog(Log.WARN, "Failed writing policy acknowledgment: ${e.message}")
             }
-            if (isTransitionToSupervised && wasReconciled) {
+            val canSyncReconciledToCloud = !enforcedPolicy.isSupervised ||
+                (enforcedPolicy.isSelfControlAllowed && enforcedPolicy.selfControlCurfewAllowed) ||
+                isTransitionToSupervised
+            if (wasReconciled && canSyncReconciledToCloud) {
                 try {
                     syncPolicyToCloudAsync(uid, enforcedPolicy)
                 } catch (syncEx: Exception) {
                     if (syncEx is CancellationException) throw syncEx
-                    Timber.tag(TAG).w(syncEx, "Initial transition cloud policy sync deferred: %s", syncEx.message)
+                    val reason = if (isTransitionToSupervised) "Initial transition" else "Reconciled"
+                    Timber.tag(TAG).w(syncEx, "%s cloud policy sync deferred: %s", reason, syncEx.message)
                 }
             }
         }
@@ -563,7 +635,180 @@ internal class PolicyCloudSyncBridge(
         }
     }
 
+    internal data class CloudFieldPresence(
+        val hasCurfewWhitelist: Boolean = true,
+        val hasCurfewVpnBypass: Boolean = true,
+        val hasFortressesConfig: Boolean = true,
+        val hasCurfewSchedule: Boolean = true
+    )
+
+    internal data class EqualVersionPreservationResult(
+        val policy: DevicePolicyBundle,
+        val preservedCustomFortresses: Boolean,
+        val preservedCurfewLists: Boolean
+    )
+
     companion object {
         private const val TAG = "AntiPorn_PolicyRepo"
+
+        @androidx.annotation.VisibleForTesting
+        internal fun reconcileTransitionRules(
+            current: DevicePolicyBundle,
+            cloudPolicy: DevicePolicyBundle,
+            isTransitionToSupervised: Boolean,
+            cloudFieldPresence: CloudFieldPresence = CloudFieldPresence()
+        ): DevicePolicyBundle {
+            if (!isTransitionToSupervised) return cloudPolicy
+            val preserveBlocked = cloudPolicy.customBlockedUrls.isEmpty() && current.customBlockedUrls.isNotEmpty()
+            val preserveAllowed = cloudPolicy.customAllowedUrls.isEmpty() && current.customAllowedUrls.isNotEmpty()
+            val preserveCurfewWhitelist = !cloudFieldPresence.hasCurfewWhitelist &&
+                current.customCurfewWhitelistPackages.isNotEmpty()
+            val preserveCurfewVpnBypass = !cloudFieldPresence.hasCurfewVpnBypass &&
+                current.curfewVpnBypassPackages.isNotEmpty()
+            val preserveFortresses = !cloudFieldPresence.hasFortressesConfig &&
+                current.fortressesConfig.getCustomFortresses().isNotEmpty()
+            val preserveCurfewSchedule = !cloudFieldPresence.hasCurfewSchedule && current.isCurfewEnabled
+
+            if (!preserveBlocked &&
+                !preserveAllowed &&
+                !preserveCurfewWhitelist &&
+                !preserveCurfewVpnBypass &&
+                !preserveFortresses &&
+                !preserveCurfewSchedule
+            ) {
+                return cloudPolicy
+            }
+
+            val restoredBlocked = if (preserveBlocked) current.customBlockedUrls else cloudPolicy.customBlockedUrls
+            val restoredAllowed = if (preserveAllowed) current.customAllowedUrls else cloudPolicy.customAllowedUrls
+            val restoredFilterMode = if (cloudPolicy.browserFilterMode == DevicePolicyBundle.BROWSER_FILTER_OFF && current.browserFilterMode != DevicePolicyBundle.BROWSER_FILTER_OFF) {
+                current.browserFilterMode
+            } else if (cloudPolicy.browserFilterMode == DevicePolicyBundle.BROWSER_FILTER_OFF && (restoredBlocked.isNotEmpty() || restoredAllowed.isNotEmpty())) {
+                DevicePolicyBundle.BROWSER_FILTER_BLOCKLIST
+            } else {
+                cloudPolicy.browserFilterMode
+            }
+            val restoredWhitelist = if (!cloudFieldPresence.hasCurfewWhitelist) {
+                current.customCurfewWhitelistPackages
+            } else {
+                cloudPolicy.customCurfewWhitelistPackages
+            }
+            val restoredVpnBypass = if (!cloudFieldPresence.hasCurfewVpnBypass) {
+                current.curfewVpnBypassPackages
+            } else {
+                cloudPolicy.curfewVpnBypassPackages
+            }
+            val restoredFortresses = if (preserveFortresses) {
+                current.fortressesConfig.normalized()
+            } else {
+                cloudPolicy.fortressesConfig
+            }
+            Timber.tag(TAG).i(
+                "[PairingSync] Reconciled initial supervised policy: preserving %d blocked URLs, %d allowed URLs (mode=%d), curfewWl=%b, vpnBypass=%b, fortresses=%b, curfewSchedule=%b",
+                restoredBlocked.size,
+                restoredAllowed.size,
+                restoredFilterMode,
+                preserveCurfewWhitelist,
+                preserveCurfewVpnBypass,
+                preserveFortresses,
+                preserveCurfewSchedule
+            )
+            return cloudPolicy.copy(
+                customBlockedUrls = restoredBlocked,
+                customAllowedUrls = restoredAllowed,
+                browserFilterMode = restoredFilterMode,
+                customCurfewWhitelistPackages = restoredWhitelist,
+                curfewVpnBypassPackages = restoredVpnBypass,
+                fortressesConfig = restoredFortresses,
+                isCurfewEnabled = if (preserveCurfewSchedule) current.isCurfewEnabled else cloudPolicy.isCurfewEnabled,
+                curfewStartHour = if (preserveCurfewSchedule) current.curfewStartHour else cloudPolicy.curfewStartHour,
+                curfewStartMinute = if (preserveCurfewSchedule) current.curfewStartMinute else cloudPolicy.curfewStartMinute,
+                curfewEndHour = if (preserveCurfewSchedule) current.curfewEndHour else cloudPolicy.curfewEndHour,
+                curfewEndMinute = if (preserveCurfewSchedule) current.curfewEndMinute else cloudPolicy.curfewEndMinute,
+                isWeekendCurfewEnabled = if (preserveCurfewSchedule) current.isWeekendCurfewEnabled else cloudPolicy.isWeekendCurfewEnabled,
+                weekendCurfewStartHour = if (preserveCurfewSchedule) current.weekendCurfewStartHour else cloudPolicy.weekendCurfewStartHour,
+                weekendCurfewStartMinute = if (preserveCurfewSchedule) current.weekendCurfewStartMinute else cloudPolicy.weekendCurfewStartMinute,
+                weekendCurfewEndHour = if (preserveCurfewSchedule) current.weekendCurfewEndHour else cloudPolicy.weekendCurfewEndHour,
+                weekendCurfewEndMinute = if (preserveCurfewSchedule) current.weekendCurfewEndMinute else cloudPolicy.weekendCurfewEndMinute,
+                isVpnBlackholeEnabled = if (preserveCurfewSchedule) current.isVpnBlackholeEnabled else cloudPolicy.isVpnBlackholeEnabled
+            )
+        }
+
+        @androidx.annotation.VisibleForTesting
+        internal fun preserveWardSelfEditableFieldsOnEqualVersion(
+            current: DevicePolicyBundle,
+            effectiveCloudPolicy: DevicePolicyBundle,
+            candidateCloudVersion: Long,
+            isFromGuardian: Boolean,
+            migratedExemptPackages: Set<String> = emptySet()
+        ): EqualVersionPreservationResult {
+            val isNotReset = effectiveCloudPolicy.remoteSelfControlResetRequestedAt == current.remoteSelfControlResetRequestedAt
+            val shouldPreserveWardCustomFortresses = isFromGuardian &&
+                isNotReset &&
+                current.isSelfControlAllowed &&
+                current.selfControlFortressesAllowed &&
+                candidateCloudVersion <= current.version &&
+                effectiveCloudPolicy.fortressesConfig.getCustomFortresses().isEmpty() &&
+                current.fortressesConfig.getCustomFortresses().isNotEmpty()
+
+            val shouldPreserveWardCurfewLists = isFromGuardian &&
+                isNotReset &&
+                current.isSelfControlAllowed &&
+                current.selfControlCurfewAllowed &&
+                candidateCloudVersion <= current.version &&
+                (current.customCurfewWhitelistPackages != effectiveCloudPolicy.customCurfewWhitelistPackages ||
+                    current.curfewVpnBypassPackages != effectiveCloudPolicy.curfewVpnBypassPackages)
+
+            val preservedMigratedExempt = if (isFromGuardian &&
+                isNotReset &&
+                candidateCloudVersion <= current.version &&
+                migratedExemptPackages.isNotEmpty()
+            ) {
+                migratedExemptPackages.filterTo(linkedSetOf()) { pkg ->
+                    pkg in current.customCurfewWhitelistPackages &&
+                        AppPolicyRegistry.isExemptFromCurfew(pkg) &&
+                        pkg !in effectiveCloudPolicy.customBlacklistPackages
+                }
+            } else {
+                emptySet()
+            }
+
+            var updatedPolicy = effectiveCloudPolicy
+            if (shouldPreserveWardCustomFortresses) {
+                updatedPolicy = updatedPolicy.copy(
+                    fortressesConfig = FortressesConfig(
+                        profiles = listOf(effectiveCloudPolicy.fortressesConfig.getEmergencyFortress()) +
+                            current.fortressesConfig.getCustomFortresses()
+                    ).normalized()
+                )
+            }
+
+            var actuallyPreservedCurfewLists = false
+            if (shouldPreserveWardCurfewLists) {
+                val preservedWhitelist = current.customCurfewWhitelistPackages - effectiveCloudPolicy.customBlacklistPackages
+                val preservedVpnBypass = current.curfewVpnBypassPackages - effectiveCloudPolicy.customBlacklistPackages
+                if (preservedWhitelist != updatedPolicy.customCurfewWhitelistPackages ||
+                    preservedVpnBypass != updatedPolicy.curfewVpnBypassPackages
+                ) {
+                    updatedPolicy = updatedPolicy.copy(
+                        customCurfewWhitelistPackages = preservedWhitelist,
+                        curfewVpnBypassPackages = preservedVpnBypass
+                    )
+                    actuallyPreservedCurfewLists = true
+                }
+            } else if (preservedMigratedExempt.isNotEmpty()) {
+                val mergedWhitelist = updatedPolicy.customCurfewWhitelistPackages + preservedMigratedExempt
+                if (mergedWhitelist != updatedPolicy.customCurfewWhitelistPackages) {
+                    updatedPolicy = updatedPolicy.copy(customCurfewWhitelistPackages = mergedWhitelist)
+                    actuallyPreservedCurfewLists = true
+                }
+            }
+
+            return EqualVersionPreservationResult(
+                policy = updatedPolicy,
+                preservedCustomFortresses = shouldPreserveWardCustomFortresses,
+                preservedCurfewLists = actuallyPreservedCurfewLists
+            )
+        }
     }
 }

@@ -99,6 +99,26 @@
                 android:layout_height="wrap_content"
                 android:orientation="vertical" />
 
+            <!-- Active Modes Section -->
+            <TextView
+                android:id="@+id/tvActiveModesHeader"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/hisn_card_gap"
+                android:fontFamily="@font/tajawal"
+                android:text="@string/active_modes_sheet_title"
+                android:textAlignment="viewStart"
+                android:textColor="?attr/colorPrimary"
+                android:textSize="13sp"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:id="@+id/layoutActiveModesContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone" />
+
             <!-- Empty State (Shown if no active shields) -->
             <LinearLayout
                 android:id="@+id/layoutEmptyState"

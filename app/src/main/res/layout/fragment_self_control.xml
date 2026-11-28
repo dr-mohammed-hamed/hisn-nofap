@@ -16,15 +16,21 @@
         app:titleTextColor="?attr/colorOnSurface" />
 
     <!-- Locked State Overlay (Displayed when self-control is restricted by supervisor/partner) -->
-    <LinearLayout
+    <ScrollView
         android:id="@+id/layoutSelfControlLocked"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:gravity="center"
-        android:orientation="vertical"
-        android:paddingHorizontal="32dp"
+        android:fillViewport="true"
         android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:paddingHorizontal="32dp"
+            android:paddingVertical="24dp">
 
         <com.google.android.material.card.MaterialCardView
             android:layout_width="96dp"
@@ -83,7 +89,8 @@
             app:icon="@drawable/ic_nav_accountability"
             app:iconGravity="textStart"
             app:iconPadding="8dp" />
-    </LinearLayout>
+        </LinearLayout>
+    </ScrollView>
 
     <ScrollView
         android:id="@+id/scrollSelfControl"
@@ -104,22 +111,23 @@
             <!-- 0. ACTIVE MODES UNLOCK CARD (Visible only when mode active & unlock allowed) -->
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/cardActiveModesUnlock"
+                style="@style/Widget.Hisn.StatusRow"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="12dp"
+                android:layout_marginBottom="@dimen/hisn_card_gap"
                 android:visibility="gone"
                 app:cardBackgroundColor="?attr/colorSurfaceContainer"
-                app:cardCornerRadius="20dp"
+                app:cardCornerRadius="@dimen/hisn_card_radius"
                 app:cardElevation="0dp"
-                app:strokeColor="@color/shield_amber_calm"
-                app:strokeWidth="1.5dp"
+                app:strokeColor="?attr/colorOutlineVariant"
+                app:strokeWidth="1dp"
                 tools:visibility="visible">
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:padding="16dp">
+                    android:padding="@dimen/hisn_card_padding">
 
                     <LinearLayout
                         android:layout_width="match_parent"
@@ -132,82 +140,53 @@
                             android:layout_height="22dp"
                             android:contentDescription="@null"
                             android:src="@drawable/ic_shield_time"
-                            app:tint="@color/shield_amber_calm" />
+                            app:tint="?attr/colorPrimary" />
 
                         <TextView
+                            android:id="@+id/tvActiveModesSummary"
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_marginStart="10dp"
                             android:layout_weight="1"
                             android:fontFamily="@font/tajawal"
-                            android:text="@string/self_control_active_modes_title"
                             android:textAlignment="viewStart"
                             android:textColor="?attr/colorOnSurface"
-                            android:textSize="15sp"
-                            android:textStyle="bold" />
-                    </LinearLayout>
-
-                    <LinearLayout
-                        android:id="@+id/layoutActiveCurfewUnlockRow"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
-                        android:orientation="vertical"
-                        android:visibility="gone"
-                        tools:visibility="visible">
-
-                        <TextView
-                            android:id="@+id/tvActiveCurfewLabel"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:fontFamily="@font/tajawal"
-                            android:text="@string/self_control_active_curfew_row"
-                            android:textAlignment="viewStart"
-                            android:textColor="?attr/colorOnSurfaceVariant"
-                            android:textSize="13sp" />
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnUnlockCurfew"
-                            style="@style/Widget.Material3.Button.TonalButton"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:minHeight="48dp"
-                            android:layout_marginTop="6dp"
-                            android:text="@string/self_control_btn_unlock_curfew_direct"
-                            android:textSize="13sp"
-                            app:cornerRadius="12dp" />
-                    </LinearLayout>
-
-                    <LinearLayout
-                        android:id="@+id/layoutActiveFortressUnlockRow"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
-                        android:orientation="vertical"
-                        android:visibility="gone"
-                        tools:visibility="visible">
-
-                        <TextView
-                            android:id="@+id/tvActiveFortressLabel"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:fontFamily="@font/tajawal"
-                            android:textAlignment="viewStart"
-                            android:textColor="?attr/colorOnSurfaceVariant"
                             android:textSize="13sp"
                             tools:text="حصن نشط: حصن المذاكرة (المتبقي 42:10)" />
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnUnlockFortress"
-                            style="@style/Widget.Material3.Button.TonalButton"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:minHeight="48dp"
-                            android:layout_marginTop="6dp"
-                            android:text="@string/self_control_btn_unlock_fortress_direct"
-                            android:textSize="13sp"
-                            app:cornerRadius="12dp" />
                     </LinearLayout>
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnUnlockFortressSelfControl"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/hisn_card_gap"
+                        android:fontFamily="@font/tajawal"
+                        android:gravity="center"
+                        android:minHeight="@dimen/hisn_control_height"
+                        android:text="@string/guardian_btn_unlock_fortress"
+                        android:textAlignment="center"
+                        android:textSize="13sp"
+                        android:textStyle="bold"
+                        android:visibility="gone"
+                        app:cornerRadius="12dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnUnlockCurfewSelfControl"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:fontFamily="@font/tajawal"
+                        android:gravity="center"
+                        android:minHeight="@dimen/hisn_control_height"
+                        android:text="@string/guardian_btn_unlock_curfew"
+                        android:textAlignment="center"
+                        android:textSize="13sp"
+                        android:textStyle="bold"
+                        android:visibility="gone"
+                        app:cornerRadius="12dp" />
+
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
@@ -369,26 +348,24 @@
             <!-- Tile: Fortresses -->
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/tileFortresses"
-                style="@style/Widget.Material3.CardView.Filled"
+                style="@style/Widget.Hisn.Tile"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                android:layout_height="@dimen/hisn_tile_height"
                 android:layout_marginBottom="10dp"
                 android:clickable="true"
                 android:focusable="true"
                 app:cardBackgroundColor="?attr/colorSurfaceContainer"
-                app:cardCornerRadius="18dp"
+                app:cardCornerRadius="@dimen/hisn_card_radius"
                 app:cardElevation="0dp"
                 app:strokeColor="?attr/colorOutlineVariant"
                 app:strokeWidth="1dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
+                    android:layout_height="match_parent"
                     android:gravity="center_vertical"
-                    android:minHeight="68dp"
                     android:orientation="horizontal"
-                    android:paddingHorizontal="16dp"
-                    android:paddingVertical="10dp">
+                    android:paddingHorizontal="@dimen/hisn_card_padding">
 
                     <ImageView
                         android:layout_width="28dp"
@@ -397,32 +374,17 @@
                         android:src="@drawable/ic_shield_time"
                         app:tint="?attr/colorPrimary" />
 
-                    <LinearLayout
+                    <TextView
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_marginStart="14dp"
-                        android:layout_marginEnd="8dp"
                         android:layout_weight="1"
-                        android:orientation="vertical">
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:fontFamily="@font/tajawal"
-                            android:text="@string/hub_title_fortresses"
-                            android:textColor="?attr/colorOnSurface"
-                            android:textSize="16sp"
-                            android:textStyle="bold" />
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="2dp"
-                            android:fontFamily="@font/tajawal"
-                            android:text="@string/hub_subtitle_fortresses"
-                            android:textColor="?attr/colorOnSurfaceVariant"
-                            android:textSize="12sp" />
-                    </LinearLayout>
+                        android:fontFamily="@font/tajawal"
+                        android:text="@string/hub_title_fortresses"
+                        android:textAlignment="viewStart"
+                        android:textColor="?attr/colorOnSurface"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
 
                     <ImageView
                         android:layout_width="20dp"

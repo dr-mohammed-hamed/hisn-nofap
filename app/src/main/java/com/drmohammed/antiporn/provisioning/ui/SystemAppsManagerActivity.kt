@@ -1,16 +1,10 @@
 package com.drmohammed.antiporn.provisioning.ui
 
-import android.annotation.SuppressLint
-import android.app.admin.DevicePolicyManager
 import android.content.Context
-import android.content.pm.ApplicationInfo
-import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
-import android.os.Build
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
-import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -20,79 +14,39 @@ import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.os.bundleOf
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.drmohammed.antiporn.R
-import com.drmohammed.antiporn.telemetry.SafeDpmGateway
+import com.drmohammed.antiporn.ui.common.ConfirmActionDialogFragment
+import com.drmohammed.antiporn.ui.common.showSafely
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
 import com.google.android.material.color.MaterialColors
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.imageview.ShapeableImageView
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.textfield.TextInputEditText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.Collections
-import java.util.Locale
+import org.koin.androidx.viewmodel.ext.android.viewModel
 import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Standalone, lightweight System Apps Manager & Freezer Activity.
  * Runs seamlessly during OOBE Setup Wizard without relying on network or MainActivity state.
- *
- * Implements a Generic Device Owner App Freezer adhering strictly to Google Play Protect compliance.
  */
 class SystemAppsManagerActivity : AppCompatActivity() {
 
-    companion object {
-        private const val TAG = "AntiPorn_SystemApps"
-
-        /**
-         * Standard AOSP core system packages that require explicit user warning before freezing
-         * to prevent device bootloops or SystemUI black screens.
-         */
-        private val CRITICAL_SYSTEM_PACKAGES = setOf(
-            "android",
-            "com.android.systemui",
-            "com.android.settings",
-            "com.android.providers.settings",
-            "com.google.android.packageinstaller",
-            "com.google.android.gms",
-            "com.android.vending",
-            "com.android.phone",
-            "com.google.android.dialer",
-            "com.google.android.inputmethod.latin",
-            "com.samsung.android.honeyboard",
-            "com.google.android.apps.nexuslauncher",
-            "com.android.launcher3",
-            "com.sec.android.app.launcher",
-            "com.miui.home",
-            "com.oppo.launcher"
-        )
-    }
-
-    private val inFlightPackages = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
-
-    data class AppItem(
-        val packageName: String,
-        val label: String,
-        val isSystem: Boolean,
-        val isHidden: Boolean,
-        val isSelfApp: Boolean,
-        val isCritical: Boolean
-    )
-
-    private enum class FilterMode {
-        ALL, SYSTEM, FROZEN
-    }
+    private val viewModel: SystemAppsManagerViewModel by viewModel()
 
     private lateinit var toolbar: MaterialToolbar
     private lateinit var etSearch: TextInputEditText
@@ -105,9 +59,7 @@ class SystemAppsManagerActivity : AppCompatActivity() {
     private lateinit var rvAppsList: RecyclerView
 
     private lateinit var adapter: SystemAppsAdapter
-    private val masterAppList = mutableListOf<AppItem>()
-    private var currentFilterMode = FilterMode.ALL
-    private var currentSearchQuery = ""
+    private var isProgrammaticUiUpdate = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -125,8 +77,31 @@ class SystemAppsManagerActivity : AppCompatActivity() {
         }
 
         initViews()
+        setupFragmentResultListeners()
         setupListeners()
-        loadInstalledApplications()
+        observeViewModel()
+        viewModel.loadInstalledApplicationsIfNeeded()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        viewModel.refreshHiddenStates()
+    }
+
+    private fun setupFragmentResultListeners() {
+        supportFragmentManager.setFragmentResultListener(REQ_CRITICAL_FREEZE_CONFIRM, this) { _, bundle ->
+            val pkg = bundle.getBundle(ConfirmActionDialogFragment.RESULT_PAYLOAD)
+                ?.getString(KEY_CRITICAL_PKG)
+                .orEmpty()
+            if (pkg.isBlank()) return@setFragmentResultListener
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) == ConfirmActionDialogFragment.BUTTON_POSITIVE) {
+                val targetItem = viewModel.uiState.value.masterAppList.firstOrNull { it.packageName == pkg }
+                    ?: return@setFragmentResultListener
+                viewModel.executeFreezeChange(targetItem, targetHidden = true)
+            } else {
+                adapter.notifyItemChangedByPackage(pkg)
+            }
+        }
     }
 
     private fun initViews() {
@@ -140,7 +115,6 @@ class SystemAppsManagerActivity : AppCompatActivity() {
         tvEmptyState = findViewById(R.id.tvEmptySystemApps)
         rvAppsList = findViewById(R.id.rvSystemAppsList)
 
-        // Initialize chip labels with 0 count to prevent raw format string flashing
         chipFilterAll.text = getString(R.string.chip_filter_all, 0)
         chipFilterSystem.text = getString(R.string.chip_filter_system, 0)
         chipFilterFrozen.text = getString(R.string.chip_filter_frozen, 0)
@@ -163,216 +137,139 @@ class SystemAppsManagerActivity : AppCompatActivity() {
         etSearch.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                currentSearchQuery = s?.toString()?.trim() ?: ""
-                applyCurrentFilters()
+                if (!isProgrammaticUiUpdate) {
+                    viewModel.setSearchQuery(s?.toString().orEmpty())
+                }
             }
             override fun afterTextChanged(s: Editable?) {}
         })
 
         chipGroupFilter.setOnCheckedStateChangeListener { _, checkedIds ->
-            currentFilterMode = when {
-                checkedIds.contains(R.id.chipFilterSystem) -> FilterMode.SYSTEM
-                checkedIds.contains(R.id.chipFilterFrozen) -> FilterMode.FROZEN
-                else -> FilterMode.ALL
+            if (isProgrammaticUiUpdate) return@setOnCheckedStateChangeListener
+            val mode = when {
+                checkedIds.contains(R.id.chipFilterSystem) -> SystemAppsFilterMode.SYSTEM
+                checkedIds.contains(R.id.chipFilterFrozen) -> SystemAppsFilterMode.FROZEN
+                else -> SystemAppsFilterMode.ALL
             }
-            applyCurrentFilters()
+            viewModel.setFilterMode(mode)
         }
     }
 
-    private fun loadInstalledApplications() {
-        progressBar.visibility = View.VISIBLE
-        tvEmptyState.visibility = View.GONE
-        rvAppsList.visibility = View.GONE
-
-        val context = applicationContext
-        val selfPackage = context.packageName
-
-        lifecycleScope.launch(Dispatchers.IO) {
-            val pm = context.packageManager
-            val isDeviceOwner = SafeDpmGateway.isDeviceOwner(context)
-            val dpm = if (isDeviceOwner) context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager else null
-            val admin = if (isDeviceOwner) SafeDpmGateway.getAdminComponent(context) else null
-
-            val installedApps = queryAllInstalledApplications(pm)
-            val items = mutableListOf<AppItem>()
-
-            for (appInfo in installedApps) {
-                val pkgName = appInfo.packageName ?: continue
-                val label = try {
-                    appInfo.loadLabel(pm).toString()
-                } catch (_: Throwable) {
-                    pkgName
-                }
-                val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
-                val isHidden = if (dpm != null && admin != null) {
-                    try {
-                        dpm.isApplicationHidden(admin, pkgName)
-                    } catch (_: Throwable) {
-                        false
+    private fun observeViewModel() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                launch {
+                    viewModel.uiState.collect { state ->
+                        renderState(state)
                     }
-                } else {
-                    false
                 }
-                val isSelf = pkgName == selfPackage
-                val isCritical = CRITICAL_SYSTEM_PACKAGES.contains(pkgName)
-
-                items.add(
-                    AppItem(
-                        packageName = pkgName,
-                        label = label,
-                        isSystem = isSystem,
-                        isHidden = isHidden,
-                        isSelfApp = isSelf,
-                        isCritical = isCritical
-                    )
-                )
-            }
-
-            // Sort: System apps first, then alphabetical by Arabic/English label
-            items.sortWith(compareBy({ it.isSelfApp }, { !it.isSystem }, { it.label.lowercase(Locale.ROOT) }))
-
-            withContext(Dispatchers.Main) {
-                if (isFinishing || isDestroyed) return@withContext
-                masterAppList.clear()
-                masterAppList.addAll(items)
-                progressBar.visibility = View.GONE
-                rvAppsList.visibility = View.VISIBLE
-                updateFilterChipCounts()
-                applyCurrentFilters()
+                launch {
+                    viewModel.events.collect { event ->
+                        when (event) {
+                            is SystemAppsManagerEvent.FreezeSuccess -> {
+                                val msg = if (event.isFrozen) {
+                                    getString(R.string.toast_freeze_success, event.appLabel)
+                                } else {
+                                    getString(R.string.toast_unfreeze_success, event.appLabel)
+                                }
+                                Toast.makeText(this@SystemAppsManagerActivity, msg, Toast.LENGTH_SHORT).show()
+                            }
+                            is SystemAppsManagerEvent.FreezeFailed -> {
+                                adapter.notifyItemChangedByPackage(event.packageName)
+                                Toast.makeText(
+                                    this@SystemAppsManagerActivity,
+                                    event.errorResId,
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 
-    @SuppressLint("QueryPermissionsNeeded")
-    private fun queryAllInstalledApplications(pm: PackageManager): List<ApplicationInfo> {
-        return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(PackageManager.MATCH_UNINSTALLED_PACKAGES.toLong()))
-            } else {
-                @Suppress("DEPRECATION")
-                pm.getInstalledApplications(PackageManager.MATCH_UNINSTALLED_PACKAGES)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to query installed applications", e)
-            emptyList()
+    private fun renderState(state: SystemAppsManagerUiState) {
+        progressBar.visibility = if (state.isLoading) View.VISIBLE else View.GONE
+        rvAppsList.visibility = if (state.isLoading) View.GONE else View.VISIBLE
+        tvEmptyState.visibility = if (!state.isLoading && state.filteredApps.isEmpty()) View.VISIBLE else View.GONE
+
+        chipFilterAll.text = getString(R.string.chip_filter_all, state.totalCount)
+        chipFilterSystem.text = getString(R.string.chip_filter_system, state.systemCount)
+        chipFilterFrozen.text = getString(R.string.chip_filter_frozen, state.frozenCount)
+
+        val expectedChipId = when (state.currentFilterMode) {
+            SystemAppsFilterMode.ALL -> R.id.chipFilterAll
+            SystemAppsFilterMode.SYSTEM -> R.id.chipFilterSystem
+            SystemAppsFilterMode.FROZEN -> R.id.chipFilterFrozen
         }
-    }
-
-    private fun updateFilterChipCounts() {
-        val totalCount = masterAppList.size
-        val systemCount = masterAppList.count { it.isSystem }
-        val frozenCount = masterAppList.count { it.isHidden }
-
-        chipFilterAll.text = getString(R.string.chip_filter_all, totalCount)
-        chipFilterSystem.text = getString(R.string.chip_filter_system, systemCount)
-        chipFilterFrozen.text = getString(R.string.chip_filter_frozen, frozenCount)
-    }
-
-    private fun applyCurrentFilters() {
-        val query = currentSearchQuery.lowercase(Locale.ROOT)
-        val filtered = masterAppList.filter { item ->
-            val matchesFilter = when (currentFilterMode) {
-                FilterMode.ALL -> true
-                FilterMode.SYSTEM -> item.isSystem
-                FilterMode.FROZEN -> item.isHidden
-            }
-
-            val matchesSearch = if (query.isBlank()) {
-                true
-            } else {
-                item.label.lowercase(Locale.ROOT).contains(query) ||
-                    item.packageName.lowercase(Locale.ROOT).contains(query)
-            }
-
-            matchesFilter && matchesSearch
+        isProgrammaticUiUpdate = true
+        if (chipGroupFilter.checkedChipId != expectedChipId) {
+            chipGroupFilter.check(expectedChipId)
         }
+        if (etSearch.text?.toString()?.trim().orEmpty() != state.currentSearchQuery) {
+            etSearch.setText(state.currentSearchQuery)
+            etSearch.setSelection(state.currentSearchQuery.length)
+        }
+        isProgrammaticUiUpdate = false
 
-        adapter.submitList(filtered)
-        tvEmptyState.visibility = if (filtered.isEmpty()) View.VISIBLE else View.GONE
+        adapter.setInFlightPackages(state.inFlightPackages)
+        adapter.submitList(state.filteredApps)
     }
 
-    private fun handleToggleFreeze(item: AppItem) {
+    private fun handleToggleFreeze(item: SystemAppItem) {
         if (item.isSelfApp) {
             Toast.makeText(this, R.string.self_app_protected_hint, Toast.LENGTH_SHORT).show()
             adapter.notifyItemChangedByPackage(item.packageName)
             return
         }
 
-        if (inFlightPackages.contains(item.packageName)) {
+        if (viewModel.uiState.value.inFlightPackages.contains(item.packageName)) {
+            adapter.notifyItemChangedByPackage(item.packageName)
             return
         }
 
         val targetHidden = !item.isHidden
-
-        // Critical package safety guardrail: warn user if trying to freeze a critical system service
         if (targetHidden && item.isCritical) {
-            MaterialAlertDialogBuilder(this)
-                .setTitle(R.string.critical_system_warning_title)
-                .setMessage(getString(R.string.critical_system_warning_message, item.label))
-                .setNegativeButton(android.R.string.cancel) { dialog, _ ->
-                    dialog.dismiss()
-                    adapter.notifyItemChangedByPackage(item.packageName)
-                }
-                .setPositiveButton(R.string.btn_confirm_freeze) { dialog, _ ->
-                    dialog.dismiss()
-                    executeFreezeChange(item, targetHidden)
-                }
-                .setOnCancelListener {
-                    adapter.notifyItemChangedByPackage(item.packageName)
-                }
-                .show()
-        } else {
-            executeFreezeChange(item, targetHidden)
-        }
-    }
-
-    private fun executeFreezeChange(item: AppItem, targetHidden: Boolean) {
-        val appContext = applicationContext
-        inFlightPackages.add(item.packageName)
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                SafeDpmGateway.setApplicationHidden(appContext, item.packageName, targetHidden)
-                val verification = SafeDpmGateway.isApplicationHidden(appContext, item.packageName)
-                val actuallyHidden = verification.getOrNull() ?: false
-
-                withContext(Dispatchers.Main) {
-                    if (isFinishing || isDestroyed) return@withContext
-
-                    if (actuallyHidden == targetHidden) {
-                        val updatedIndex = masterAppList.indexOfFirst { it.packageName == item.packageName }
-                        if (updatedIndex != -1) {
-                            masterAppList[updatedIndex] = item.copy(isHidden = actuallyHidden)
-                        }
-                        updateFilterChipCounts()
-                        applyCurrentFilters()
-
-                        val msg = if (actuallyHidden) {
-                            getString(R.string.toast_freeze_success, item.label)
-                        } else {
-                            getString(R.string.toast_unfreeze_success, item.label)
-                        }
-                        Toast.makeText(this@SystemAppsManagerActivity, msg, Toast.LENGTH_SHORT).show()
-                    } else {
-                        adapter.notifyItemChangedByPackage(item.packageName)
-                        Toast.makeText(this@SystemAppsManagerActivity, R.string.toast_freeze_protected_error, Toast.LENGTH_LONG).show()
-                    }
-                }
-            } finally {
-                inFlightPackages.remove(item.packageName)
+            supportFragmentManager.showSafely(TAG_CRITICAL_FREEZE_CONFIRM) {
+                ConfirmActionDialogFragment.newInstance(
+                    requestKey = REQ_CRITICAL_FREEZE_CONFIRM,
+                    titleRes = R.string.critical_system_warning_title,
+                    messageText = getString(R.string.critical_system_warning_message, item.label),
+                    positiveRes = R.string.btn_confirm_freeze,
+                    negativeRes = android.R.string.cancel,
+                    payload = bundleOf(KEY_CRITICAL_PKG to item.packageName)
+                )
             }
+        } else {
+            viewModel.executeFreezeChange(item, targetHidden)
         }
     }
 
-    // =========================================================================
-    // RecyclerView Adapter
-    // =========================================================================
+    companion object {
+        private const val REQ_CRITICAL_FREEZE_CONFIRM = "req_sys_apps_critical_freeze"
+        private const val TAG_CRITICAL_FREEZE_CONFIRM = "tag_sys_apps_critical_freeze"
+        private const val KEY_CRITICAL_PKG = "key_critical_pkg"
+    }
 
     private class SystemAppsAdapter(
         private val context: Context,
-        private val onToggleFreeze: (AppItem) -> Unit
-    ) : ListAdapter<AppItem, SystemAppsAdapter.AppViewHolder>(AppDiffCallback()) {
+        private val onToggleFreeze: (SystemAppItem) -> Unit
+    ) : ListAdapter<SystemAppItem, SystemAppsAdapter.AppViewHolder>(AppDiffCallback()) {
 
         private val iconCache = ConcurrentHashMap<String, Drawable>()
+        private var inFlightPackages: Set<String> = emptySet()
+
+        fun setInFlightPackages(packages: Set<String>) {
+            if (inFlightPackages == packages) return
+            val changed = (inFlightPackages - packages) + (packages - inFlightPackages)
+            inFlightPackages = packages
+            currentList.forEachIndexed { index, item ->
+                if (item.packageName in changed) {
+                    notifyItemChanged(index)
+                }
+            }
+        }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): AppViewHolder {
             val view = LayoutInflater.from(parent.context).inflate(R.layout.item_system_app, parent, false)
@@ -398,21 +295,18 @@ class SystemAppsManagerActivity : AppCompatActivity() {
             private val tvStatusSubtitle: TextView = itemView.findViewById(R.id.tvAppStatusSubtitle)
             private val switchFrozen: MaterialSwitch = itemView.findViewById(R.id.switchAppFrozen)
 
-            fun bind(item: AppItem) {
+            fun bind(item: SystemAppItem) {
                 tvName.text = item.label
                 tvPackage.text = item.packageName
 
-                // Badge display
+                tvBadge.visibility = View.VISIBLE
                 if (item.isSelfApp) {
-                    tvBadge.visibility = View.VISIBLE
                     tvBadge.setText(R.string.self_app_protected_hint)
                     tvBadge.setTextColor(ContextCompat.getColor(context, R.color.shield_emerald_radiant))
                 } else if (item.isSystem) {
-                    tvBadge.visibility = View.VISIBLE
                     tvBadge.setText(R.string.badge_system_app)
                     tvBadge.setTextColor(ContextCompat.getColor(context, R.color.shield_amber_calm))
                 } else {
-                    tvBadge.visibility = View.VISIBLE
                     tvBadge.setText(R.string.badge_user_app)
                     tvBadge.setTextColor(
                         MaterialColors.getColor(
@@ -423,7 +317,6 @@ class SystemAppsManagerActivity : AppCompatActivity() {
                     )
                 }
 
-                // Status text
                 tvStatusSubtitle.text = if (item.isHidden) {
                     context.getString(R.string.app_frozen_status)
                 } else {
@@ -441,16 +334,13 @@ class SystemAppsManagerActivity : AppCompatActivity() {
                     }
                 )
 
-                // Switch state
                 switchFrozen.setOnCheckedChangeListener(null)
                 switchFrozen.isChecked = item.isHidden
-                switchFrozen.isEnabled = !item.isSelfApp
-
+                switchFrozen.isEnabled = !item.isSelfApp && !inFlightPackages.contains(item.packageName)
                 switchFrozen.setOnClickListener {
                     onToggleFreeze(item)
                 }
 
-                // Asynchronous icon loading with cache
                 loadAppIcon(item.packageName, ivIcon)
             }
 
@@ -483,13 +373,11 @@ class SystemAppsManagerActivity : AppCompatActivity() {
         }
     }
 
-    private class AppDiffCallback : DiffUtil.ItemCallback<AppItem>() {
-        override fun areItemsTheSame(oldItem: AppItem, newItem: AppItem): Boolean {
-            return oldItem.packageName == newItem.packageName
-        }
+    private class AppDiffCallback : DiffUtil.ItemCallback<SystemAppItem>() {
+        override fun areItemsTheSame(oldItem: SystemAppItem, newItem: SystemAppItem): Boolean =
+            oldItem.packageName == newItem.packageName
 
-        override fun areContentsTheSame(oldItem: AppItem, newItem: AppItem): Boolean {
-            return oldItem == newItem
-        }
+        override fun areContentsTheSame(oldItem: SystemAppItem, newItem: SystemAppItem): Boolean =
+            oldItem == newItem
     }
 }

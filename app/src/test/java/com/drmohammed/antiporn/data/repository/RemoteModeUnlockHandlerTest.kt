@@ -13,6 +13,9 @@ import com.drmohammed.antiporn.fortress.model.FortressProfile
 import com.drmohammed.antiporn.testing.FakeTestApplicationContext
 import com.drmohammed.antiporn.testing.FakeTestDevicePolicyDao
 import com.drmohammed.antiporn.testing.FakeTestPartnerDao
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -50,9 +53,15 @@ class RemoteModeUnlockHandlerTest {
         CurfewAppResolver.invalidateCache()
 
         context = FakeTestApplicationContext()
-        PolicyRepository.setInstance(
-            PolicyRepository(context, FakeTestDevicePolicyDao(), FakeTestPartnerDao())
-        )
+        val repo = PolicyRepository(context, FakeTestDevicePolicyDao(), FakeTestPartnerDao())
+        runBlocking {
+            withTimeout(5_000L) {
+                while (!repo.isInitialPolicyLoaded) {
+                    delay(5L)
+                }
+            }
+        }
+        PolicyRepository.setInstance(repo)
     }
 
     @After

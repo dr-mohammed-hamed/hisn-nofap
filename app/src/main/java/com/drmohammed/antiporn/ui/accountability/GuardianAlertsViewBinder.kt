@@ -1,7 +1,6 @@
 package com.drmohammed.antiporn.ui.accountability
 
 import android.os.SystemClock
-import android.util.Log
 import android.view.View
 import android.widget.TextView
 import android.widget.Toast
@@ -10,6 +9,7 @@ import androidx.lifecycle.lifecycleScope
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
+import com.drmohammed.antiporn.fortress.model.FortressesConfig
 import com.drmohammed.antiporn.data.repository.AccountabilityRepository
 import com.drmohammed.antiporn.data.repository.GuardianTeardownAlreadyCompletedException
 import com.drmohammed.antiporn.data.repository.PolicyRepository
@@ -22,6 +22,7 @@ import com.drmohammed.antiporn.notification.manager.AppNotificationManager
 import com.drmohammed.antiporn.notification.model.NotificationActionType
 import com.drmohammed.antiporn.notification.model.NotificationCategory
 import com.drmohammed.antiporn.notification.registry.NotificationRegistry
+import com.drmohammed.antiporn.ui.common.showSafely
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import timber.log.Timber
@@ -51,7 +52,6 @@ class GuardianAlertsViewBinder(
     private val onTeardownAlreadyCompleted: () -> Unit = {}
 ) {
     private var lastRejectBreakoutClickTime = 0L
-    private val teardownUiHelper = GuardianRemoteTeardownUiHelper()
     private val btnApproveImmediateTeardown: MaterialButton? by lazy {
         activity.findViewById(R.id.btnApproveImmediateTeardown)
     }
@@ -87,7 +87,16 @@ class GuardianAlertsViewBinder(
                             guardianUidFallback = myUid,
                             guardianNameFallback = myName
                         ) { latest ->
+                            val preservedFortresses = if (latest.isSelfControlAllowed && latest.selfControlFortressesAllowed) {
+                                FortressesConfig(
+                                    profiles = listOf(snapshotPolicy.fortressesConfig.getEmergencyFortress()) +
+                                        latest.fortressesConfig.getCustomFortresses()
+                                ).normalized()
+                            } else {
+                                snapshotPolicy.fortressesConfig
+                            }
                             snapshotPolicy.copy(
+                                fortressesConfig = preservedFortresses,
                                 isSelfControlAllowed = isSelfControlAllowedProvider(),
                                 deactivationStatus = latest.deactivationStatus,
                                 deactivationRequestedAt = latest.deactivationRequestedAt,
@@ -111,7 +120,7 @@ class GuardianAlertsViewBinder(
                     }
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
-                    Log.e(TAG, "Error reverting self-control policy", e)
+                    Timber.tag(TAG).e(e, "Error reverting self-control policy")
                     Toast.makeText(activity.applicationContext, R.string.toast_policy_push_failed, Toast.LENGTH_LONG).show()
                 } finally {
                     if (!activity.isFinishing && !activity.isDestroyed) {
@@ -157,7 +166,7 @@ class GuardianAlertsViewBinder(
                     }
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
-                    Log.e(TAG, "Error dismissing self-control alert", e)
+                    Timber.tag(TAG).e(e, "Error dismissing self-control alert")
                     Toast.makeText(activity.applicationContext, R.string.toast_policy_push_failed, Toast.LENGTH_LONG).show()
                 } finally {
                     if (!activity.isFinishing && !activity.isDestroyed) {
@@ -197,7 +206,7 @@ class GuardianAlertsViewBinder(
                     )
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
-                    Log.e(TAG, "Error rejecting breakout", e)
+                    Timber.tag(TAG).e(e, "Error rejecting breakout")
                     Toast.makeText(
                         activity.applicationContext,
                         e.localizedMessage ?: activity.getString(R.string.error_unknown),
@@ -217,56 +226,11 @@ class GuardianAlertsViewBinder(
             val wardId = wardIdProvider()
             if (wardId.isBlank()) return@setOnClickListener
             val wardName = wardNameProvider()
-            teardownUiHelper.showTwoStageSevereWarningDialog(activity, wardName) {
-                btnApproveImmediateTeardown?.isEnabled = false
-                btnRejectBreakout.isEnabled = false
-                activity.lifecycleScope.launch {
-                    try {
-                        val accountRepo = AccountabilityRepository.getInstance(activity.applicationContext)
-                        val result = accountRepo.requestGuardianImmediateTeardown(wardId)
-                        if (activity.isFinishing || activity.isDestroyed) return@launch
-                        result.fold(
-                            onSuccess = { requestedAt ->
-                                val updated = policyProvider().copy(
-                                    deactivationStatus = DevicePolicyBundle.DEACTIVATION_STATUS_PENDING,
-                                    deactivationRequestedAt = requestedAt,
-                                    deactivationUnlockAt = maxOf(1L, requestedAt - 60_000L),
-                                    deactivationHasQr = false,
-                                    remoteTeardownRequestedAt = requestedAt,
-                                    isInstantInternetKillEnabled = false
-                                )
-                                onPolicyAcknowledged(updated)
-                                Toast.makeText(
-                                    activity.applicationContext,
-                                    R.string.toast_guardian_remote_teardown_sent,
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            },
-                            onFailure = { err ->
-                                val msg = err.localizedMessage ?: activity.getString(R.string.error_unknown)
-                                Toast.makeText(
-                                    activity.applicationContext,
-                                    activity.getString(R.string.toast_guardian_remote_teardown_failed, msg),
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
-                        )
-                    } catch (e: Exception) {
-                        if (e is CancellationException) throw e
-                        Timber.tag(TAG).e(e, "Error approving immediate teardown")
-                        val msg = e.localizedMessage ?: activity.getString(R.string.error_unknown)
-                        Toast.makeText(
-                            activity.applicationContext,
-                            activity.getString(R.string.toast_guardian_remote_teardown_failed, msg),
-                            Toast.LENGTH_LONG
-                        ).show()
-                    } finally {
-                        if (!activity.isFinishing && !activity.isDestroyed) {
-                            btnApproveImmediateTeardown?.isEnabled = true
-                            btnRejectBreakout.isEnabled = true
-                        }
-                    }
-                }
+            activity.supportFragmentManager.showSafely(RemoteTeardownDialogFragment.TAG_STAGE1) {
+                RemoteTeardownDialogFragment.newInstance(
+                    RemoteTeardownDialogFragment.MODE_STAGE1_WARNING,
+                    wardName
+                )
             }
         }
 
@@ -275,56 +239,121 @@ class GuardianAlertsViewBinder(
             val wardId = wardIdProvider()
             if (wardId.isBlank()) return@setOnClickListener
             val wardName = wardNameProvider()
-            teardownUiHelper.showCancelPendingTeardownDialog(activity, wardName) {
-                btnCancelPendingTeardown?.isEnabled = false
-                activity.lifecycleScope.launch {
-                    try {
-                        val accountRepo = AccountabilityRepository.getInstance(activity.applicationContext)
-                        val result = accountRepo.cancelGuardianImmediateTeardown(wardId)
-                        if (activity.isFinishing || activity.isDestroyed) return@launch
-                        result.fold(
-                            onSuccess = {
-                                val updated = policyProvider().copy(
-                                    deactivationStatus = DevicePolicyBundle.DEACTIVATION_STATUS_CANCELLED,
-                                    deactivationRequestedAt = null,
-                                    deactivationUnlockAt = null,
-                                    deactivationHasQr = false,
-                                    remoteTeardownRequestedAt = null
-                                )
-                                onPolicyAcknowledged(updated)
-                                Toast.makeText(
-                                    activity.applicationContext,
-                                    R.string.toast_guardian_remote_teardown_cancelled,
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                            },
-                            onFailure = { err ->
-                                if (err is GuardianTeardownAlreadyCompletedException) {
-                                    onTeardownAlreadyCompleted()
-                                } else {
-                                    val msg = err.localizedMessage ?: activity.getString(R.string.error_unknown)
-                                    Toast.makeText(
-                                        activity.applicationContext,
-                                        activity.getString(R.string.toast_guardian_remote_teardown_failed, msg),
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                }
-                            }
+            activity.supportFragmentManager.showSafely(RemoteTeardownDialogFragment.TAG_CANCEL) {
+                RemoteTeardownDialogFragment.newInstance(
+                    RemoteTeardownDialogFragment.MODE_CANCEL_PENDING,
+                    wardName
+                )
+            }
+        }
+    }
+
+    fun executeApprovedImmediateTeardown() {
+        if (activity.isFinishing || activity.isDestroyed) return
+        val wardId = wardIdProvider()
+        if (wardId.isBlank()) return
+        btnApproveImmediateTeardown?.isEnabled = false
+        btnRejectBreakout.isEnabled = false
+        activity.lifecycleScope.launch {
+            try {
+                val accountRepo = AccountabilityRepository.getInstance(activity.applicationContext)
+                val result = accountRepo.requestGuardianImmediateTeardown(wardId)
+                if (activity.isFinishing || activity.isDestroyed) return@launch
+                result.fold(
+                    onSuccess = { requestedAt ->
+                        val updated = policyProvider().copy(
+                            deactivationStatus = DevicePolicyBundle.DEACTIVATION_STATUS_PENDING,
+                            deactivationRequestedAt = requestedAt,
+                            deactivationUnlockAt = maxOf(1L, requestedAt - 60_000L),
+                            deactivationHasQr = false,
+                            remoteTeardownRequestedAt = requestedAt,
+                            isInstantInternetKillEnabled = false
                         )
-                    } catch (e: Exception) {
-                        if (e is CancellationException) throw e
-                        Timber.tag(TAG).e(e, "Error cancelling pending remote teardown")
-                        val msg = e.localizedMessage ?: activity.getString(R.string.error_unknown)
+                        onPolicyAcknowledged(updated)
+                        Toast.makeText(
+                            activity.applicationContext,
+                            R.string.toast_guardian_remote_teardown_sent,
+                            Toast.LENGTH_LONG
+                        ).show()
+                    },
+                    onFailure = { err ->
+                        val msg = err.localizedMessage ?: activity.getString(R.string.error_unknown)
                         Toast.makeText(
                             activity.applicationContext,
                             activity.getString(R.string.toast_guardian_remote_teardown_failed, msg),
                             Toast.LENGTH_LONG
                         ).show()
-                    } finally {
-                        if (!activity.isFinishing && !activity.isDestroyed) {
-                            btnCancelPendingTeardown?.isEnabled = true
+                    }
+                )
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                Timber.tag(TAG).e(e, "Error approving immediate teardown")
+                val msg = e.localizedMessage ?: activity.getString(R.string.error_unknown)
+                Toast.makeText(
+                    activity.applicationContext,
+                    activity.getString(R.string.toast_guardian_remote_teardown_failed, msg),
+                    Toast.LENGTH_LONG
+                ).show()
+            } finally {
+                if (!activity.isFinishing && !activity.isDestroyed) {
+                    btnApproveImmediateTeardown?.isEnabled = true
+                    btnRejectBreakout.isEnabled = true
+                }
+            }
+        }
+    }
+
+    fun executeCancelPendingTeardown() {
+        if (activity.isFinishing || activity.isDestroyed) return
+        val wardId = wardIdProvider()
+        if (wardId.isBlank()) return
+        btnCancelPendingTeardown?.isEnabled = false
+        activity.lifecycleScope.launch {
+            try {
+                val accountRepo = AccountabilityRepository.getInstance(activity.applicationContext)
+                val result = accountRepo.cancelGuardianImmediateTeardown(wardId)
+                if (activity.isFinishing || activity.isDestroyed) return@launch
+                result.fold(
+                    onSuccess = {
+                        val updated = policyProvider().copy(
+                            deactivationStatus = DevicePolicyBundle.DEACTIVATION_STATUS_CANCELLED,
+                            deactivationRequestedAt = null,
+                            deactivationUnlockAt = null,
+                            deactivationHasQr = false,
+                            remoteTeardownRequestedAt = null
+                        )
+                        onPolicyAcknowledged(updated)
+                        Toast.makeText(
+                            activity.applicationContext,
+                            R.string.toast_guardian_remote_teardown_cancelled,
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    },
+                    onFailure = { err ->
+                        if (err is GuardianTeardownAlreadyCompletedException) {
+                            onTeardownAlreadyCompleted()
+                        } else {
+                            val msg = err.localizedMessage ?: activity.getString(R.string.error_unknown)
+                            Toast.makeText(
+                                activity.applicationContext,
+                                activity.getString(R.string.toast_guardian_remote_teardown_failed, msg),
+                                Toast.LENGTH_LONG
+                            ).show()
                         }
                     }
+                )
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                Timber.tag(TAG).e(e, "Error cancelling pending remote teardown")
+                val msg = e.localizedMessage ?: activity.getString(R.string.error_unknown)
+                Toast.makeText(
+                    activity.applicationContext,
+                    activity.getString(R.string.toast_guardian_remote_teardown_failed, msg),
+                    Toast.LENGTH_LONG
+                ).show()
+            } finally {
+                if (!activity.isFinishing && !activity.isDestroyed) {
+                    btnCancelPendingTeardown?.isEnabled = true
                 }
             }
         }
@@ -405,7 +434,7 @@ class GuardianAlertsViewBinder(
                         importance = 3
                     )
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error logging breakout alert notification", e)
+                    Timber.tag(TAG).e(e, "Error logging breakout alert notification")
                 }
             }
         } else {
@@ -428,7 +457,7 @@ class GuardianAlertsViewBinder(
     }
 
     fun onDestroy() {
-        teardownUiHelper.dismiss()
+        // DialogFragments are lifecycle-managed by supportFragmentManager
     }
 
     companion object {

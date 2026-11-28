@@ -40,7 +40,14 @@ class WaqfaGateViewModel(
     private val _uiState = MutableStateFlow(WaqfaGateUiState())
     val uiState: StateFlow<WaqfaGateUiState> = _uiState.asStateFlow()
 
-    fun init(packageName: String, appName: String) {
+    private var initializedPackageName: String? = null
+
+    fun init(packageName: String, appName: String, forceReset: Boolean = false) {
+        if (!forceReset && initializedPackageName == packageName) {
+            return
+        }
+        initializedPackageName = packageName
+
         val config = try {
             policyRepository.getCurrentPolicy().waqfaConfig
         } catch (e: Exception) {

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="8dp"
+    android:orientation="vertical">
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnFortressStart"
+        style="@style/Widget.Hisn.FortressButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        tools:text="حصن المذاكرة" />
+
+    <LinearLayout
+        android:id="@+id/layoutFortressActive"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tvFortressCountdown"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="@drawable/bg_active_shields_pill"
+            android:gravity="center"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="8dp"
+            android:textColor="?attr/colorSuccess"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            tools:text="المتبقي: 59:45" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnFortressExtend"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:minHeight="@dimen/hisn_control_height"
+            android:textSize="13sp"
+            app:cornerRadius="12dp"
+            tools:text="تمديد" />
+    </LinearLayout>
+</LinearLayout>

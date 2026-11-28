@@ -15,6 +15,8 @@ import com.drmohammed.antiporn.accessibility.HisnAccessibilityService
 import com.drmohammed.antiporn.accessibility.control.AccessibilityRequirementReason
 import com.drmohammed.antiporn.accessibility.control.AccessibilitySelfActivator
 import com.drmohammed.antiporn.databinding.BottomSheetAccessibilityOnboardingBinding
+import com.drmohammed.antiporn.ui.common.applyBottomSheetInsets
+import com.drmohammed.antiporn.ui.common.configureLandscapeFriendlySheet
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import timber.log.Timber
 
@@ -25,7 +27,7 @@ import timber.log.Timber
 class AccessibilityOnboardingBottomSheet : BottomSheetDialogFragment() {
 
     private var _binding: BottomSheetAccessibilityOnboardingBinding? = null
-    private val binding get() = _binding!!
+    private val binding get() = _binding ?: throw IllegalStateException("Binding is only valid between onCreateView and onDestroyView")
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -38,6 +40,9 @@ class AccessibilityOnboardingBottomSheet : BottomSheetDialogFragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+
+        configureLandscapeFriendlySheet(enableImeResize = false)
+        applyBottomSheetInsets(view, includeIme = false)
 
         val reason = arguments?.getString(ARG_REASON).orEmpty()
         val isFromGuardian = arguments?.getBoolean(ARG_IS_FROM_GUARDIAN, false) ?: false

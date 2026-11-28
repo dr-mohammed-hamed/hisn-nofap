@@ -254,6 +254,10 @@ class TrustedTimeTest {
         // Initialize cold boot untrusted wall anchor at elapsed=50_000L
         fakeElapsed = 50_000L
         fakeWall = 1_700_000_000_000L
+        resetTrustedTimeForTest()
+        TrustedTimeProvider.onTimeDriftCorrected = { drift ->
+            observedDriftMs = drift
+        }
         TrustedTimeProvider.initialize(fakeCtx)
 
         // Real syncNow() corrects with a 5-minute jump -> must invoke production drift listener
@@ -267,7 +271,10 @@ class TrustedTimeTest {
                 source = "SNTP: test"
             )
         }
-        assertTrue(TrustedTimeProvider.syncNow(fakeCtx, force = true))
+        assertTrue(
+            "syncNow must succeed (hasEverSynced=${TrustedTimeProvider.hasEverSynced()}, lastKnown=${TrustedTimeProvider.getLastKnownTrueTime()})",
+            TrustedTimeProvider.syncNow(fakeCtx, force = true)
+        )
         assertEquals(300_000L, observedDriftMs)
     }
 

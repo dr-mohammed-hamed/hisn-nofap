@@ -93,9 +93,10 @@ object TrustedTimeProvider {
     val DEFAULT_TIMEZONE_ID: String get() = CurfewConfig.getDefaultFallbackTimeZone()
 
     /** Injectable time providers for unit testability without Robolectric. */
-    var elapsedRealtimeProvider: () -> Long = { SystemClock.elapsedRealtime() }
-    var wallTimeProvider: () -> Long = { System.currentTimeMillis() }
+    @Volatile var elapsedRealtimeProvider: () -> Long = { SystemClock.elapsedRealtime() }
+    @Volatile var wallTimeProvider: () -> Long = { System.currentTimeMillis() }
     @VisibleForTesting
+    @Volatile
     internal var sntpRequester: () -> SntpResult? = { SntpClient.requestTime() }
 
     /** Notification listener for significant time drift corrections (e.g. to reschedule alarms). */
@@ -698,7 +699,9 @@ object TrustedTimeProvider {
                 )
             )
             lastKnownTrueTimeMs.set(timeMs)
+            lastPersistedElapsedMs.set(elapsedRealtimeMs)
             hasEverSyncedFlag = true
+            isInitialized = true
         }
     }
 }

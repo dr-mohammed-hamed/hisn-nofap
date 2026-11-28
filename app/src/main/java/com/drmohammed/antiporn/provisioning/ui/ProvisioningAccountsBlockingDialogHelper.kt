@@ -14,7 +14,7 @@ import org.json.JSONObject
  * Serializable payload describing accounts that block Device Owner promotion
  * when automated account bypass is rejected by the OS/OEM.
  */
-internal data class BlockingAccountsPayload(
+data class BlockingAccountsPayload(
     val accountLabels: List<String>,
     val accountTypes: List<String>,
     val message: String

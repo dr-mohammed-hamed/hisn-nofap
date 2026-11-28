@@ -1,8 +1,7 @@
-package com.drmohammed.antiporn.ui.accountability
+﻿package com.drmohammed.antiporn.ui.accountability
 
 import android.content.Intent
 import android.os.Bundle
-import android.util.Log
 import android.view.View
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -13,22 +12,16 @@ import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.drmohammed.antiporn.R
-import com.drmohammed.antiporn.core.time.TrustedTimeProvider
-import com.drmohammed.antiporn.data.local.db.HisnRoomDatabase
-import com.drmohammed.antiporn.data.local.db.entity.PartnerEntity
-import com.drmohammed.antiporn.data.repository.AccountabilityRepository
-import com.drmohammed.antiporn.data.repository.ApprovalRepository
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.tabs.TabLayout
-import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.ListenerRegistration
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import org.koin.androidx.viewmodel.ext.android.viewModel
 
 class GuardianApprovalsHubActivity : AppCompatActivity() {
 
@@ -41,43 +34,35 @@ class GuardianApprovalsHubActivity : AppCompatActivity() {
     private lateinit var tvEmptyTitle: TextView
 
     private lateinit var adapter: GuardianApprovalsAdapter
-
-    private var targetWardId: String? = null
-    private var targetPackage: String? = null
-    private var canonicalTargetWardId: String? = null
-    private var hasScrolledToTarget = false
-    private var hasAutoSelectedTargetTab = false
-
-    private val allApprovals = mutableListOf<WardApprovalModel>()
-    private val wardMap = mutableMapOf<String, String>()
-    private val firestoreListeners = mutableListOf<ListenerRegistration>()
+    private val viewModel: GuardianApprovalsHubViewModel by viewModel()
+    private var isProgrammaticTabUpdate = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_guardian_approvals_hub)
 
-        targetWardId = intent.getStringExtra(EXTRA_WARD_ID)
-        targetPackage = intent.getStringExtra(EXTRA_TARGET_PACKAGE)
-        hasScrolledToTarget = false
-        hasAutoSelectedTargetTab = false
-
         applyWindowInsets()
         initViews()
         setupRecyclerView()
         setupListeners()
-        loadWardsAndListenApprovals()
+        observeViewModel()
+
+        viewModel.initialize(
+            targetWardId = intent.getStringExtra(EXTRA_WARD_ID),
+            targetPackage = intent.getStringExtra(EXTRA_TARGET_PACKAGE),
+            forceReset = false
+        )
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        targetWardId = intent.getStringExtra(EXTRA_WARD_ID)
-        targetPackage = intent.getStringExtra(EXTRA_TARGET_PACKAGE)
-        canonicalTargetWardId = null
-        hasScrolledToTarget = false
-        hasAutoSelectedTargetTab = false
-        loadWardsAndListenApprovals()
+        viewModel.initialize(
+            targetWardId = intent.getStringExtra(EXTRA_WARD_ID),
+            targetPackage = intent.getStringExtra(EXTRA_TARGET_PACKAGE),
+            forceReset = true
+        )
     }
 
     private fun applyWindowInsets() {
@@ -106,10 +91,22 @@ class GuardianApprovalsHubActivity : AppCompatActivity() {
 
     private fun setupRecyclerView() {
         adapter = GuardianApprovalsAdapter(
-            onApproveClick = { item, callback -> resolveApproval(item, approve = true, onComplete = callback) },
-            onRejectClick = { item, callback -> resolveApproval(item, approve = false, onComplete = callback) },
-            onRevokeClick = { item, callback -> resolveApproval(item, approve = false, onComplete = callback) },
-            onReApproveClick = { item, callback -> resolveApproval(item, approve = true, onComplete = callback) }
+            onApproveClick = { item, callback ->
+                callback(true)
+                viewModel.resolveApproval(item, approve = true)
+            },
+            onRejectClick = { item, callback ->
+                callback(true)
+                viewModel.resolveApproval(item, approve = false)
+            },
+            onRevokeClick = { item, callback ->
+                callback(true)
+                viewModel.resolveApproval(item, approve = false)
+            },
+            onReApproveClick = { item, callback ->
+                callback(true)
+                viewModel.resolveApproval(item, approve = true)
+            }
         )
         rvApprovals.layoutManager = LinearLayoutManager(this)
         rvApprovals.adapter = adapter
@@ -118,174 +115,58 @@ class GuardianApprovalsHubActivity : AppCompatActivity() {
     private fun setupListeners() {
         tabLayout.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
             override fun onTabSelected(tab: TabLayout.Tab?) {
-                filterAndDisplay()
+                if (isProgrammaticTabUpdate) return
+                tab?.let { viewModel.selectTab(it.position) }
             }
+
             override fun onTabUnselected(tab: TabLayout.Tab?) {}
             override fun onTabReselected(tab: TabLayout.Tab?) {}
         })
     }
 
-    private fun loadWardsAndListenApprovals() {
-        progressBar.visibility = View.VISIBLE
-        lifecycleScope.launch(Dispatchers.IO) {
-            val accountabilityRepo = AccountabilityRepository.getInstance(applicationContext)
-            val partnerDao = HisnRoomDatabase.getInstance(applicationContext).partnerDao()
-            val localWards = partnerDao.getPartnersByRoleBlocking(PartnerEntity.ROLE_WARD).toMutableList()
-
-            // If a specific targetWardId was passed from a notification, ensure it is included
-            targetWardId?.let { twId ->
-                if (twId.isNotBlank() && localWards.none { it.id == twId }) {
-                    val specificPartner = partnerDao.getPartnerByIdAndRole(twId, PartnerEntity.ROLE_WARD)
-                    if (specificPartner != null) {
-                        localWards.add(specificPartner)
-                    } else {
-                        localWards.add(
-                            PartnerEntity(
-                                id = twId,
-                                pairingCode = "",
-                                displayName = getString(R.string.status_ward_badge),
-                                role = PartnerEntity.ROLE_WARD,
-                                status = PartnerEntity.STATUS_ACTIVE,
-                                createdAt = TrustedTimeProvider.currentTimeMillis(applicationContext)
-                            )
-                        )
+    private fun observeViewModel() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                launch {
+                    viewModel.uiState.collect { state ->
+                        renderState(state)
                     }
                 }
-            }
-
-            val resolvedTarget = targetWardId?.let { twId ->
-                if (twId.isNotBlank()) accountabilityRepo.resolveActivePartnerUid(twId, null) else null
-            }
-
-            // Resolve each ward's active canonical UID before querying Firestore
-            val resolvedWards = localWards.map { ward ->
-                val canonicalUid = accountabilityRepo.resolveActivePartnerUid(ward.id, ward.pairingCode)
-                if (canonicalUid != ward.id) {
-                    ward.copy(id = canonicalUid)
-                } else {
-                    ward
-                }
-            }.distinctBy { it.id }
-
-            withContext(Dispatchers.Main) {
-                if (isFinishing || isDestroyed) return@withContext
-                canonicalTargetWardId = resolvedTarget
-                wardMap.clear()
-                for (ward in resolvedWards) {
-                    wardMap[ward.id] = ward.displayName
-                }
-
-                if (resolvedWards.isEmpty()) {
-                    progressBar.visibility = View.GONE
-                    filterAndDisplay()
-                    return@withContext
-                }
-
-                attachFirestoreListeners(resolvedWards)
-            }
-        }
-    }
-
-    private fun attachFirestoreListeners(wards: List<PartnerEntity>) {
-        detachFirestoreListeners()
-        val firestore = FirebaseFirestore.getInstance()
-
-        val wardsToListen = wards
-
-        for (ward in wardsToListen) {
-            val wardId = ward.id
-            val wardDisplayName = ward.displayName
-
-            try {
-                val listener = firestore.collection("policies").document(wardId)
-                    .collection("approvals")
-                    .addSnapshotListener { snapshot, error ->
-                        if (error != null) {
-                            Log.w(TAG, "Error in approvals listener for ward $wardId", error)
-                            return@addSnapshotListener
-                        }
-                        if (isFinishing || isDestroyed || snapshot == null) return@addSnapshotListener
-
-                        lifecycleScope.launch(Dispatchers.Default) {
-                            val itemsForWard = mutableListOf<WardApprovalModel>()
-                            for (doc in snapshot.documents) {
-                                val pkg = doc.getString("packageName") ?: doc.id
-                                val name = doc.getString("appName") ?: pkg
-                                val status = doc.getString("status") ?: "PENDING"
-                                val requestedAt = doc.getLong("requestedAt") ?: TrustedTimeProvider.currentTimeMillis(applicationContext)
-                                val decidedBy = doc.getString("decidedBy")
-                                val decidedAt = doc.getLong("decidedAt")
-                                val isHighlighted = (pkg == targetPackage && (targetWardId.isNullOrBlank() || wardId == targetWardId || wardId == canonicalTargetWardId))
-
-                                if (pkg.isNotBlank()) {
-                                    itemsForWard.add(
-                                        WardApprovalModel(
-                                            packageName = pkg,
-                                            appName = name,
-                                            wardId = wardId,
-                                            wardName = wardDisplayName,
-                                            status = status,
-                                            requestedAt = requestedAt,
-                                            decidedBy = decidedBy,
-                                            decidedAt = decidedAt,
-                                            isHighlighted = isHighlighted
-                                        )
-                                    )
-                                }
-                            }
-
-                            withContext(Dispatchers.Main) {
-                                if (isFinishing || isDestroyed) return@withContext
-                                progressBar.visibility = View.GONE
-                                allApprovals.removeAll { it.wardId == wardId }
-                                allApprovals.addAll(itemsForWard)
-                                updateTabBadges()
-
-                                if (!hasAutoSelectedTargetTab && !targetPackage.isNullOrBlank()) {
-                                    val targetItem = allApprovals.firstOrNull {
-                                        it.packageName == targetPackage &&
-                                            (targetWardId.isNullOrBlank() || it.wardId == targetWardId || it.wardId == canonicalTargetWardId)
-                                    }
-                                    if (targetItem != null) {
-                                        hasAutoSelectedTargetTab = true
-                                        val targetTabIndex = when (targetItem.status.uppercase()) {
-                                            "PENDING" -> 0
-                                            "APPROVED" -> 1
-                                            "REJECTED" -> 2
-                                            else -> 0
-                                        }
-                                        if (tabLayout.selectedTabPosition != targetTabIndex) {
-                                            val targetTab = tabLayout.getTabAt(targetTabIndex)
-                                            if (targetTab != null) {
-                                                targetTab.select()
-                                                return@withContext
-                                            }
-                                        }
-                                    }
-                                }
-
-                                filterAndDisplay()
+                launch {
+                    viewModel.events.collect { event ->
+                        when (event) {
+                            is ApprovalsHubEvent.ShowToastRes -> {
+                                Toast.makeText(
+                                    this@GuardianApprovalsHubActivity,
+                                    event.resId,
+                                    Toast.LENGTH_SHORT
+                                ).show()
                             }
                         }
                     }
-                firestoreListeners.add(listener)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed attaching approvals listener for $wardId", e)
+                }
             }
         }
     }
 
-    private fun detachFirestoreListeners() {
-        for (l in firestoreListeners) {
-            l.remove()
+    private fun renderState(state: GuardianApprovalsHubUiState) {
+        progressBar.visibility = if (state.isLoading) View.VISIBLE else View.GONE
+        adapter.setInFlightKeys(state.inFlightApprovalKeys)
+        updateTabBadges(state)
+
+        if (tabLayout.selectedTabPosition != state.selectedTabIndex) {
+            isProgrammaticTabUpdate = true
+            tabLayout.getTabAt(state.selectedTabIndex)?.select()
+            isProgrammaticTabUpdate = false
         }
-        firestoreListeners.clear()
+
+        filterAndDisplay(state)
     }
 
-    private fun updateTabBadges() {
-        val pendingCount = allApprovals.count { it.status.equals("PENDING", ignoreCase = true) }
-        val approvedCount = allApprovals.count { it.status.equals("APPROVED", ignoreCase = true) }
-        val rejectedCount = allApprovals.count { it.status.equals("REJECTED", ignoreCase = true) }
+    private fun updateTabBadges(state: GuardianApprovalsHubUiState) {
+        val pendingCount = state.countForStatus("PENDING")
+        val approvedCount = state.countForStatus("APPROVED")
+        val rejectedCount = state.countForStatus("REJECTED")
 
         tabLayout.getTabAt(0)?.text = if (pendingCount > 0) {
             "${getString(R.string.tab_approvals_pending)} ($pendingCount)"
@@ -306,93 +187,43 @@ class GuardianApprovalsHubActivity : AppCompatActivity() {
         }
     }
 
-    private fun filterAndDisplay() {
-        val selectedTab = tabLayout.selectedTabPosition
-        val targetStatus = when (selectedTab) {
-            0 -> "PENDING"
-            1 -> "APPROVED"
-            2 -> "REJECTED"
-            else -> "PENDING"
-        }
-
-        val filtered = allApprovals.filter { it.status.equals(targetStatus, ignoreCase = true) }
-            .sortedByDescending { it.requestedAt }
-
-        if (filtered.isEmpty()) {
+    private fun filterAndDisplay(state: GuardianApprovalsHubUiState) {
+        val filtered = state.filteredApprovalsForSelectedTab()
+        if (filtered.isEmpty() && !state.isLoading) {
             rvApprovals.visibility = View.GONE
             layoutEmptyState.visibility = View.VISIBLE
-            tvEmptyTitle.text = when (selectedTab) {
+            tvEmptyTitle.text = when (state.selectedTabIndex) {
                 0 -> getString(R.string.empty_approvals_pending)
                 1 -> getString(R.string.empty_approvals_approved)
                 else -> getString(R.string.empty_approvals_rejected)
             }
+            adapter.submitList(emptyList())
+        } else if (filtered.isEmpty()) {
+            rvApprovals.visibility = View.GONE
+            layoutEmptyState.visibility = View.GONE
+            adapter.submitList(emptyList())
         } else {
             layoutEmptyState.visibility = View.GONE
             rvApprovals.visibility = View.VISIBLE
             adapter.submitList(filtered) {
-                // If there is a highlighted target package, scroll directly to it once
-                val targetIndex = filtered.indexOfFirst {
-                    it.packageName == targetPackage && (targetWardId.isNullOrBlank() || it.wardId == targetWardId || it.wardId == canonicalTargetWardId)
-                }
-                if (!hasScrolledToTarget && targetIndex >= 0) {
-                    hasScrolledToTarget = true
-                    rvApprovals.smoothScrollToPosition(targetIndex)
-                }
-            }
-        }
-    }
-
-    private fun resolveApproval(item: WardApprovalModel, approve: Boolean, onComplete: (Boolean) -> Unit) {
-        lifecycleScope.launch(Dispatchers.IO) {
-            val success = try {
-                val approvalRepo = ApprovalRepository.getInstance(applicationContext)
-                val guardianName = AccountabilityRepository.getInstance(applicationContext).getMyDisplayName()
-                approvalRepo.resolveWardApproval(
-                    wardUid = item.wardId,
-                    packageName = item.packageName,
-                    approve = approve,
-                    guardianName = guardianName
-                )
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.e(TAG, "Error resolving approval for ${item.packageName}", e)
-                false
-            }
-
-            withContext(Dispatchers.Main) {
-                if (isFinishing || isDestroyed) return@withContext
-                onComplete(success)
-                if (success) {
-                    val systemNotifId = com.drmohammed.antiporn.accountability.coordinator.GuardianSupervisionCoordinator
-                        .computeSystemNotificationId(item.wardId, item.packageName)
-                    com.drmohammed.antiporn.notification.manager.AppNotificationManager.getInstance(applicationContext)
-                        .cancelSystemNotification(systemNotifId)
-
-                    val msg = if (approve) {
-                        getString(R.string.toast_approval_granted)
-                    } else {
-                        getString(R.string.toast_approval_rejected)
+                if (!state.hasScrolledToTarget && !state.targetPackage.isNullOrBlank()) {
+                    val targetIndex = filtered.indexOfFirst {
+                        it.packageName == state.targetPackage &&
+                            (state.targetWardId.isNullOrBlank() ||
+                                it.wardId == state.targetWardId ||
+                                it.wardId == state.canonicalTargetWardId)
                     }
-                    Toast.makeText(this@GuardianApprovalsHubActivity, msg, Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(
-                        this@GuardianApprovalsHubActivity,
-                        getString(R.string.toast_approval_failed),
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    if (targetIndex >= 0) {
+                        viewModel.markScrolledToTarget()
+                        rvApprovals.smoothScrollToPosition(targetIndex)
+                    }
                 }
             }
         }
-    }
-
-    override fun onDestroy() {
-        detachFirestoreListeners()
-        super.onDestroy()
     }
 
     companion object {
         const val EXTRA_WARD_ID = "extra_ward_id"
         const val EXTRA_TARGET_PACKAGE = "extra_target_package"
-        private const val TAG = "ApprovalsHubActivity"
     }
 }

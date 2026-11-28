@@ -3,8 +3,10 @@ package com.drmohammed.antiporn.ui.control.curfew
 import android.os.Bundle
 import android.view.View
 import android.widget.TextView
+import androidx.annotation.VisibleForTesting
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
+import com.drmohammed.antiporn.core.model.PolicyMergeUtils
 import com.drmohammed.antiporn.curfew.CurfewConfig
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
@@ -244,22 +246,88 @@ internal class CurfewSettingsViewBinder(
         btnSaveCurfewChanges.alpha = if (dirty && !isSaving) 1.0f else 0.5f
     }
 
-    fun buildUpdatedPolicy(initialPolicy: DevicePolicyBundle): DevicePolicyBundle =
-        initialPolicy.copy(
-            isCurfewEnabled = isCurfewEnabled,
-            curfewStartHour = selectedStartHour,
-            curfewStartMinute = selectedStartMinute,
-            curfewEndHour = selectedEndHour,
-            curfewEndMinute = selectedEndMinute,
-            isWeekendCurfewEnabled = isWeekendCurfewEnabled,
-            weekendCurfewStartHour = selectedWeekendStartHour,
-            weekendCurfewStartMinute = selectedWeekendStartMinute,
-            weekendCurfewEndHour = selectedWeekendEndHour,
-            weekendCurfewEndMinute = selectedWeekendEndMinute,
-            isVpnBlackholeEnabled = isCurfewInternetKillEnabled,
-            customCurfewWhitelistPackages = selectedCurfewWhitelist,
-            curfewVpnBypassPackages = selectedCurfewVpnBypass
+    fun setControlsEnabled(enabled: Boolean) {
+        switchCurfewMaster.isEnabled = enabled
+        btnChangeStartTime.isEnabled = enabled
+        btnChangeEndTime.isEnabled = enabled
+        switchWeekendCurfew.isEnabled = enabled
+        btnChangeWeekendStartTime.isEnabled = enabled
+        btnChangeWeekendEndTime.isEnabled = enabled
+        switchCurfewInternetKill.isEnabled = enabled
+        btnSelectCurfewApps.isEnabled = enabled
+    }
+
+    @VisibleForTesting
+    internal fun buildMergedPolicy(
+        latest: DevicePolicyBundle,
+        baseline: DevicePolicyBundle
+    ): DevicePolicyBundle = latest.copy(
+        isCurfewEnabled = PolicyMergeUtils.pickIfChanged(
+            latest.isCurfewEnabled,
+            baseline.isCurfewEnabled,
+            isCurfewEnabled
+        ),
+        curfewStartHour = PolicyMergeUtils.pickIfChanged(
+            latest.curfewStartHour,
+            baseline.curfewStartHour,
+            selectedStartHour
+        ),
+        curfewStartMinute = PolicyMergeUtils.pickIfChanged(
+            latest.curfewStartMinute,
+            baseline.curfewStartMinute,
+            selectedStartMinute
+        ),
+        curfewEndHour = PolicyMergeUtils.pickIfChanged(
+            latest.curfewEndHour,
+            baseline.curfewEndHour,
+            selectedEndHour
+        ),
+        curfewEndMinute = PolicyMergeUtils.pickIfChanged(
+            latest.curfewEndMinute,
+            baseline.curfewEndMinute,
+            selectedEndMinute
+        ),
+        isWeekendCurfewEnabled = PolicyMergeUtils.pickIfChanged(
+            latest.isWeekendCurfewEnabled,
+            baseline.isWeekendCurfewEnabled,
+            isWeekendCurfewEnabled
+        ),
+        weekendCurfewStartHour = PolicyMergeUtils.pickIfChanged(
+            latest.weekendCurfewStartHour,
+            baseline.weekendCurfewStartHour,
+            selectedWeekendStartHour
+        ),
+        weekendCurfewStartMinute = PolicyMergeUtils.pickIfChanged(
+            latest.weekendCurfewStartMinute,
+            baseline.weekendCurfewStartMinute,
+            selectedWeekendStartMinute
+        ),
+        weekendCurfewEndHour = PolicyMergeUtils.pickIfChanged(
+            latest.weekendCurfewEndHour,
+            baseline.weekendCurfewEndHour,
+            selectedWeekendEndHour
+        ),
+        weekendCurfewEndMinute = PolicyMergeUtils.pickIfChanged(
+            latest.weekendCurfewEndMinute,
+            baseline.weekendCurfewEndMinute,
+            selectedWeekendEndMinute
+        ),
+        isVpnBlackholeEnabled = PolicyMergeUtils.pickIfChanged(
+            latest.isVpnBlackholeEnabled,
+            baseline.isVpnBlackholeEnabled,
+            isCurfewInternetKillEnabled
+        ),
+        customCurfewWhitelistPackages = PolicyMergeUtils.mergeSet(
+            latest.customCurfewWhitelistPackages,
+            baseline.customCurfewWhitelistPackages,
+            selectedCurfewWhitelist
+        ),
+        curfewVpnBypassPackages = PolicyMergeUtils.mergeSet(
+            latest.curfewVpnBypassPackages,
+            baseline.curfewVpnBypassPackages,
+            selectedCurfewVpnBypass
         )
+    )
 
     private fun reattachTimePickerListeners(onDirtyStateChanged: () -> Unit) {
         val tags = listOf(TAG_PICKER_START, TAG_PICKER_END, TAG_PICKER_WEEKEND_START, TAG_PICKER_WEEKEND_END)

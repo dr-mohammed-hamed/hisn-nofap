@@ -23,14 +23,17 @@ import com.drmohammed.antiporn.curfew.CurfewConfig
 import com.drmohammed.antiporn.data.repository.AccountabilityRepository
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.ui.accountability.GuardianRemoteTeardownUiHelper
+import com.drmohammed.antiporn.ui.accountability.RemoteTeardownDialogFragment
+import com.drmohammed.antiporn.ui.common.ConfirmActionDialogFragment
+import com.drmohammed.antiporn.ui.common.showSafely
 import com.drmohammed.antiporn.ui.control.gate.SelfControlAccessGateRegistry
 import com.drmohammed.antiporn.ui.control.gate.SelfControlSection
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.textfield.TextInputLayout
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import timber.log.Timber
@@ -69,8 +72,7 @@ class OtherSettingsActivity : AppCompatActivity() {
     private var lastAutoDetectClickTime = 0L
     private var hasPendingResultOk = false
     private var pendingResultPolicyJson: String? = null
-    private var refreshDangerZoneUi: (() -> Unit)? = null
-    private var activeDialog: androidx.appcompat.app.AlertDialog? = null
+    private var dangerZoneBinding: GuardianRemoteTeardownUiHelper.OtherSettingsDangerZoneBinding? = null
 
     private val backPressedCallback = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() {
@@ -127,12 +129,13 @@ class OtherSettingsActivity : AppCompatActivity() {
 
         onBackPressedDispatcher.addCallback(this, backPressedCallback)
 
+        setupFragmentResultListeners()
         initViews()
         bindInitialPolicy()
         savedInstanceState?.let { restoreDraftState(it) }
         setupListeners()
         if (isRemote) {
-            refreshDangerZoneUi = teardownUiHelper.bindOtherSettingsDangerZone(
+            dangerZoneBinding = teardownUiHelper.bindOtherSettingsDangerZone(
                 activity = this,
                 wardId = wardId,
                 wardName = wardName,
@@ -154,6 +157,31 @@ class OtherSettingsActivity : AppCompatActivity() {
             )
         }
         updateSaveButtonState()
+    }
+
+    private fun setupFragmentResultListeners() {
+        supportFragmentManager.setFragmentResultListener(RemoteTeardownDialogFragment.REQUEST_KEY, this) { _, bundle ->
+            when (bundle.getString(RemoteTeardownDialogFragment.RESULT_ACTION)) {
+                RemoteTeardownDialogFragment.ACTION_CONFIRM_TEARDOWN -> dangerZoneBinding?.executeImmediateTeardown?.invoke()
+                RemoteTeardownDialogFragment.ACTION_CANCEL_PENDING_TEARDOWN -> dangerZoneBinding?.executeCancelTeardown?.invoke()
+            }
+        }
+
+        supportFragmentManager.setFragmentResultListener(REQ_TOTAL_INTERNET_KILL_CONFIRM, this) { _, bundle ->
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) == ConfirmActionDialogFragment.BUTTON_POSITIVE) {
+                isTotalInternetKillEnabled = true
+                updateSaveButtonState()
+            } else {
+                revertTotalInternetKillSwitch()
+            }
+        }
+
+        supportFragmentManager.setFragmentResultListener(REQ_DISCARD_CHANGES, this) { _, bundle ->
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) == ConfirmActionDialogFragment.BUTTON_POSITIVE) {
+                backPressedCallback.isEnabled = false
+                finish()
+            }
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -312,21 +340,15 @@ class OtherSettingsActivity : AppCompatActivity() {
         switchTotalInternetKill.setOnCheckedChangeListener { _, isChecked ->
             if (isProgrammaticUpdate) return@setOnCheckedChangeListener
             if (isChecked) {
-                activeDialog?.dismiss()
-                activeDialog = MaterialAlertDialogBuilder(this)
-                    .setTitle(R.string.dialog_total_internet_kill_title)
-                    .setMessage(R.string.dialog_total_internet_kill_message)
-                    .setPositiveButton(android.R.string.ok) { _, _ ->
-                        isTotalInternetKillEnabled = true
-                        updateSaveButtonState()
-                    }
-                    .setNegativeButton(android.R.string.cancel) { dialog, _ ->
-                        revertTotalInternetKillSwitch()
-                        dialog.dismiss()
-                    }
-                    .setOnCancelListener { revertTotalInternetKillSwitch() }
-                    .setOnDismissListener { activeDialog = null }
-                    .show()
+                supportFragmentManager.showSafely(TAG_TOTAL_INTERNET_KILL_CONFIRM) {
+                    ConfirmActionDialogFragment.newInstance(
+                        requestKey = REQ_TOTAL_INTERNET_KILL_CONFIRM,
+                        titleRes = R.string.dialog_total_internet_kill_title,
+                        messageRes = R.string.dialog_total_internet_kill_message,
+                        positiveRes = android.R.string.ok,
+                        negativeRes = android.R.string.cancel
+                    )
+                }
             } else {
                 isTotalInternetKillEnabled = false
                 updateSaveButtonState()
@@ -370,50 +392,52 @@ class OtherSettingsActivity : AppCompatActivity() {
         if (isSaving || isDangerZoneBusy || !hasUnsavedChanges()) return
         isSaving = true
         updateSaveButtonState()
-        refreshDangerZoneUi?.invoke()
-
-        val updatedPolicy = initialPolicy.copy(
-            isDateTimeLocked = isDateTimeLocked,
-            isClearAppDataAllowed = isClearAppDataAllowed,
-            timeZoneId = selectedTimeZoneId,
-            isInstantInternetKillEnabled = isTotalInternetKillEnabled
-        )
+        dangerZoneBinding?.refresh?.invoke()
 
         val app = applicationContext
         val policyRepo = PolicyRepository.getInstance(app)
 
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val finalSavedPolicy = if (isRemote) {
-                    if (wardId.isBlank()) {
-                        Timber.tag(TAG).e("Refusing remote push: wardId is blank")
-                        null
+                val finalSavedPolicy = withContext(NonCancellable) {
+                    if (isRemote) {
+                        if (wardId.isBlank()) {
+                            Timber.tag(TAG).e("Refusing remote push: wardId is blank")
+                            null
+                        } else {
+                            val accountRepo = AccountabilityRepository.getInstance(app)
+                            policyRepo.mergeAndPushRemotePolicyPatch(
+                                wardUid = wardId,
+                                fallbackPolicy = initialPolicy,
+                                guardianUidFallback = accountRepo.getCachedUid(),
+                                guardianNameFallback = accountRepo.getMyDisplayName()
+                            ) { latest ->
+                                latest.copy(
+                                    isDateTimeLocked = isDateTimeLocked,
+                                    isClearAppDataAllowed = isClearAppDataAllowed,
+                                    timeZoneId = selectedTimeZoneId,
+                                    isInstantInternetKillEnabled = isTotalInternetKillEnabled,
+                                    version = latest.version + 1,
+                                    updatedAt = TrustedTimeProvider.currentTimeMillis(app)
+                                )
+                            }
+                        }
                     } else {
-                        val accountRepo = AccountabilityRepository.getInstance(app)
-                        policyRepo.mergeAndPushRemotePolicyPatch(
-                            wardUid = wardId,
-                            fallbackPolicy = initialPolicy,
-                            guardianUidFallback = accountRepo.getCachedUid(),
-                            guardianNameFallback = accountRepo.getMyDisplayName()
-                        ) { latest ->
+                        policyRepo.mergeAndSaveSelfPolicyPatch { latest ->
                             latest.copy(
                                 isDateTimeLocked = isDateTimeLocked,
                                 isClearAppDataAllowed = isClearAppDataAllowed,
                                 timeZoneId = selectedTimeZoneId,
-                                isInstantInternetKillEnabled = isTotalInternetKillEnabled,
-                                version = latest.version + 1,
-                                updatedAt = TrustedTimeProvider.currentTimeMillis(app)
+                                isInstantInternetKillEnabled = isTotalInternetKillEnabled
                             )
                         }
                     }
-                } else {
-                    if (policyRepo.saveAndEnforceSelfPolicy(updatedPolicy)) updatedPolicy else null
                 }
 
                 withContext(Dispatchers.Main) {
                     if (isFinishing || isDestroyed) return@withContext
                     isSaving = false
-                    refreshDangerZoneUi?.invoke()
+                    dangerZoneBinding?.refresh?.invoke()
                     if (finalSavedPolicy != null) {
                         val successRes = if (isRemote) R.string.toast_guardian_policy_saved else R.string.toast_self_policy_saved
                         Toast.makeText(applicationContext, successRes, Toast.LENGTH_SHORT).show()
@@ -430,7 +454,7 @@ class OtherSettingsActivity : AppCompatActivity() {
                 withContext(Dispatchers.Main) {
                     if (isFinishing || isDestroyed) return@withContext
                     isSaving = false
-                    refreshDangerZoneUi?.invoke()
+                    dangerZoneBinding?.refresh?.invoke()
                     showSaveFailed()
                 }
             }
@@ -444,29 +468,28 @@ class OtherSettingsActivity : AppCompatActivity() {
     }
 
     private fun showDiscardConfirmationDialog() {
-        activeDialog?.dismiss()
-        activeDialog = MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.dialog_unsaved_changes_title)
-            .setMessage(R.string.dialog_unsaved_changes_msg)
-            .setNegativeButton(R.string.btn_keep_editing) { dialog, _ -> dialog.dismiss() }
-            .setPositiveButton(R.string.btn_discard_changes) { dialog, _ ->
-                dialog.dismiss()
-                backPressedCallback.isEnabled = false
-                finish()
-            }
-            .setOnDismissListener { activeDialog = null }
-            .show()
+        supportFragmentManager.showSafely(TAG_DISCARD_CHANGES) {
+            ConfirmActionDialogFragment.newInstance(
+                requestKey = REQ_DISCARD_CHANGES,
+                titleRes = R.string.dialog_unsaved_changes_title,
+                messageRes = R.string.dialog_unsaved_changes_msg,
+                positiveRes = R.string.btn_discard_changes,
+                negativeRes = R.string.btn_keep_editing
+            )
+        }
     }
 
     override fun onDestroy() {
         teardownUiHelper.dismiss()
-        activeDialog?.dismiss()
-        activeDialog = null
         super.onDestroy()
     }
 
     companion object {
         private const val TAG = "OtherSettings"
+        private const val REQ_TOTAL_INTERNET_KILL_CONFIRM = "req_other_total_internet_kill"
+        private const val TAG_TOTAL_INTERNET_KILL_CONFIRM = "tag_other_total_internet_kill"
+        private const val REQ_DISCARD_CHANGES = "req_other_discard_changes"
+        private const val TAG_DISCARD_CHANGES = "tag_other_discard_changes"
         const val EXTRA_IS_REMOTE = "extra_is_remote"
         const val EXTRA_WARD_ID = "extra_ward_id"
         const val EXTRA_WARD_NAME = "extra_ward_name"

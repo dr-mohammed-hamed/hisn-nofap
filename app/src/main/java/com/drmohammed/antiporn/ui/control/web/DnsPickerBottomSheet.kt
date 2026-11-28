@@ -1,24 +1,24 @@
 package com.drmohammed.antiporn.ui.control.web
 
-import android.app.Dialog
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import androidx.core.os.bundleOf
 import androidx.core.widget.doAfterTextChanged
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import com.drmohammed.antiporn.core.network.DnsFilteringValidator
 import com.drmohammed.antiporn.databinding.BottomSheetDnsPickerBinding
-import com.google.android.material.bottomsheet.BottomSheetBehavior
-import com.google.android.material.bottomsheet.BottomSheetDialog
+import com.drmohammed.antiporn.ui.common.applyBottomSheetInsets
+import com.drmohammed.antiporn.ui.common.configureLandscapeFriendlySheet
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.google.android.material.color.MaterialColors
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import org.koin.androidx.viewmodel.ext.android.viewModel
 
 /**
  * BottomSheet for selecting a verified encrypted DNS preset or validating a custom DoT host.
@@ -36,19 +36,9 @@ class DnsPickerBottomSheet : BottomSheetDialogFragment() {
         CUSTOM
     }
 
+    private val validationViewModel: DnsPickerValidationViewModel by viewModel()
     private var selectedOption: DnsOption = DnsOption.CLOUDFLARE
     private var isValidating: Boolean = false
-
-    override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
-        val dialog = super.onCreateDialog(savedInstanceState)
-        dialog.setOnShowListener {
-            (dialog as? BottomSheetDialog)?.behavior?.apply {
-                skipCollapsed = true
-                state = BottomSheetBehavior.STATE_EXPANDED
-            }
-        }
-        return dialog
-    }
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -61,6 +51,9 @@ class DnsPickerBottomSheet : BottomSheetDialogFragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+
+        configureLandscapeFriendlySheet(enableImeResize = true)
+        applyBottomSheetInsets(view, includeIme = true)
 
         if (savedInstanceState != null) {
             val savedOrdinal = savedInstanceState.getInt(STATE_SELECTED_OPTION, DnsOption.CLOUDFLARE.ordinal)
@@ -75,8 +68,68 @@ class DnsPickerBottomSheet : BottomSheetDialogFragment() {
         }
 
         setupListeners()
-        setValidatingState(false)
+        observeValidationViewModel()
+        setValidatingState(validationViewModel.isValidating.value)
         renderSelectionState()
+    }
+
+    private fun observeValidationViewModel() {
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                launch {
+                    validationViewModel.isValidating.collect { validating ->
+                        if (_binding != null) {
+                            setValidatingState(validating)
+                        }
+                    }
+                }
+                launch {
+                    validationViewModel.events.collect { event ->
+                        if (_binding == null || !isAdded) return@collect
+                        when (event) {
+                            is DnsValidationEvent.Completed -> handleValidationResult(event.host, event.result)
+                            is DnsValidationEvent.ProbeException -> {
+                                binding.tilCustomDnsHost.error = getString(R.string.dns_probe_error_unreachable)
+                                binding.etCustomDnsHost.requestFocus()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun handleValidationResult(
+        customHost: String,
+        result: DnsFilteringValidator.ValidationResult
+    ) {
+        when (result) {
+            is DnsFilteringValidator.ValidationResult.Valid -> {
+                deliverResultAndDismiss(customHost)
+            }
+            is DnsFilteringValidator.ValidationResult.UnfilteredPorn -> {
+                binding.tilCustomDnsHost.error = getString(
+                    R.string.dns_probe_error_not_blocking_detail,
+                    result.domain,
+                    result.resolvedIp
+                )
+                binding.etCustomDnsHost.requestFocus()
+            }
+            is DnsFilteringValidator.ValidationResult.Unreachable -> {
+                binding.tilCustomDnsHost.error = getString(
+                    R.string.dns_probe_error_unreachable_detail,
+                    result.reason
+                )
+                binding.etCustomDnsHost.requestFocus()
+            }
+            is DnsFilteringValidator.ValidationResult.ResolverBroken -> {
+                binding.tilCustomDnsHost.error = getString(
+                    R.string.dns_probe_error_broken_detail,
+                    result.reason
+                )
+                binding.etCustomDnsHost.requestFocus()
+            }
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -175,54 +228,7 @@ class DnsPickerBottomSheet : BottomSheetDialogFragment() {
             return
         }
 
-        setValidatingState(true)
-        viewLifecycleOwner.lifecycleScope.launch {
-            try {
-                val result = withContext(Dispatchers.IO) {
-                    DnsFilteringValidator.validateDnsHost(customHost)
-                }
-                if (_binding == null || !isAdded) return@launch
-                setValidatingState(false)
-
-                when (result) {
-                    is DnsFilteringValidator.ValidationResult.Valid -> {
-                        deliverResultAndDismiss(customHost)
-                    }
-                    is DnsFilteringValidator.ValidationResult.UnfilteredPorn -> {
-                        binding.tilCustomDnsHost.error = getString(
-                            R.string.dns_probe_error_not_blocking_detail,
-                            result.domain,
-                            result.resolvedIp
-                        )
-                        binding.etCustomDnsHost.requestFocus()
-                    }
-                    is DnsFilteringValidator.ValidationResult.Unreachable -> {
-                        binding.tilCustomDnsHost.error = getString(
-                            R.string.dns_probe_error_unreachable_detail,
-                            result.reason
-                        )
-                        binding.etCustomDnsHost.requestFocus()
-                    }
-                    is DnsFilteringValidator.ValidationResult.ResolverBroken -> {
-                        binding.tilCustomDnsHost.error = getString(
-                            R.string.dns_probe_error_broken_detail,
-                            result.reason
-                        )
-                        binding.etCustomDnsHost.requestFocus()
-                    }
-                }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                if (_binding != null && isAdded) {
-                    binding.tilCustomDnsHost.error = getString(R.string.dns_probe_error_unreachable)
-                    binding.etCustomDnsHost.requestFocus()
-                }
-            } finally {
-                if (_binding != null && isAdded && isValidating) {
-                    setValidatingState(false)
-                }
-            }
-        }
+        validationViewModel.validateCustomHost(customHost)
     }
 
     private fun setValidatingState(validating: Boolean) {

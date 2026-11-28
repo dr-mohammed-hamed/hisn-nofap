@@ -10,7 +10,6 @@ import android.view.ViewGroup
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
@@ -27,10 +26,11 @@ import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.telemetry.AiTelemetryReporter
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import com.drmohammed.antiporn.telemetry.DiagnosticEventDto
+import com.drmohammed.antiporn.ui.common.ConfirmActionDialogFragment
+import com.drmohammed.antiporn.ui.common.showSafely
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.chip.ChipGroup
 import com.google.android.material.color.MaterialColors
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import timber.log.Timber
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -61,7 +61,6 @@ class DiagnosticLogViewerActivity : AppCompatActivity() {
     @Volatile
     private var isClearing = false
     private var suppressFilterListener = false
-    private var clearConfirmDialog: AlertDialog? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -79,6 +78,7 @@ class DiagnosticLogViewerActivity : AppCompatActivity() {
         }
 
         initViews()
+        setupFragmentResultListeners()
         restoreOrApplyInitialFilter(savedInstanceState, intent)
         setupListeners()
         loadLogs()
@@ -166,8 +166,6 @@ class DiagnosticLogViewerActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        clearConfirmDialog?.dismiss()
-        clearConfirmDialog = null
         super.onDestroy()
     }
 
@@ -272,14 +270,10 @@ class DiagnosticLogViewerActivity : AppCompatActivity() {
         }
     }
 
-    private fun showClearConfirmationDialog() {
-        if (isClearing || isFinishing || isDestroyed || clearConfirmDialog?.isShowing == true) return
-        clearConfirmDialog = MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.dialog_clear_logs_title)
-            .setMessage(R.string.dialog_clear_logs_msg)
-            .setPositiveButton(R.string.btn_delete) { dialog, _ ->
-                dialog.dismiss()
-                if (isClearing) return@setPositiveButton
+    private fun setupFragmentResultListeners() {
+        supportFragmentManager.setFragmentResultListener(REQ_CLEAR_LOGS, this) { _, bundle ->
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) == ConfirmActionDialogFragment.BUTTON_POSITIVE) {
+                if (isClearing) return@setFragmentResultListener
                 isClearing = true
                 lifecycleScope.launch(Dispatchers.IO) {
                     try {
@@ -302,11 +296,20 @@ class DiagnosticLogViewerActivity : AppCompatActivity() {
                     }
                 }
             }
-            .setNegativeButton(android.R.string.cancel, null)
-            .setOnDismissListener {
-                clearConfirmDialog = null
-            }
-            .show()
+        }
+    }
+
+    private fun showClearConfirmationDialog() {
+        if (isClearing || isFinishing || isDestroyed) return
+        supportFragmentManager.showSafely(TAG_CLEAR_LOGS) {
+            ConfirmActionDialogFragment.newInstance(
+                requestKey = REQ_CLEAR_LOGS,
+                titleRes = R.string.dialog_clear_logs_title,
+                messageRes = R.string.dialog_clear_logs_msg,
+                positiveRes = R.string.btn_delete,
+                negativeRes = android.R.string.cancel
+            )
+        }
     }
 
     companion object {
@@ -314,6 +317,8 @@ class DiagnosticLogViewerActivity : AppCompatActivity() {
         private const val KEY_CURRENT_FILTER = "key_current_filter"
         private const val MENU_SHARE = 101
         private const val MENU_CLEAR = 102
+        private const val REQ_CLEAR_LOGS = "req_log_viewer_clear"
+        private const val TAG_CLEAR_LOGS = "tag_log_viewer_clear"
 
         internal fun mapChipIdToTag(chipId: Int): String? = when (chipId) {
             R.id.chipFilterShield -> BlackBoxRecorder.TAG_SHIELD

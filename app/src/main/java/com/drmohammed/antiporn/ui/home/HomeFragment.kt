@@ -1,4 +1,4 @@
-package com.drmohammed.antiporn.ui.home
+﻿package com.drmohammed.antiporn.ui.home
 
 import android.app.Activity
 import android.content.Context
@@ -12,7 +12,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -32,7 +31,8 @@ import com.drmohammed.antiporn.databinding.FragmentHomeBinding
 import com.drmohammed.antiporn.notification.repository.NotificationRepository
 import com.drmohammed.antiporn.provisioning.ui.ProvisioningWizardActivity
 import com.drmohammed.antiporn.shields.DnsShield
-import com.drmohammed.antiporn.ui.common.SecondaryProfileResolutionDialogHelper
+import com.drmohammed.antiporn.ui.common.SecondaryProfileResolutionDialogFragment
+import com.drmohammed.antiporn.ui.common.showSafely
 import com.drmohammed.antiporn.ui.notification.NotificationCenterActivity
 import com.drmohammed.antiporn.ui.shields.ActiveShieldsBottomSheet
 import kotlinx.coroutines.Dispatchers
@@ -69,7 +69,6 @@ class HomeFragment : Fragment() {
     private var lastBellClickTime = 0L
     private var lastProvisioningClickTime = 0L
     private var wasStopped = false
-    private var activeProfileDialog: AlertDialog? = null
 
     private val vpnConsentLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -126,8 +125,44 @@ class HomeFragment : Fragment() {
             onExtendFortress = { onDone -> homeViewModel.extendActiveFortress(onDone) }
         ).also { it.setupListeners() }
 
+        setupFragmentResultListeners()
         setupListeners()
         observeViewModel()
+    }
+
+    /** dev's rotation-safe profile dialog result handling (replaces main's embedded dialog). */
+    private fun setupFragmentResultListeners() {
+        childFragmentManager.setFragmentResultListener(
+            SecondaryProfileResolutionDialogFragment.REQUEST_KEY,
+            viewLifecycleOwner
+        ) { _, bundle ->
+            val ctx = context ?: return@setFragmentResultListener
+            when (bundle.getString(SecondaryProfileResolutionDialogFragment.RESULT_ACTION)) {
+                SecondaryProfileResolutionDialogFragment.ACTION_OPEN_SETTINGS -> {
+                    try {
+                        startActivity(SecondaryProfileDetector.resolveCloneSettingsIntent(ctx))
+                    } catch (e: Exception) {
+                        Timber.tag(TAG).w(e, "Unable to open clone settings")
+                        Toast.makeText(ctx.applicationContext, R.string.toast_open_settings_failed, Toast.LENGTH_SHORT).show()
+                    }
+                }
+                SecondaryProfileResolutionDialogFragment.ACTION_CONFIRM_REMOVE -> {
+                    val selectedProfile = SecondaryProfileResolutionDialogFragment.extractConfirmedProfile(bundle)
+                        ?: return@setFragmentResultListener
+                    val appCtx = ctx.applicationContext
+                    homeViewModel.removeSecondaryProfile(selectedProfile) { removedTarget, allCleared ->
+                        if (isAdded && _binding != null) {
+                            val msgRes = when {
+                                allCleared -> R.string.msg_cloned_app_removed_success
+                                removedTarget -> R.string.msg_profile_removed_more_remaining
+                                else -> R.string.msg_cloned_app_remove_failed
+                            }
+                            Toast.makeText(appCtx, msgRes, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            }
+        }
     }
 
     override fun onResume() {
@@ -351,32 +386,10 @@ class HomeFragment : Fragment() {
         secondaries: List<SecondaryProfileDetector.UnaffiliatedProfileInfo>
     ) {
         if (secondaries.isEmpty()) return
-        activeProfileDialog?.dismiss()
-        SecondaryProfileResolutionDialogHelper.showProfileSelectionDialog(
-            context = ctx,
-            secondaries = secondaries,
-            onOpenSettings = {
-                try {
-                    startActivity(SecondaryProfileDetector.resolveCloneSettingsIntent(ctx))
-                } catch (_: Exception) {
-                    Toast.makeText(ctx.applicationContext, R.string.toast_open_settings_failed, Toast.LENGTH_SHORT).show()
-                }
-            },
-            onConfirmRemoveSingleProfile = { selectedProfile ->
-                val appCtx = ctx.applicationContext
-                homeViewModel.removeSecondaryProfile(selectedProfile) { removedTarget, allCleared ->
-                    if (isAdded && _binding != null) {
-                        val msgRes = when {
-                            allCleared -> R.string.msg_cloned_app_removed_success
-                            removedTarget -> R.string.msg_profile_removed_more_remaining
-                            else -> R.string.msg_cloned_app_remove_failed
-                        }
-                        Toast.makeText(appCtx, msgRes, Toast.LENGTH_LONG).show()
-                    }
-                }
-            },
-            onActiveDialogChanged = { dialog -> activeProfileDialog = dialog }
-        )
+        // dev's rotation-safe DialogFragment; results are handled by setupFragmentResultListeners().
+        childFragmentManager.showSafely(SecondaryProfileResolutionDialogFragment.TAG_SELECT) {
+            SecondaryProfileResolutionDialogFragment.newSelectionInstance(secondaries)
+        }
     }
 
     override fun onDestroyView() {
@@ -384,8 +397,6 @@ class HomeFragment : Fragment() {
         protectionRenderer = null
         fortressesViewBinder?.dismiss()
         fortressesViewBinder = null
-        activeProfileDialog?.dismiss()
-        activeProfileDialog = null
         super.onDestroyView()
         _binding = null
     }
