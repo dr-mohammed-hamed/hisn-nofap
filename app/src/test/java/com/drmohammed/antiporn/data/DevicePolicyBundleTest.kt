@@ -37,6 +37,7 @@ class DevicePolicyBundleTest {
         assertEquals(DevicePolicyBundle.BROWSER_FILTER_OFF, policy.browserFilterMode)
         assertFalse(policy.isFullSystemFilteringEnabled)
         assertFalse(policy.isAdBlockingEnabled)
+        assertFalse(policy.isLocalVpnFallbackEnabled)
         assertTrue(policy.customBlockedUrls.isEmpty())
         assertTrue(policy.customAllowedUrls.isEmpty())
         assertTrue(policy.isSelfControlAllowed)
@@ -78,6 +79,7 @@ class DevicePolicyBundleTest {
             browserFilterMode = DevicePolicyBundle.BROWSER_FILTER_BLOCKLIST,
             isFullSystemFilteringEnabled = true,
             isAdBlockingEnabled = true,
+            isLocalVpnFallbackEnabled = true,
             isBlockExternalVpnEnabled = false,
             customBlockedUrls = setOf("badsite.com", "gambling.org"),
             customAllowedUrls = setOf("safe.org"),
@@ -124,6 +126,7 @@ class DevicePolicyBundleTest {
         assertEquals(original.browserFilterMode, restored.browserFilterMode)
         assertEquals(original.isFullSystemFilteringEnabled, restored.isFullSystemFilteringEnabled)
         assertEquals(original.isAdBlockingEnabled, restored.isAdBlockingEnabled)
+        assertEquals(original.isLocalVpnFallbackEnabled, restored.isLocalVpnFallbackEnabled)
         assertEquals(original.isBlockExternalVpnEnabled, restored.isBlockExternalVpnEnabled)
         assertEquals(original.customBlockedUrls, restored.customBlockedUrls)
         assertEquals(original.customAllowedUrls, restored.customAllowedUrls)
@@ -170,6 +173,7 @@ class DevicePolicyBundleTest {
             browserFilterMode = DevicePolicyBundle.BROWSER_FILTER_WHITELIST_ONLY,
             isFullSystemFilteringEnabled = true,
             isAdBlockingEnabled = true,
+            isLocalVpnFallbackEnabled = true,
             isBlockExternalVpnEnabled = false,
             customBlockedUrls = setOf("blocked1.com", "blocked2.com"),
             customAllowedUrls = setOf("allowed1.com"),
@@ -216,6 +220,7 @@ class DevicePolicyBundleTest {
         assertEquals(original.browserFilterMode, restored.browserFilterMode)
         assertEquals(original.isFullSystemFilteringEnabled, restored.isFullSystemFilteringEnabled)
         assertEquals(original.isAdBlockingEnabled, restored.isAdBlockingEnabled)
+        assertEquals(original.isLocalVpnFallbackEnabled, restored.isLocalVpnFallbackEnabled)
         assertEquals(original.isBlockExternalVpnEnabled, restored.isBlockExternalVpnEnabled)
         assertEquals(original.customBlockedUrls, restored.customBlockedUrls)
         assertEquals(original.customAllowedUrls, restored.customAllowedUrls)
@@ -796,5 +801,16 @@ class DevicePolicyBundleTest {
         val deniedBundle = DevicePolicyBundle.defaultPolicy().copy(selfControlOtherSettingsAllowed = false)
         assertFalse(DevicePolicyBundle.fromJson(deniedBundle.toJson()).selfControlOtherSettingsAllowed)
         assertFalse(DevicePolicyBundle.fromMap(deniedBundle.toMap()).selfControlOtherSettingsAllowed)
+    }
+
+    @Test
+    fun testLocalVpnFallbackEnabled_roundtripAndDefaultsFalseWhenAbsent() {
+        assertFalse(DevicePolicyBundle.defaultPolicy().isLocalVpnFallbackEnabled)
+        assertFalse(DevicePolicyBundle.fromMap(emptyMap()).isLocalVpnFallbackEnabled)
+        assertFalse(DevicePolicyBundle.fromJsonOrNull("{}")!!.isLocalVpnFallbackEnabled)
+
+        val enabledBundle = DevicePolicyBundle.defaultPolicy().copy(isLocalVpnFallbackEnabled = true)
+        assertTrue(DevicePolicyBundle.fromMap(enabledBundle.toMap()).isLocalVpnFallbackEnabled)
+        assertTrue(DevicePolicyBundle.fromJsonOrNull(enabledBundle.toJson())!!.isLocalVpnFallbackEnabled)
     }
 }

@@ -1,9 +1,11 @@
 package com.drmohammed.antiporn.core.network.dns
 
 import android.content.Context
+import android.os.Build
 import com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard
 import com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService
 import com.drmohammed.antiporn.curfew.CurfewVpnDnsBridge
+import com.drmohammed.antiporn.curfew.StandaloneDotEnforcer
 import com.drmohammed.antiporn.shields.DnsShield
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import com.drmohammed.antiporn.telemetry.SafeDpmGateway
@@ -140,14 +142,35 @@ internal object DnsResilienceStore {
         }
     }
 
-    fun applyDnsShieldSafely(context: Context, override: ((Context) -> Unit)?) {
-        override?.invoke(context)?.let { return }
-        try {
-            SafeDpmGateway.executeRawBlocking(context, BlackBoxRecorder.TAG_SHIELD, "resilienceDnsShieldApply") { dpm, admin ->
-                DnsShield.apply(context, dpm, admin)
+    fun applyDnsShieldSafely(context: Context, override: ((Context) -> Unit)?): Boolean {
+        if (override != null) {
+            override.invoke(context)
+            return true
+        }
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                CurfewBlackholeVpnService.evaluateRequiredMode(context) == CurfewBlackholeVpnService.VpnMode.IDLE
+            ) {
+                val targetHost = DnsShield.getEffectiveDnsHost(context)
+                val (dnsSetResult, usedFallback) = StandaloneDotEnforcer.applyStandaloneDot(
+                    context = context,
+                    targetHost = targetHost,
+                    suppressResilienceNotify = true
+                )
+                dnsSetResult == CurfewVpnDnsBridge.COMPAT_PRIVATE_DNS_SET_NO_ERROR || usedFallback
+            } else {
+                val result = SafeDpmGateway.executeRawBlocking(
+                    context,
+                    BlackBoxRecorder.TAG_SHIELD,
+                    "resilienceDnsShieldApply"
+                ) { dpm, admin ->
+                    DnsShield.apply(context, dpm, admin)
+                }
+                result.getOrNull()?.success == true
             }
         } catch (e: Exception) {
             Timber.tag(TAG).w(e, "Failed executing DnsShield.apply in resilience update")
+            false
         }
     }
 

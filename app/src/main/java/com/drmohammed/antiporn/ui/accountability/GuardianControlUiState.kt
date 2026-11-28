@@ -82,6 +82,7 @@ data class GuardianControlUiState(
                     currentPolicy.browserFilterMode != initial.browserFilterMode ||
                     currentPolicy.isFullSystemFilteringEnabled != initial.isFullSystemFilteringEnabled ||
                     currentPolicy.isAdBlockingEnabled != initial.isAdBlockingEnabled ||
+                    currentPolicy.isLocalVpnFallbackEnabled != initial.isLocalVpnFallbackEnabled ||
                     currentPolicy.waqfaConfig != initial.waqfaConfig ||
                     currentPolicy.customAiScanPackages != initial.customAiScanPackages
         }

@@ -1681,6 +1681,15 @@
     <string name="switch_full_system_filter_title">تطبيق القواعد على كامل الجهاز</string>
     <string name="switch_full_system_filter_desc">يطبّق قائمة المواقع وتيليجرام ويب ويوتيوب داخل كل التطبيقات، وليس المتصفحات فقط</string>
     <string name="switch_block_ads_desc">يحجب الإعلانات والمتتبعات عبر فلتر محلي داخل الجهاز</string>
+    <string name="switch_local_vpn_fallback_title">المحرك الاحتياطي للـ DNS (Local DNS VPN)</string>
+    <string name="switch_local_vpn_fallback_desc">يبقى مطفأً طالما Private DNS يعمل، ويعمل تلقائياً بصمت فقط عند تعثر جميع خوادم Private DNS (مفيد لهواتف OPPO و Realme) ثم يعود تلقائياً عند تحسن الشبكة</string>
+    <string name="notif_dns_fallback_consent_title">مطلوب موافقتك لحل تعثر شبكة الـ DNS</string>
+    <string name="notif_dns_fallback_consent_msg">خادم Private DNS يعلق على هذه الشبكة. اضغط للموافقة لمرة واحدة على تشغيل المحرك الاحتياطي (Local DNS VPN) بصمت عند الحاجة.</string>
+    <string name="dialog_dns_fallback_consent_title">تشغيل المحرك الاحتياطي للـ DNS؟</string>
+    <string name="dialog_dns_fallback_consent_desc">تعذّر الاتصال بخوادم Private DNS على هذه الشبكة (يحدث ذلك في بعض الهواتف مثل OPPO/Realme أو الشبكات المقيدة).\n\nبالموافقة لمرة واحدة، سيعمل محرك Local DNS VPN الاحتياطي بصمت عند الحاجة فقط لضمان استمرار الإنترنت والحماية، وسيعود تلقائياً لـ Private DNS بمجرد تحسن الشبكة.</string>
+    <string name="btn_dns_fallback_approve">موافقة وتفعيل الآن</string>
+    <string name="btn_dns_fallback_not_now">ليس الآن</string>
+    <string name="toast_dns_fallback_enabled">تم تفعيل المحرك الاحتياطي للـ DNS بنجاح</string>
     <string name="web_ads_dns_confirmed_hint">خادم الـ DNS الحالي يحجب الإعلانات بالفعل دون الحاجة لتشغيل VPN محلي.</string>
     <string name="web_ads_dns_custom_hint">إذا كان خادمك المخصص يحجب الإعلانات بالفعل، فلا حاجة لتشغيل VPN حجب الإعلانات.</string>
     <string name="web_unaffiliated_inline_warning">توجد تطبيقات مزدوجة أو بروفايل ثانوي يمنع تشغيل الفلترة المحلية. الحماية الأساسية عبر الـ DNS لا تزال تعمل.</string>

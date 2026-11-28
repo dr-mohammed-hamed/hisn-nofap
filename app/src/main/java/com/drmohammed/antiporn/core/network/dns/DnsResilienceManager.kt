@@ -78,6 +78,9 @@ object DnsResilienceManager {
     @VisibleForTesting internal var activeNetworkProvider: ((Context) -> Network?)? = null
     @VisibleForTesting internal var physicalTransportProvider: ((Context, Network) -> String?)? = null
     @VisibleForTesting internal var allPhysicalNetworksProvider: ((Context) -> List<Network>)? = null
+    @VisibleForTesting internal var localVpnFallbackEnabledChecker: ((Context) -> Boolean)? = null
+    @VisibleForTesting internal var consentNotifierOverride: ((Context, String) -> Unit)? = null
+    @VisibleForTesting internal var dotProbeDetailedOverride: ((Network, String, Boolean) -> DnsResilienceProbeClient.DotProbeResult)? = null
 
     @VisibleForTesting
     internal var recoveryDelayOverride: (suspend (Long) -> Unit)?
@@ -102,12 +105,17 @@ object DnsResilienceManager {
     private val evalCallbacks = object : DnsResilienceEvaluationRunner.HostCallbacks {
         override fun currentEpoch(): Long = stateEpoch.get()
         override fun getSnapshot(): ResilienceRuntimeSnapshot = getRuntimeSnapshot()
-        override fun isInCooldown(netId: String, nowMs: Long): Boolean =
+        override fun isInCooldown(netId: String, nowMs: Long): Boolean = synchronized(stateLock) {
             (nowMs - lastProbeElapsedMs) < PROBE_COOLDOWN_MS &&
                 (protectedNetworkId == netId || lastProbedNetworkId == netId)
+        }
+        override fun shouldSkipDueToExhaustedConsent(context: Context, netId: String, nowMs: Long): Boolean =
+            this@DnsResilienceManager.shouldSkipEvaluationDueToExhaustedConsent(netId, nowMs, context)
         override fun markProbeAttempt(netId: String, nowMs: Long) {
-            lastProbeElapsedMs = nowMs
-            lastProbedNetworkId = netId
+            synchronized(stateLock) {
+                lastProbeElapsedMs = nowMs
+                lastProbedNetworkId = netId
+            }
         }
         override fun activateLevel2(context: Context, overrideHost: String, netId: String, transport: String) {
             val snap = synchronized(stateLock) {
@@ -121,6 +129,18 @@ object DnsResilienceManager {
                 ResilienceRuntimeSnapshot(activeMode, overrideDotHost, protectedNetworkId, protectedTransport, failoverTriggerClass, false)
             }
             DnsResilienceStore.persistSnapshot(context, snap)
+        }
+        override fun clearLevel2StateWithoutDpm(context: Context) {
+            synchronized(stateLock) {
+                activeMode = DnsResilienceMode.PRIMARY_STRICT_DOT
+                overrideDotHost = null
+                protectedNetworkId = null
+                protectedTransport = null
+                failoverTriggerClass = null
+                isRestoringPrimary = false
+                DnsResilienceNetworkRouter.cancelRecoveryJobs()
+            }
+            DnsResilienceStore.clearPersistedState(context)
         }
         override fun activateLevel3(context: Context, netId: String, transport: String, triggerClass: FailoverTriggerClass) {
             val snap = synchronized(stateLock) {
@@ -147,9 +167,17 @@ object DnsResilienceManager {
         override fun rollbackToPrimarySync(context: Context, netId: String, transport: String, reason: String) {
             this@DnsResilienceManager.rollbackToPrimarySync(context, netId, transport, reason)
         }
-        override fun applyDnsShieldSafely(context: Context) {
-            this@DnsResilienceManager.applyDnsShieldSafely(context)
+        override fun markExhaustedDotAndNotify(
+            context: Context,
+            netId: String,
+            transport: String,
+            triggerClass: FailoverTriggerClass,
+            restorePrimaryDpm: Boolean
+        ) {
+            this@DnsResilienceManager.markExhaustedDotAndNotify(context, netId, restorePrimaryDpm)
         }
+        override fun applyDnsShieldSafely(context: Context): Boolean =
+            this@DnsResilienceManager.applyDnsShieldSafely(context)
     }
 
     fun getActiveMode(): DnsResilienceMode = activeMode
@@ -278,7 +306,13 @@ object DnsResilienceManager {
             level3ActivationOverride = null
             applyDnsShieldOverride = null
             policyHostProvider = null
-            if (context != null) DnsResilienceStore.clearPersistedState(context)
+            localVpnFallbackEnabledChecker = null
+            consentNotifierOverride = null
+            dotProbeDetailedOverride = null
+            if (context != null) {
+                DnsResilienceStore.clearPersistedState(context)
+                DnsFallbackConsentNotifier.cancelNotification(context)
+            }
         }
     }
 
@@ -317,13 +351,106 @@ object DnsResilienceManager {
 
     fun onDpmHostNotServing(context: Context, failedHost: String) {
         ensureHydrated(context)
-        networkRouter.onDpmHostNotServing(context, failedHost, lastProbeElapsedMs, lastProbedNetworkId)
+        val (probeElapsedMs, probedNetId) = synchronized(stateLock) {
+            lastProbeElapsedMs to lastProbedNetworkId
+        }
+        networkRouter.onDpmHostNotServing(context, failedHost, probeElapsedMs, probedNetId)
     }
 
     fun onExternalDnsResetWhileUnvalidated(context: Context, network: Network, transport: String, driftCount60s: Int): Boolean {
         ensureHydrated(context)
         return networkRouter.onExternalDnsResetWhileUnvalidated(context, network, transport, driftCount60s) {
+            synchronized(stateLock) {
+                lastProbeElapsedMs = -PROBE_COOLDOWN_MS
+            }
+        }
+    }
+
+    fun isEvaluationInProgress(): Boolean = evaluationMutex.isLocked
+
+    internal fun isEvaluationMutexLocked(): Boolean = evaluationMutex.isLocked
+
+    internal fun isLocalVpnFallbackEnabled(context: Context): Boolean {
+        localVpnFallbackEnabledChecker?.let { return it(context) }
+        return try {
+            com.drmohammed.antiporn.data.repository.PolicyRepository.getInstance(context)
+                .getCurrentPolicy().isLocalVpnFallbackEnabled
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Timber.tag(TAG).d(e, "Failed reading isLocalVpnFallbackEnabled from PolicyRepository")
+            false
+        }
+    }
+
+    private fun resolveActivePhysicalNetworkSafe(
+        context: Context,
+        cm: ConnectivityManager? = getConnectivityManager(context)
+    ): Network? {
+        val activeNet = try {
+            activeNetworkProvider?.invoke(context) ?: cm?.activeNetwork
+        } catch (e: Exception) {
+            Timber.tag(TAG).d(e, "Failed reading activeNetwork in resolveActivePhysicalNetworkSafe")
+            null
+        }
+        if (activeNet != null && resolvePhysicalTransportLabel(context, cm, activeNet) in SUPPORTED_TRANSPORTS) {
+            return activeNet
+        }
+        return getAllPhysicalNetworks(context, cm).firstOrNull { net ->
+            resolvePhysicalTransportLabel(context, cm, net) in SUPPORTED_TRANSPORTS
+        }
+    }
+
+    private fun resolveActiveNetworkIdSafe(context: Context): String? =
+        resolveActivePhysicalNetworkSafe(context)?.let { resolveNetworkId(it) }
+
+    fun isExhaustedDotOnNetwork(
+        context: Context,
+        netId: String? = resolveActiveNetworkIdSafe(context)
+    ): Boolean {
+        val targetNetId = netId ?: return false
+        return DnsResilienceNetworkRouter.isExhaustedDot(targetNetId, getElapsedRealtime())
+    }
+
+    fun shouldSkipEvaluationDueToExhaustedConsent(
+        netId: String,
+        nowMs: Long,
+        context: Context? = null
+    ): Boolean {
+        if (!DnsResilienceNetworkRouter.isExhaustedDot(netId, nowMs)) return false
+        val fallbackEnabled = if (context != null) isLocalVpnFallbackEnabled(context) else false
+        return !fallbackEnabled
+    }
+
+    fun triggerImmediateEvaluationForActiveNetwork(context: Context) {
+        ensureHydrated(context)
+        val cm = getConnectivityManager(context)
+        val targetNet = resolveActivePhysicalNetworkSafe(context, cm) ?: run {
+            DnsFallbackConsentNotifier.cancelNotification(context)
+            return
+        }
+
+        val netId = resolveNetworkId(targetNet)
+        val transport = resolvePhysicalTransportLabel(context, cm, targetNet) ?: return
+        synchronized(stateLock) {
             lastProbeElapsedMs = -PROBE_COOLDOWN_MS
+        }
+        DnsResilienceNetworkRouter.clearConsentAndExhaustedForNetwork(netId)
+        DnsFallbackConsentNotifier.cancelNotification(context)
+        evaluateNetworkUnvalidatedOrDotError(
+            context = context,
+            network = targetNet,
+            transport = transport,
+            triggerReason = "manual_fallback_consent_approved"
+        )
+    }
+
+    fun onExternalVpnCoexistenceRevoked(context: Context) {
+        ensureHydrated(context)
+        if (activeMode != DnsResilienceMode.FALLBACK_LOCAL_VPN_DOH) return
+        if (beginRestorePrimaryTransition(context, "external_vpn_coexistence_revoked")) {
+            synchronized(stateLock) {
+                isRestoringPrimary = false
+            }
         }
     }
 
@@ -386,6 +513,16 @@ object DnsResilienceManager {
                 Timber.tag(TAG).d("Skipping scheduled recovery for captive portal network $netId; will recover on net_validated")
                 return
             }
+            if (activeMode == DnsResilienceMode.FALLBACK_LOCAL_VPN_DOH &&
+                failoverTriggerClass == FailoverTriggerClass.OS_DOT_VALIDATION_QUIRK
+            ) {
+                Timber.tag(TAG).d("Skipping same-network recovery for OS_DOT_VALIDATION_QUIRK on $netId; will restore on network change")
+                return
+            }
+            if (DnsResilienceNetworkRouter.isPrimaryBlockedOnNetwork(netId)) {
+                Timber.tag(TAG).d("Skipping same-network recovery for $netId: primary DoT previously failed after recovery")
+                return
+            }
 
             val delayMs = if (currentAttempts < DnsResilienceNetworkRouter.SAME_NET_RECOVERY_DELAYS_MS.size) {
                 DnsResilienceNetworkRouter.SAME_NET_RECOVERY_DELAYS_MS[currentAttempts]
@@ -412,12 +549,15 @@ object DnsResilienceManager {
                     }
 
                     val linkFamilies = DnsResilienceProbeClient.detectLinkFamilies(getConnectivityManager(context), network)
-                    val restored = DnsResilienceProbeClient.testDotHostOnNetwork(
-                        network = network,
-                        host = targetPolicyHost,
-                        families = linkFamilies,
-                        dotProbeOverride = dotProbeOverride
-                    )
+                    val probeResult = dotProbeDetailedOverride?.invoke(network, targetPolicyHost, true)
+                        ?: DnsResilienceProbeClient.probeDotHostDetailed(
+                            network = network,
+                            host = targetPolicyHost,
+                            families = linkFamilies,
+                            requireSystemDnsResolution = true,
+                            dotProbeOverride = dotProbeOverride
+                        )
+                    val restored = probeResult.reachable && probeResult.systemDnsResolved
 
                     val newCount = synchronized(stateLock) {
                         if (stateEpoch.get() != scheduledEpoch ||
@@ -431,6 +571,7 @@ object DnsResilienceManager {
 
                     if (restored) {
                         Timber.tag(TAG).i("Primary DoT host $targetPolicyHost is now working on $netId! Restoring PRIMARY_STRICT_DOT")
+                        DnsResilienceNetworkRouter.markSameNetRecovered(netId)
                         restorePrimaryStrictDot(context, "same_network_primary_recovery:$netId")
                     } else {
                         Timber.tag(TAG).w("Same-network recovery probe failed (attempt $newCount/${DnsResilienceNetworkRouter.MAX_SAME_NET_RECOVERY_ATTEMPTS}) on $netId")
@@ -571,7 +712,35 @@ object DnsResilienceManager {
         applyDnsShieldSafely(context)
     }
 
-    private fun applyDnsShieldSafely(context: Context) = DnsResilienceStore.applyDnsShieldSafely(context, applyDnsShieldOverride)
+    private fun markExhaustedDotAndNotify(context: Context, netId: String, restorePrimaryDpm: Boolean) {
+        val now = getElapsedRealtime()
+        DnsResilienceNetworkRouter.markExhaustedDot(netId, now)
+        synchronized(stateLock) {
+            stateEpoch.incrementAndGet()
+            activeMode = DnsResilienceMode.PRIMARY_STRICT_DOT
+            overrideDotHost = null
+            protectedNetworkId = null
+            protectedTransport = null
+            failoverTriggerClass = null
+            isRestoringPrimary = false
+            DnsResilienceNetworkRouter.cancelRecoveryJobs()
+        }
+        DnsResilienceStore.clearPersistedState(context)
+        if (restorePrimaryDpm) {
+            applyDnsShieldSafely(context)
+        }
+        if (DnsResilienceNetworkRouter.markConsentPromptedIfNew(netId)) {
+            val override = consentNotifierOverride
+            if (override != null) {
+                override.invoke(context, netId)
+            } else {
+                DnsFallbackConsentNotifier.notifyOnceForNetwork(context, netId)
+            }
+        }
+    }
+
+    private fun applyDnsShieldSafely(context: Context): Boolean =
+        DnsResilienceStore.applyDnsShieldSafely(context, applyDnsShieldOverride)
 
     @VisibleForTesting internal fun resolveBootstrapCandidates(host: String, families: LinkIpFamilies): List<InetAddress> = DnsResilienceProbeClient.resolveBootstrapAddresses(host, families)
     @VisibleForTesting internal fun verifyTls443OnSocket(rawSocket: Socket, sniHost: String): Boolean = DnsResilienceProbeClient.verifyTls443OnSocket(rawSocket, sniHost)

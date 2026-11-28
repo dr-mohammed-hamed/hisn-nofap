@@ -13,6 +13,7 @@ import com.drmohammed.antiporn.fortress.engine.EffectiveRestrictionResolver
 import com.drmohammed.antiporn.notification.model.InAppNotification
 import com.drmohammed.antiporn.notification.model.NotificationActionType
 import com.drmohammed.antiporn.ui.accountability.GuardianControlActivity
+import com.drmohammed.antiporn.ui.control.web.LocalDnsFallbackConsentActivity
 
 /**
  * Smart Action Router responsible for executing appropriate deep-linking
@@ -140,6 +141,16 @@ object NotificationActionRouter {
                         }
                     }
                 }
+            }
+
+            NotificationActionType.APPROVE_LOCAL_DNS_FALLBACK -> {
+                val intent = Intent(context, LocalDnsFallbackConsentActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    if (!payload.isNullOrBlank()) {
+                        putExtra(LocalDnsFallbackConsentActivity.EXTRA_NET_ID, payload)
+                    }
+                }
+                context.startActivity(intent)
             }
 
             NotificationActionType.NONE -> {

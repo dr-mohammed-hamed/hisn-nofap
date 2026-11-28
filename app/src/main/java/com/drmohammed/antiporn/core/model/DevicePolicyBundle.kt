@@ -36,6 +36,7 @@ data class DevicePolicyBundle(
     val dnsHost: String = CLOUDFLARE_FAMILY_DNS_HOST,
     val isYouTubeRestrictedModeEnabled: Boolean = false,
     val isAdBlockingEnabled: Boolean = false,
+    val isLocalVpnFallbackEnabled: Boolean = false,
     val isTelegramWebBlocked: Boolean = true,
     val isBlockExternalVpnEnabled: Boolean = true,
     val guardianUid: String? = null,
@@ -146,6 +147,7 @@ data class DevicePolicyBundle(
             "dnsHost" to dnsHost,
             "isYouTubeRestrictedModeEnabled" to isYouTubeRestrictedModeEnabled,
             "isAdBlockingEnabled" to isAdBlockingEnabled,
+            "isLocalVpnFallbackEnabled" to isLocalVpnFallbackEnabled,
             "isTelegramWebBlocked" to isTelegramWebBlocked,
             "isBlockExternalVpnEnabled" to isBlockExternalVpnEnabled,
             "isSupervised" to isSupervised,
@@ -232,6 +234,7 @@ data class DevicePolicyBundle(
         json.put("dnsHost", dnsHost)
         json.put("isYouTubeRestrictedModeEnabled", isYouTubeRestrictedModeEnabled)
         json.put("isAdBlockingEnabled", isAdBlockingEnabled)
+        json.put("isLocalVpnFallbackEnabled", isLocalVpnFallbackEnabled)
         json.put("isTelegramWebBlocked", isTelegramWebBlocked)
         json.put("isBlockExternalVpnEnabled", isBlockExternalVpnEnabled)
         if (guardianUid != null) json.put("guardianUid", guardianUid)
@@ -323,6 +326,7 @@ data class DevicePolicyBundle(
             dnsHost = CLOUDFLARE_FAMILY_DNS_HOST,
             isYouTubeRestrictedModeEnabled = false,
             isAdBlockingEnabled = false,
+            isLocalVpnFallbackEnabled = false,
             isTelegramWebBlocked = true,
             isBlockExternalVpnEnabled = true,
             lockNewInstallsUntilApproved = false,
@@ -391,6 +395,7 @@ data class DevicePolicyBundle(
             val dns = (map["dnsHost"] as? String)?.takeIf { it.isNotBlank() } ?: CLOUDFLARE_FAMILY_DNS_HOST
             val ytRestricted = (map["isYouTubeRestrictedModeEnabled"] as? Boolean) ?: false
             val adBlocking = (map["isAdBlockingEnabled"] as? Boolean) ?: false
+            val localVpnFallback = (map["isLocalVpnFallbackEnabled"] as? Boolean) ?: false
             val tgBlocked = (map["isTelegramWebBlocked"] as? Boolean) ?: true
             val blockExternalVpn = (map["isBlockExternalVpnEnabled"] as? Boolean) ?: true
 
@@ -469,6 +474,7 @@ data class DevicePolicyBundle(
                 dnsHost = dns,
                 isYouTubeRestrictedModeEnabled = ytRestricted,
                 isAdBlockingEnabled = adBlocking,
+                isLocalVpnFallbackEnabled = localVpnFallback,
                 isTelegramWebBlocked = tgBlocked,
                 isBlockExternalVpnEnabled = blockExternalVpn,
                 guardianUid = gUid, guardianName = gName,
@@ -567,6 +573,7 @@ data class DevicePolicyBundle(
                 val dns = json.optNonBlankStringOrNull("dnsHost") ?: CLOUDFLARE_FAMILY_DNS_HOST
                 val ytRestricted = json.optBoolean("isYouTubeRestrictedModeEnabled", false)
                 val adBlocking = json.optBoolean("isAdBlockingEnabled", false)
+                val localVpnFallback = json.optBoolean("isLocalVpnFallbackEnabled", false)
                 val tgBlocked = json.optBoolean("isTelegramWebBlocked", true)
                 val blockExternalVpn = json.optBoolean("isBlockExternalVpnEnabled", true)
                 val gUid = json.optNonBlankStringOrNull("guardianUid")
@@ -665,6 +672,7 @@ data class DevicePolicyBundle(
                     dnsHost = dns,
                     isYouTubeRestrictedModeEnabled = ytRestricted,
                     isAdBlockingEnabled = adBlocking,
+                    isLocalVpnFallbackEnabled = localVpnFallback,
                     isTelegramWebBlocked = tgBlocked,
                     isBlockExternalVpnEnabled = blockExternalVpn,
                     guardianUid = gUid, guardianName = gName,

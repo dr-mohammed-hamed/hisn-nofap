@@ -167,7 +167,7 @@ internal object CurfewVpnStateCoordinator {
         if (!isRunning && !isStartPending && activeService?.get() == null) "INACTIVE" else "ACTIVE (${currentMode.name})"
     }
 
-    internal fun isBlackoutActive(context: Context): Boolean =
+    fun isBlackoutActive(context: Context): Boolean =
         EffectiveRestrictionResolver.resolve(context).shouldCutInternet
 
     fun evaluateRequiredMode(context: Context, fallbackOnFailure: VpnMode = currentMode): VpnMode {

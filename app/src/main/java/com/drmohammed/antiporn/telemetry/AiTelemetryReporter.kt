@@ -295,6 +295,7 @@ object AiTelemetryReporter {
             sb.appendLine("| **Live VPN Service / Tunnel State** | `${sanitizeMarkdownCell(vpnStatus.liveTunnelStateLabel)}` |")
             sb.appendLine("| **Full System Filtering** | `${if (currentPolicy.isFullSystemFilteringEnabled) "[YES]" else "[NO]"}` |")
             sb.appendLine("| **Ad Blocking Active** | `${if (currentPolicy.isAdBlockingEnabled) "[YES]" else "[NO]"}` |")
+            sb.appendLine("| **Local DNS VPN Fallback Enabled** | `${if (currentPolicy.isLocalVpnFallbackEnabled) "[YES]" else "[NO]"}` |")
             sb.appendLine("| **Browser Filter Mode** | `${currentPolicy.browserFilterMode}` |")
             sb.appendLine("| **Active DNS Host (Policy)** | `${sanitizeMarkdownCell(currentPolicy.dnsHost)}` |")
             val runtimeDnsHost = com.drmohammed.antiporn.shields.DnsShield.getEffectiveDnsHost(appContext)

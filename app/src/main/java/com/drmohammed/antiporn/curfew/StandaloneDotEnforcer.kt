@@ -49,8 +49,32 @@ internal object StandaloneDotEnforcer {
         host: String = DnsShield.getEffectiveDnsHost(context)
     ): Boolean = DnsFastHealEngine.preArmStandaloneDotFailClosed(context, host)
 
+    internal fun shouldSkipDpmForExhaustedNetwork(
+        suppressResilienceNotify: Boolean,
+        isExhaustedOnNetwork: Boolean
+    ): Boolean = !suppressResilienceNotify && isExhaustedOnNetwork
+
+    internal fun shouldNotifyResilienceOnHostNotServing(
+        dnsSetResult: Int,
+        isOffline: Boolean,
+        suppressResilienceNotify: Boolean,
+        isEvaluationInProgress: Boolean
+    ): Boolean = dnsSetResult == CurfewVpnDnsBridge.COMPAT_PRIVATE_DNS_SET_ERROR_HOST_NOT_SERVING &&
+        !isOffline &&
+        !suppressResilienceNotify &&
+        !isEvaluationInProgress
+
     @RequiresApi(Build.VERSION_CODES.Q)
-    fun applyStandaloneDot(context: Context, targetHost: String): Pair<Int, Boolean> {
+    fun applyStandaloneDot(
+        context: Context,
+        targetHost: String,
+        suppressResilienceNotify: Boolean = false
+    ): Pair<Int, Boolean> {
+        if (shouldSkipDpmForExhaustedNetwork(suppressResilienceNotify, DnsResilienceManager.isExhaustedDotOnNetwork(context))) {
+            Timber.tag(TAG).d("Skipping DPM Private DNS call for $targetHost: DoT already exhausted on current network")
+            return CurfewVpnDnsBridge.COMPAT_PRIVATE_DNS_SET_ERROR_HOST_NOT_SERVING to false
+        }
+
         val currentMode = PrivateDnsSettingsBridge.readDpmPrivateDnsMode(context)
         val currentHost = PrivateDnsSettingsBridge.readDpmPrivateDnsHost(context)
         val globalMode = PrivateDnsSettingsBridge.readGlobalSetting(context, "private_dns_mode")
@@ -89,9 +113,16 @@ internal object StandaloneDotEnforcer {
                 details = "setGlobalPrivateDns returned error code=$dnsSetResult host=$targetHost offline=$isOffline usedFallback=$usedFallback"
             )
         }
-        if (dnsSetResult == CurfewVpnDnsBridge.COMPAT_PRIVATE_DNS_SET_ERROR_HOST_NOT_SERVING && !isOffline) {
+        val evalInProgress = DnsResilienceManager.isEvaluationInProgress()
+        if (shouldNotifyResilienceOnHostNotServing(dnsSetResult, isOffline, suppressResilienceNotify, evalInProgress)) {
             Timber.tag(TAG).w("applyStandaloneDot: host $targetHost NOT serving while online; notifying DnsResilienceManager")
             DnsResilienceManager.onDpmHostNotServing(context, targetHost)
+        } else if (dnsSetResult == CurfewVpnDnsBridge.COMPAT_PRIVATE_DNS_SET_ERROR_HOST_NOT_SERVING && !isOffline) {
+            Timber.tag(TAG).d(
+                "applyStandaloneDot: skipping DnsResilienceManager notify (suppress=%b, evalInProgress=%b)",
+                suppressResilienceNotify,
+                evalInProgress
+            )
         }
         return dnsSetResult to usedFallback
     }

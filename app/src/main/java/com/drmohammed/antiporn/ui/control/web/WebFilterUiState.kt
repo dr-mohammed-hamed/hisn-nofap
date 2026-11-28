@@ -44,6 +44,7 @@ data class WebFilterUiState(
     val allowedUrls: Set<String> = emptySet(),
     val isFullSystemFiltering: Boolean = false,
     val isAdBlocking: Boolean = false,
+    val isLocalVpnFallbackEnabled: Boolean = false,
     val isUnaffiliatedBlocked: Boolean = false,
     val canWriteSecureSettings: Boolean = false,
     val isSaving: Boolean = false,
@@ -100,6 +101,7 @@ data class WebFilterUiState(
             isYouTubeRestricted != initialPolicy.isYouTubeRestrictedModeEnabled ||
             isFullSystemFiltering != initialPolicy.isFullSystemFilteringEnabled ||
             isAdBlocking != initialPolicy.isAdBlockingEnabled ||
+            isLocalVpnFallbackEnabled != initialPolicy.isLocalVpnFallbackEnabled ||
             isBlockExternalVpn != initialPolicy.isBlockExternalVpnEnabled ||
             isWhitelistOnlyMode != initialWasWhitelist ||
             blockedUrls != initialPolicy.customBlockedUrls ||
@@ -131,7 +133,8 @@ data class WebFilterUiState(
             blockedUrls = policy.customBlockedUrls,
             allowedUrls = policy.customAllowedUrls,
             isFullSystemFiltering = policy.isFullSystemFilteringEnabled,
-            isAdBlocking = policy.isAdBlockingEnabled
+            isAdBlocking = policy.isAdBlockingEnabled,
+            isLocalVpnFallbackEnabled = policy.isLocalVpnFallbackEnabled
         )
     }
 }

@@ -5,11 +5,13 @@ import com.drmohammed.antiporn.core.model.DevicePolicyBundle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import java.nio.ByteBuffer
 import java.util.concurrent.CountDownLatch
@@ -17,6 +19,16 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 class DnsUpstreamForwarderTest {
+
+    @Before
+    fun setUp() {
+        DnsResilienceManager.resetStateSync()
+    }
+
+    @After
+    fun tearDown() {
+        DnsResilienceManager.resetStateSync()
+    }
 
     @Test
     fun testForwarderPortStrippingCacheGuardAndServfailRefusedFailover() = runBlocking {

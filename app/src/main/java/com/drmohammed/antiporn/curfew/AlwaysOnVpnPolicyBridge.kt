@@ -163,7 +163,10 @@ internal object AlwaysOnVpnPolicyBridge {
         }
         if (!AlwaysOnVpnConsentHelper.isVpnConsentGranted(context)) {
             Timber.tag(TAG).w("VpnService.prepare returned non-null; preserving standalone DoT")
-            if (allowStandaloneFallback && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (allowStandaloneFallback &&
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                !DnsResilienceManager.isExhaustedDotOnNetwork(context)
+            ) {
                 StandaloneDotEnforcer.applyStandaloneDot(context, targetHost)
             }
             PrivateDnsSettingsBridge.lockDnsAndNetworkRestrictions(context)

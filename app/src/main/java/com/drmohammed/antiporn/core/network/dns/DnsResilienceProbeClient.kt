@@ -201,13 +201,41 @@ internal object DnsResilienceProbeClient {
         }
     }
 
+    internal data class DotProbeResult(
+        val reachable: Boolean,
+        val systemDnsResolved: Boolean,
+        val usedBootstrapFallback: Boolean
+    )
+
+    @JvmOverloads
     fun testDotHostOnNetwork(
         network: Network,
         host: String,
         families: LinkIpFamilies = LinkIpFamilies(hasIpv4 = true, hasIpv6 = false),
+        dotProbeOverride: ((Network, String) -> Boolean)? = null,
+        requireSystemDnsResolution: Boolean = false
+    ): Boolean = probeDotHostDetailed(
+        network = network,
+        host = host,
+        families = families,
+        requireSystemDnsResolution = requireSystemDnsResolution,
+        dotProbeOverride = dotProbeOverride
+    ).reachable
+
+    fun probeDotHostDetailed(
+        network: Network,
+        host: String,
+        families: LinkIpFamilies = LinkIpFamilies(hasIpv4 = true, hasIpv6 = false),
+        requireSystemDnsResolution: Boolean = false,
         dotProbeOverride: ((Network, String) -> Boolean)? = null
-    ): Boolean {
-        dotProbeOverride?.let { return it(network, host) }
+    ): DotProbeResult {
+        dotProbeOverride?.let {
+            return DotProbeResult(
+                reachable = it(network, host),
+                systemDnsResolved = true,
+                usedBootstrapFallback = false
+            )
+        }
         val resolvedCandidates = try {
             val addrs = network.getAllByName(host).orEmpty().filterNotNull()
                 .filterNot { DnsIpPolicy.isNonPublicOrReservedIp(it) }
@@ -222,10 +250,32 @@ internal object DnsResilienceProbeClient {
             Timber.tag(TAG).d(e, "Network.getAllByName failed for DoT probe host=$host")
             emptyList()
         }
-        val candidates = (resolvedCandidates + resolveBootstrapAddresses(host, families)).distinct()
+        val systemDnsResolved = resolvedCandidates.isNotEmpty()
+        if (requireSystemDnsResolution && !systemDnsResolved) {
+            Timber.tag(TAG).d(
+                "System DNS failed to resolve $host with requireSystemDnsResolution=true; skipping bootstrap fallback"
+            )
+            return DotProbeResult(
+                reachable = false,
+                systemDnsResolved = false,
+                usedBootstrapFallback = false
+            )
+        }
+
+        val resolvedSet = resolvedCandidates.toSet()
+        val bootstrapCandidates = if (requireSystemDnsResolution) {
+            emptyList()
+        } else {
+            resolveBootstrapAddresses(host, families).filterNot { it in resolvedSet }.distinct()
+        }
+        val candidates = (resolvedCandidates + bootstrapCandidates).distinct()
         if (candidates.isEmpty()) {
             Timber.tag(TAG).d("No candidate IPs resolved for DoT probe host=$host")
-            return false
+            return DotProbeResult(
+                reachable = false,
+                systemDnsResolved = systemDnsResolved,
+                usedBootstrapFallback = false
+            )
         }
 
         val hostDeadlineMs = clockMs() + (DOT_PROBE_TIMEOUT_MS * 2L)
@@ -233,10 +283,19 @@ internal object DnsResilienceProbeClient {
             val remaining = (hostDeadlineMs - clockMs()).toInt()
             if (remaining < 300) break
             if (probeSingleDotEndpoint(network, host, candidateAddr, remaining.coerceAtMost(DOT_PROBE_TIMEOUT_MS))) {
-                return true
+                val usedBootstrap = candidateAddr !in resolvedSet
+                return DotProbeResult(
+                    reachable = true,
+                    systemDnsResolved = systemDnsResolved,
+                    usedBootstrapFallback = usedBootstrap
+                )
             }
         }
-        return false
+        return DotProbeResult(
+            reachable = false,
+            systemDnsResolved = systemDnsResolved,
+            usedBootstrapFallback = false
+        )
     }
 
     private fun probeSingleDotEndpoint(

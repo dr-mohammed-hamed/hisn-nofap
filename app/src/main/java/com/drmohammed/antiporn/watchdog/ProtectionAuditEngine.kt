@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
+import android.os.UserManager
 import android.provider.Settings
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.engine.ProtectionEngine
@@ -11,6 +12,7 @@ import com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard
 import com.drmohammed.antiporn.core.model.ShieldStatus
 import com.drmohammed.antiporn.core.network.DnsFilteringValidator
 import com.drmohammed.antiporn.core.network.PhysicalNetworkResolver
+import com.drmohammed.antiporn.core.network.dns.DnsResilienceManager
 import com.drmohammed.antiporn.core.time.TrustedTimeProvider
 import com.drmohammed.antiporn.curfew.CurfewBlackholeVpnService
 import com.drmohammed.antiporn.curfew.CurfewConfig
@@ -25,6 +27,7 @@ import com.drmohammed.antiporn.notification.model.NotificationCategory
 import com.drmohammed.antiporn.notification.registry.NotificationRegistry
 import com.drmohammed.antiporn.shields.DnsShield
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
+import com.drmohammed.antiporn.telemetry.SafeDpmGateway
 import timber.log.Timber
 import java.util.TimeZone
 
@@ -89,11 +92,23 @@ internal object ProtectionAuditEngine {
         ApprovalRepository.getInstance(appContext).syncZeroTrustBaselineAndReconcileAsync()
     }
 
+    private fun isPrivateDnsConfigLocked(appContext: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return true
+        val restrictions = SafeDpmGateway.getUserRestrictionsBlocking(
+            appContext,
+            BlackBoxRecorder.TAG_SHIELD,
+            recordSuccess = false
+        ).getOrNull()
+        return restrictions?.getBoolean(UserManager.DISALLOW_CONFIG_PRIVATE_DNS, false) == true
+    }
+
     private fun inspectShields(
         appContext: Context,
         isPendingOfflineDpmSync: Boolean,
         desyncReasons: MutableList<String>
     ) {
+        val isExhaustedDotOnNetwork = DnsResilienceManager.isExhaustedDotOnNetwork(appContext)
+        val isDnsConfigLocked = if (isExhaustedDotOnNetwork) isPrivateDnsConfigLocked(appContext) else true
         val shieldStatuses = ProtectionEngine.evaluateSystemStatus(appContext)
         for ((shieldId, status) in shieldStatuses) {
             when (status) {
@@ -101,14 +116,24 @@ internal object ProtectionAuditEngine {
                 is ShieldStatus.Unsupported ->
                     Timber.tag(TAG).d("Shield [$shieldId] unsupported on API (${status.minSdkRequired})")
                 is ShieldStatus.NeedsEnforcement -> {
-                    if (shieldId == DnsShield.id && isPendingOfflineDpmSync) {
+                    if (shieldId == DnsShield.id && isExhaustedDotOnNetwork && isDnsConfigLocked) {
+                        Timber.tag(TAG).d("Suppressing DNS shield desync enforcement on exhausted network: ${status.reason}")
+                    } else if (shieldId == DnsShield.id && isExhaustedDotOnNetwork && !isDnsConfigLocked) {
+                        desyncReasons.add("[DNS_RESTRICTION_UNLOCKED: DISALLOW_CONFIG_PRIVATE_DNS cleared]")
+                    } else if (shieldId == DnsShield.id && isPendingOfflineDpmSync) {
                         Timber.tag(TAG).i("Pending offline DPM Private DNS convergence on newly connected network; syncing silently.")
                         desyncReasons.add("[DNS_PENDING_DPM_SYNC: ${status.reason}]")
                     } else {
                         desyncReasons.add("[$shieldId: ${status.reason}]")
                     }
                 }
-                is ShieldStatus.Disabled -> desyncReasons.add("[$shieldId: ${status.warning}]")
+                is ShieldStatus.Disabled -> {
+                    if (shieldId == DnsShield.id && isExhaustedDotOnNetwork && isDnsConfigLocked) {
+                        Timber.tag(TAG).d("Suppressing disabled DNS shield desync on exhausted network: ${status.warning}")
+                    } else {
+                        desyncReasons.add("[$shieldId: ${status.warning}]")
+                    }
+                }
             }
         }
     }
@@ -180,6 +205,20 @@ internal object ProtectionAuditEngine {
     ) {
         val expectedHost = DnsShield.getEffectiveDnsHost(appContext)
         val isHostMatching = specifier?.equals(expectedHost, ignoreCase = true) == true
+        if (DnsResilienceManager.isExhaustedDotOnNetwork(appContext)) {
+            val isHostileCustomDns = mode == "hostname" &&
+                !specifier.isNullOrBlank() &&
+                !isHostMatching &&
+                !DnsFilteringValidator.isKnownFamilyPreset(specifier)
+            if (isHostileCustomDns) {
+                val reason = "Hostile Settings.Global DNS on exhausted network (mode=$mode, specifier=$specifier, expected=$expectedHost)"
+                Timber.tag(TAG).w(reason)
+                desyncReasons.add("[DNS_HOSTILE_GLOBAL: $reason]")
+            } else {
+                Timber.tag(TAG).d("Suppressing standalone Settings.Global DNS mismatch check on exhausted network")
+            }
+            return
+        }
         if (mode != "hostname" || !isHostMatching) {
             val isUnaffiliatedFallback = CurfewVpnDnsBridge.isPrivateDnsBlockedByUnaffiliatedUsers(appContext) &&
                 mode == "hostname" && !specifier.isNullOrBlank() && DnsFilteringValidator.isKnownFamilyPreset(specifier)
@@ -237,11 +276,32 @@ internal object ProtectionAuditEngine {
         }
     }
 
+    internal fun filterDesyncReasonsForExhaustedDot(
+        reasons: List<String>,
+        isExhaustedDotOnNetwork: Boolean
+    ): List<String> {
+        if (!isExhaustedDotOnNetwork) return reasons
+        return reasons.filterNot {
+            it.startsWith("[${DnsShield.id}:") ||
+                it.startsWith("[DNS_GLOBAL:") ||
+                it.startsWith("[DNS_PENDING_DPM_SYNC:") ||
+                it.startsWith("[DNS_PENDING_RESTORE:")
+        }
+    }
+
     private fun reEnforceDesyncedProtection(appContext: Context, desyncReasons: List<String>) {
-        val isOnlySilentDpmSync = desyncReasons.all {
+        val effectiveReasons = filterDesyncReasonsForExhaustedDot(
+            reasons = desyncReasons,
+            isExhaustedDotOnNetwork = DnsResilienceManager.isExhaustedDotOnNetwork(appContext)
+        )
+        if (effectiveReasons.isEmpty()) {
+            Timber.tag(TAG).d("Skipping watchdog re-enforcement: only DNS mismatch present on already-exhausted network")
+            return
+        }
+        val isOnlySilentDpmSync = effectiveReasons.all {
             it.startsWith("[DNS_PENDING_DPM_SYNC:") || it.startsWith("[DNS_PENDING_RESTORE:")
         }
-        val detailedReasons = desyncReasons.joinToString(" | ")
+        val detailedReasons = effectiveReasons.joinToString(" | ")
         if (isOnlySilentDpmSync) {
             Timber.tag(TAG).i("Silent post-offline/curfew DNS convergence pending: $detailedReasons")
         } else {
@@ -252,7 +312,7 @@ internal object ProtectionAuditEngine {
                 actionName = "WATCHDOG_TAMPER_DETECTED",
                 isSuccess = false,
                 errorDetails = detailedReasons,
-                metadata = "failedCount=${desyncReasons.size}"
+                metadata = "failedCount=${effectiveReasons.size}"
             )
         }
 
@@ -260,14 +320,14 @@ internal object ProtectionAuditEngine {
             Timber.tag(TAG).d("Aborting watchdog re-enforcement because teardown is in progress")
             return
         }
-        val isPurePendingDpmSync = desyncReasons.all { it.startsWith("[DNS_PENDING_DPM_SYNC:") }
+        val isPurePendingDpmSync = effectiveReasons.all { it.startsWith("[DNS_PENDING_DPM_SYNC:") }
         if (isPurePendingDpmSync) {
             ProtectionEngine.applyDnsShieldFastAsync(appContext)
         } else {
             ProtectionEngine.applyAllAsync(appContext)
         }
 
-        val isDirectTamper = desyncReasons.any {
+        val isDirectTamper = effectiveReasons.any {
             it.startsWith("[TIMEZONE:") || it.startsWith("[AUTO_TIME:") || it.startsWith("[system_tamper:")
         }
         val isCurfewSynchronized = CurfewEnforcer.isEffectiveBlockActive(appContext) == CurfewConfig.isLastBlockEnforced(appContext)

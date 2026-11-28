@@ -502,6 +502,49 @@ class PolicyRepository(
         }
     }
 
+    /**
+     * Approves local VPN DNS fallback on this device without weakening any existing
+     * restriction, allowing supervised wards to grant 1-tap resilience consent offline.
+     */
+    suspend fun approveLocalVpnFallbackLocally(): DevicePolicyBundle? = withContext(Dispatchers.IO) {
+        try {
+            var alreadyEnabled: DevicePolicyBundle? = null
+            val acceptedPair = synchronized(policyStateLock) {
+                val current = _currentPolicyFlow.value
+                if (current.isLocalVpnFallbackEnabled) {
+                    alreadyEnabled = current
+                    null
+                } else {
+                    val newPolicy = current.copy(
+                        isLocalVpnFallbackEnabled = true,
+                        version = current.version + 1,
+                        updatedAt = TrustedTimeProvider.currentTimeMillis(appContext)
+                    )
+                    _currentPolicyFlow.value = newPolicy
+                    schedulePolicyPersistenceLocked(newPolicy)
+                    enforcementHandler.enqueueApply(newPolicy, current)
+                    current to newPolicy
+                }
+            }
+            if (alreadyEnabled != null) return@withContext alreadyEnabled
+
+            val (_, updated) = acceptedPair ?: return@withContext null
+            BlackBoxRecorder.recordGate(
+                appContext,
+                "LOCAL_VPN_FALLBACK_APPROVED",
+                isSuccess = true,
+                details = "v${updated.version}, supervised=${updated.isSupervised}"
+            )
+            val myUid = AccountabilityRepository.getInstance(appContext).getCachedUid()
+            cloudSyncBridge.syncPolicyToCloudAsync(myUid, updated)
+            updated
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Timber.tag(TAG).e(e, "Error in approveLocalVpnFallbackLocally")
+            null
+        }
+    }
+
     @VisibleForTesting
     internal fun sanitizeSupervisedSelfPolicy(
         bundle: DevicePolicyBundle,
@@ -559,6 +602,7 @@ class PolicyRepository(
                 dnsHost = current.dnsHost,
                 isYouTubeRestrictedModeEnabled = current.isYouTubeRestrictedModeEnabled,
                 isAdBlockingEnabled = current.isAdBlockingEnabled,
+                isLocalVpnFallbackEnabled = current.isLocalVpnFallbackEnabled,
                 isTelegramWebBlocked = current.isTelegramWebBlocked,
                 isIncognitoBlocked = current.isIncognitoBlocked,
                 isBlockExternalVpnEnabled = current.isBlockExternalVpnEnabled

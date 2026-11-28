@@ -29,9 +29,14 @@ internal class DnsResilienceNetworkRouter(
 
         const val MAX_SAME_NET_RECOVERY_ATTEMPTS = 2
         const val CAPTIVE_PORTAL_RECOVERY_DELAY_MS = 3_000L
-        val SAME_NET_RECOVERY_DELAYS_MS = longArrayOf(10L * 60_000L, 30L * 60_000L)
+        const val EXHAUSTED_CONSENT_BACKOFF_MS = 5L * 60_000L
+        val SAME_NET_RECOVERY_DELAYS_MS = longArrayOf(15L * 60_000L, 60L * 60_000L)
 
         val recoveryAttemptCountByNet = ConcurrentHashMap<String, Int>()
+        val primaryBlockedOnNetIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
+        val sameNetRecoveredNetIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
+        val exhaustedDotNetLastMs = ConcurrentHashMap<String, Long>()
+        val consentPromptedNetIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
         @Volatile
         var activeRecoveryJob: Job? = null
@@ -42,8 +47,56 @@ internal class DnsResilienceNetworkRouter(
         @VisibleForTesting
         internal var recoveryDelayOverride: (suspend (Long) -> Unit)? = null
 
+        fun markPrimaryBlockedOnNetwork(netId: String) {
+            primaryBlockedOnNetIds.add(netId)
+        }
+
+        fun isPrimaryBlockedOnNetwork(netId: String): Boolean = primaryBlockedOnNetIds.contains(netId)
+
+        fun markSameNetRecovered(netId: String) {
+            sameNetRecoveredNetIds.add(netId)
+        }
+
+        fun consumeSameNetRecoveredAndBlockIfRepeated(netId: String): Boolean {
+            if (sameNetRecoveredNetIds.remove(netId)) {
+                primaryBlockedOnNetIds.add(netId)
+                return true
+            }
+            return false
+        }
+
+        fun markExhaustedDot(netId: String, nowMs: Long) {
+            exhaustedDotNetLastMs[netId] = nowMs
+        }
+
+        fun isExhaustedDot(netId: String, nowMs: Long): Boolean {
+            val ts = exhaustedDotNetLastMs[netId] ?: return false
+            return (nowMs - ts) in 0L until EXHAUSTED_CONSENT_BACKOFF_MS
+        }
+
+        fun markConsentPromptedIfNew(netId: String): Boolean = consentPromptedNetIds.add(netId)
+
+        fun hasPendingConsentPrompts(): Boolean = consentPromptedNetIds.isNotEmpty()
+
+        fun clearConsentAndExhaustedForNetwork(netId: String) {
+            exhaustedDotNetLastMs.remove(netId)
+            consentPromptedNetIds.remove(netId)
+        }
+
+        fun clearAllStateForNetwork(netId: String) {
+            recoveryAttemptCountByNet.remove(netId)
+            primaryBlockedOnNetIds.remove(netId)
+            sameNetRecoveredNetIds.remove(netId)
+            exhaustedDotNetLastMs.remove(netId)
+            consentPromptedNetIds.remove(netId)
+        }
+
         fun reset() {
             recoveryAttemptCountByNet.clear()
+            primaryBlockedOnNetIds.clear()
+            sameNetRecoveredNetIds.clear()
+            exhaustedDotNetLastMs.clear()
+            consentPromptedNetIds.clear()
             activeRecoveryJob?.cancel()
             activeRecoveryJob = null
             activeCaptivePortalRecoveryJob?.cancel()
@@ -59,7 +112,7 @@ internal class DnsResilienceNetworkRouter(
         }
 
         fun onNetworkLost(netId: String) {
-            recoveryAttemptCountByNet.remove(netId)
+            clearAllStateForNetwork(netId)
             cancelRecoveryJobs()
         }
     }
@@ -90,7 +143,8 @@ internal class DnsResilienceNetworkRouter(
         val targetId = DnsResilienceManager.resolveNetworkId(targetNetwork)
         val activeNet = try {
             DnsResilienceManager.activeNetworkProvider?.invoke(context) ?: cm?.activeNetwork
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Timber.tag(TAG).d(e, "Failed reading activeNetwork in isTargetNetworkPrimaryOrSolePhysical")
             null
         }
         if (activeNet != null) {
@@ -116,7 +170,8 @@ internal class DnsResilienceNetworkRouter(
         val cm = DnsResilienceManager.getConnectivityManager(context)
         val activeNet = try {
             DnsResilienceManager.activeNetworkProvider?.invoke(context) ?: cm?.activeNetwork
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Timber.tag(TAG).d(e, "Failed reading activeNetwork in isTargetNetworkPrimaryOrSolePhysical")
             null
         }
         val targetNet = if (activeNet != null &&
@@ -216,6 +271,17 @@ internal class DnsResilienceNetworkRouter(
             "onNetworkChanged: transition=$transitionType, net=$netId, transport=$transport, mode=${snap.mode}, prot=${snap.protectedNetworkId}"
         )
 
+        val isLostOrValidated = transitionType.startsWith("net_lost") || transitionType.startsWith("net_validated")
+        val isProtectedNetValidated = snap.mode != DnsResilienceManager.DnsResilienceMode.PRIMARY_STRICT_DOT &&
+            netId == snap.protectedNetworkId &&
+            transitionType.startsWith("net_validated")
+        if (netId != null && isLostOrValidated && !isProtectedNetValidated) {
+            clearConsentAndExhaustedForNetwork(netId)
+            primaryBlockedOnNetIds.remove(netId)
+            sameNetRecoveredNetIds.remove(netId)
+            DnsFallbackConsentNotifier.cancelNotificationIfIdle(context)
+        }
+
         if (snap.mode != DnsResilienceManager.DnsResilienceMode.PRIMARY_STRICT_DOT) {
             val protectedNet = snap.protectedNetworkId
             val protTransport = snap.protectedTransport
@@ -228,6 +294,7 @@ internal class DnsResilienceNetworkRouter(
             }
             if (netId != null && netId == protectedNet && transitionType.startsWith("net_lost")) {
                 onNetworkLost(netId)
+                DnsFallbackConsentNotifier.cancelNotificationIfIdle(context)
                 restorePrimary("protected_net_lost:${protTransport ?: transport}:$netId")
                 return
             }
@@ -243,18 +310,24 @@ internal class DnsResilienceNetworkRouter(
                     val activeNet = DnsResilienceManager.activeNetworkProvider?.invoke(context) ?: cm?.activeNetwork
                     activeNet != null && DnsResilienceManager.resolveNetworkId(activeNet) == netId &&
                         DnsResilienceManager.resolvePhysicalTransportLabel(context, cm, activeNet) == transport
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    Timber.tag(TAG).d(e, "Failed checking active default transport in onNetworkChanged")
                     false
                 }
                 if (isValidatedEvent || (protTransport == "CELLULAR" && isActiveDefault)) {
                     Timber.tag(TAG).i("Preferred physical network $transport ($netId) active/validated; restoring PRIMARY_STRICT_DOT")
                     if (protectedNet != null) onNetworkLost(protectedNet)
+                    DnsFallbackConsentNotifier.cancelNotificationIfIdle(context)
                     restorePrimary("preferred_transport_active:$transport:$netId")
                     return
                 }
             }
             if (protTransport == "WIFI" && transport == "CELLULAR") {
-                if (netId != null && transitionType.startsWith("net_lost")) cancelForNetwork(netId)
+                if (netId != null && transitionType.startsWith("net_lost")) {
+                    cancelForNetwork(netId)
+                    clearAllStateForNetwork(netId)
+                    DnsFallbackConsentNotifier.cancelNotificationIfIdle(context)
+                }
                 return
             }
         }
@@ -262,11 +335,15 @@ internal class DnsResilienceNetworkRouter(
         if (transport == null || transport !in DnsResilienceManager.SUPPORTED_TRANSPORTS || network == null) return
         val key = netId ?: network.toString()
 
-        if (transitionType.startsWith("net_validated") || transitionType.startsWith("net_lost")) {
+        if (isLostOrValidated) {
             cancelForNetwork(key)
-            if (transitionType.startsWith("net_lost") && lastImmediateDriftEscalatedNetId == key) {
-                lastImmediateDriftEscalatedNetId = null
+            if (transitionType.startsWith("net_lost")) {
+                clearAllStateForNetwork(key)
+                if (lastImmediateDriftEscalatedNetId == key) {
+                    lastImmediateDriftEscalatedNetId = null
+                }
             }
+            DnsFallbackConsentNotifier.cancelNotificationIfIdle(context)
             return
         }
         if (transitionType.startsWith("net_captive_portal")) {
@@ -324,7 +401,7 @@ internal class DnsResilienceNetworkRouter(
     fun getElapsedRealtime(): Long = try {
         android.os.SystemClock.elapsedRealtime()
     } catch (_: RuntimeException) {
-        System.currentTimeMillis()
+        System.nanoTime() / 1_000_000L
     }
 
     fun getConnectivityManager(context: Context): ConnectivityManager? = try {

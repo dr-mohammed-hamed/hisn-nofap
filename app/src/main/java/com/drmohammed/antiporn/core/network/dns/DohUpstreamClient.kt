@@ -5,10 +5,10 @@ import android.net.VpnService
 import android.os.SystemClock
 import androidx.annotation.VisibleForTesting
 import com.drmohammed.antiporn.core.network.PhysicalNetworkResolver
+import kotlinx.coroutines.CancellationException
 import timber.log.Timber
 import java.net.ConnectException
 import java.net.NoRouteToHostException
-import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
@@ -107,8 +107,17 @@ class DohUpstreamClient(
     )
 
     private val circuits = ConcurrentHashMap<String, CircuitState>()
-    private val activeSockets: MutableSet<Socket> = ConcurrentHashMap.newKeySet()
-    private val wireExchange = DohHttpWireExchange(vpnService, clockMs, handshakeWatchdog, activeSockets)
+    @VisibleForTesting
+    internal val connectionPool = DohConnectionPool(clockMs = clockMs)
+    @VisibleForTesting
+    internal var wireConnectionFactory: ((DohEndpoint, Int) -> DohSocketConnection)? = null
+    private val wireExchange = DohHttpWireExchange(
+        vpnService = vpnService,
+        clockMs = clockMs,
+        handshakeWatchdog = handshakeWatchdog,
+        pool = connectionPool,
+        connectionFactoryProvider = { wireConnectionFactory }
+    )
 
     @Volatile
     private var cachedLinkFamilies: LinkIpFamilies? = null
@@ -141,7 +150,16 @@ class DohUpstreamClient(
         return PhysicalNetworkResolver.isDevicePhysicallyOffline(vpnService)
     }
 
-    private fun recordFailure(endpoint: DohEndpoint, reason: String, error: Throwable? = null) {
+    private fun recordFailure(
+        endpoint: DohEndpoint,
+        reason: String,
+        expectedGeneration: Long,
+        error: Throwable? = null
+    ) {
+        if (connectionPool.currentGeneration() != expectedGeneration) {
+            Timber.tag(TAG).d("Skipping stale-generation DoH failure for ${endpoint.ip}: $reason")
+            return
+        }
         if (isNoRouteOrTeardownFailure(error, reason)) {
             Timber.tag(TAG).d("Suppressing DoH circuit breaker on offline/teardown error for ${endpoint.ip}: $reason")
             return
@@ -159,11 +177,10 @@ class DohUpstreamClient(
     }
 
     fun resetState() {
+        val detached = connectionPool.detachAllForInvalidation()
         circuits.clear()
         cachedLinkFamilies = null
-        val snapshot = activeSockets.toList()
-        activeSockets.clear()
-        snapshot.forEach { wireExchange.closeQuietly(it) }
+        connectionPool.closeDetached(detached)
     }
 
     fun onNetworkChanged() {
@@ -205,14 +222,17 @@ class DohUpstreamClient(
                 continue
             }
 
+            val attemptGen = connectionPool.currentGeneration()
             val reply = try {
                 if (exchangeExecutor != null) {
                     exchangeExecutor.invoke(endpoint, rawPayload, epTimeout)
                 } else {
                     wireExchange.execute(endpoint, rawPayload, epTimeout)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                recordFailure(endpoint, e.message ?: e.javaClass.simpleName, e)
+                recordFailure(endpoint, e.message ?: e.javaClass.simpleName, attemptGen, e)
                 null
             }
 

@@ -33,6 +33,10 @@ class InAppNotificationTest {
         assertEquals(NotificationActionType.OPEN_CURFEW, NotificationActionType.fromKey("OPEN_CURFEW"))
         assertEquals(NotificationActionType.OPEN_OTA, NotificationActionType.fromKey("OPEN_OTA"))
         assertEquals(NotificationActionType.LAUNCH_APP, NotificationActionType.fromKey("LAUNCH_APP"))
+        assertEquals(
+            NotificationActionType.APPROVE_LOCAL_DNS_FALLBACK,
+            NotificationActionType.fromKey("APPROVE_LOCAL_DNS_FALLBACK")
+        )
         assertEquals(NotificationActionType.NONE, NotificationActionType.fromKey("NONE"))
         assertEquals(NotificationActionType.NONE, NotificationActionType.fromKey("INVALID"))
         assertEquals(NotificationActionType.NONE, NotificationActionType.fromKey(null))
@@ -99,7 +103,8 @@ class InAppNotificationTest {
             NotificationRegistry.EVENT_NAP_ENDED_ID,
             NotificationRegistry.EVENT_SYSTEM_TAMPER_ID,
             NotificationRegistry.EVENT_AI_DETECTION_ID,
-            NotificationRegistry.EVENT_OTA_FAILED_ID
+            NotificationRegistry.EVENT_OTA_FAILED_ID,
+            NotificationRegistry.EVENT_DNS_FALLBACK_CONSENT_ID
         )
 
         assertEquals("Event notification IDs must all be unique", eventIds.toSet().size, eventIds.size)

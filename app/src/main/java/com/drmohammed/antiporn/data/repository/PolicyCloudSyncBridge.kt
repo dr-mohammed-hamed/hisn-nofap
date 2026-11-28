@@ -168,21 +168,30 @@ internal class PolicyCloudSyncBridge(
             }
 
             val current = currentPolicyProvider()
-            val isFromGuardian = cloudPolicy.isSupervised && !cloudPolicy.guardianUid.isNullOrBlank()
-            val supervisoryChanged = isFromGuardian && hasSupervisoryDiff(cloudPolicy, current)
-            val statusChanged = cloudPolicy.breakoutStatus != current.breakoutStatus ||
-                cloudPolicy.deactivationStatus != current.deactivationStatus
-            val supervisionChanged = current.isSupervised != cloudPolicy.isSupervised
-            val isTimeNewer = cloudPolicy.updatedAt > current.updatedAt
-            val isVersionNewer = cloudPolicy.version > current.version
+            // Preserve offline 1-tap local VPN fallback approval until cloud reflects a newer/equal version
+            val preservedOfflineLocalFallback = current.isLocalVpnFallbackEnabled &&
+                !cloudPolicy.isLocalVpnFallbackEnabled &&
+                cloudPolicy.version < current.version
+            val candidateCloudPolicy = if (preservedOfflineLocalFallback) {
+                cloudPolicy.copy(isLocalVpnFallbackEnabled = true)
+            } else {
+                cloudPolicy
+            }
+            val isFromGuardian = candidateCloudPolicy.isSupervised && !candidateCloudPolicy.guardianUid.isNullOrBlank()
+            val supervisoryChanged = isFromGuardian && hasSupervisoryDiff(candidateCloudPolicy, current)
+            val statusChanged = candidateCloudPolicy.breakoutStatus != current.breakoutStatus ||
+                candidateCloudPolicy.deactivationStatus != current.deactivationStatus
+            val supervisionChanged = current.isSupervised != candidateCloudPolicy.isSupervised
+            val isTimeNewer = candidateCloudPolicy.updatedAt > current.updatedAt
+            val isVersionNewer = candidateCloudPolicy.version > current.version
 
-            val maskedGuardianUid = AiTelemetryReporter.maskIdentifier(cloudPolicy.guardianUid)
+            val maskedGuardianUid = AiTelemetryReporter.maskIdentifier(candidateCloudPolicy.guardianUid)
             Timber.tag(TAG).i(
                 "[SelfControlDiag] Cloud policy received on ward /policies/%s: cloudPolicy(v%d, supervised=%b, allowed=%b, guardian='%s') vs local(v%d, supervised=%b, allowed=%b), isVersionNewer=%b, isTimeNewer=%b, supervisoryChanged=%b, statusChanged=%b",
                 maskedUid,
-                cloudPolicy.version,
-                cloudPolicy.isSupervised,
-                cloudPolicy.isSelfControlAllowed,
+                candidateCloudPolicy.version,
+                candidateCloudPolicy.isSupervised,
+                candidateCloudPolicy.isSelfControlAllowed,
                 maskedGuardianUid,
                 current.version,
                 current.isSupervised,
@@ -195,7 +204,10 @@ internal class PolicyCloudSyncBridge(
 
             val isUnchanged = !(isVersionNewer || isTimeNewer || supervisoryChanged || statusChanged || supervisionChanged)
             if (isUnchanged) {
-                val sig = "${cloudPolicy.version}:${cloudPolicy.updatedAt}:${cloudPolicy.hashCode()}:${current.version}"
+                if (preservedOfflineLocalFallback) {
+                    syncPolicyToCloudAsync(uid, current)
+                }
+                val sig = "${candidateCloudPolicy.version}:${candidateCloudPolicy.updatedAt}:${candidateCloudPolicy.hashCode()}:${current.version}"
                 if (lastUnchangedLoggedSignature == sig) {
                     return
                 }
@@ -208,15 +220,15 @@ internal class PolicyCloudSyncBridge(
                 appContext,
                 "POLICY_RECEIVED",
                 isSuccess = true,
-                details = "uid=$maskedUid, v${cloudPolicy.version}, isSupervised=${cloudPolicy.isSupervised}, curfew=${cloudPolicy.isCurfewEnabled}(${cloudPolicy.curfewStartHour}:${cloudPolicy.curfewStartMinute}), isVersionNewer=$isVersionNewer, isTimeNewer=$isTimeNewer"
+                details = "uid=$maskedUid, v${candidateCloudPolicy.version}, isSupervised=${candidateCloudPolicy.isSupervised}, curfew=${candidateCloudPolicy.isCurfewEnabled}(${candidateCloudPolicy.curfewStartHour}:${candidateCloudPolicy.curfewStartMinute}), isVersionNewer=$isVersionNewer, isTimeNewer=$isTimeNewer"
             )
 
             if (isUnchanged) {
                 return
             }
 
-            val isTransitionToSupervised = !current.isSupervised && cloudPolicy.isSupervised
-            val effectiveCloudPolicy = reconcileTransitionRules(current, cloudPolicy, isTransitionToSupervised)
+            val isTransitionToSupervised = !current.isSupervised && candidateCloudPolicy.isSupervised
+            val effectiveCloudPolicy = reconcileTransitionRules(current, candidateCloudPolicy, isTransitionToSupervised)
             val forceOverride = isFromGuardian && (supervisoryChanged || statusChanged || supervisionChanged)
             val enforcedPolicy = if (forceOverride) {
                 effectiveCloudPolicy.copy(version = maxOf(effectiveCloudPolicy.version, current.version + 1))
@@ -241,7 +253,7 @@ internal class PolicyCloudSyncBridge(
             }
 
             if (adopted && isFromGuardian) {
-                acknowledgeCloudPolicyAsync(uid, maskedUid, cloudPolicy, enforcedPolicy, isTransitionToSupervised, effectiveCloudPolicy != cloudPolicy)
+                acknowledgeCloudPolicyAsync(uid, maskedUid, candidateCloudPolicy, enforcedPolicy, isTransitionToSupervised, effectiveCloudPolicy != candidateCloudPolicy || preservedOfflineLocalFallback)
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -285,6 +297,7 @@ internal class PolicyCloudSyncBridge(
             cloudPolicy.isFullSystemFilteringEnabled != current.isFullSystemFilteringEnabled ||
             cloudPolicy.isYouTubeRestrictedModeEnabled != current.isYouTubeRestrictedModeEnabled ||
             cloudPolicy.isAdBlockingEnabled != current.isAdBlockingEnabled ||
+            cloudPolicy.isLocalVpnFallbackEnabled != current.isLocalVpnFallbackEnabled ||
             cloudPolicy.isTelegramWebBlocked != current.isTelegramWebBlocked ||
             cloudPolicy.isBlockExternalVpnEnabled != current.isBlockExternalVpnEnabled ||
             cloudPolicy.customBlockedUrls != current.customBlockedUrls ||

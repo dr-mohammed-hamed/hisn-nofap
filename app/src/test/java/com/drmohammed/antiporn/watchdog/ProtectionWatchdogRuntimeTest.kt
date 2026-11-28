@@ -231,4 +231,54 @@ class ProtectionWatchdogRuntimeTest {
         assertEquals(0, offlineEscalateCalls)
         assertEquals(1, offlineDpmCalls)
     }
+
+    @Test
+    fun testProtectionAuditEngine_filterDesyncReasonsForExhaustedDot_preservesNonDnsShields() {
+        val dnsOnlyReasons = listOf(
+            "[dns: DoT unreachable]",
+            "[DNS_GLOBAL: mismatch]",
+            "[DNS_PENDING_DPM_SYNC: pending]",
+            "[DNS_PENDING_RESTORE: pending]"
+        )
+        assertTrue(
+            "DNS-only mismatch reasons must be suppressed when network DoT is exhausted",
+            ProtectionAuditEngine.filterDesyncReasonsForExhaustedDot(
+                reasons = dnsOnlyReasons,
+                isExhaustedDotOnNetwork = true
+            ).isEmpty()
+        )
+        assertEquals(
+            "All DNS reasons must remain when network DoT is not exhausted",
+            dnsOnlyReasons,
+            ProtectionAuditEngine.filterDesyncReasonsForExhaustedDot(
+                reasons = dnsOnlyReasons,
+                isExhaustedDotOnNetwork = false
+            )
+        )
+
+        val mixedReasons = dnsOnlyReasons + listOf(
+            "[system_tamper: disabled]",
+            "[browser: bypassed]",
+            "[curfew: app unsuspended]",
+            "[vpn: lockdown cleared]",
+            "[app_suspension: modified]",
+            "[TIMEZONE: mismatch]",
+            "[AUTO_TIME: disabled]"
+        )
+        assertEquals(
+            listOf(
+                "[system_tamper: disabled]",
+                "[browser: bypassed]",
+                "[curfew: app unsuspended]",
+                "[vpn: lockdown cleared]",
+                "[app_suspension: modified]",
+                "[TIMEZONE: mismatch]",
+                "[AUTO_TIME: disabled]"
+            ),
+            ProtectionAuditEngine.filterDesyncReasonsForExhaustedDot(
+                reasons = mixedReasons,
+                isExhaustedDotOnNetwork = true
+            )
+        )
+    }
 }

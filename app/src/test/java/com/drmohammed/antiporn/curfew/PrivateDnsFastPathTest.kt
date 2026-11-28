@@ -1120,4 +1120,69 @@ class PrivateDnsFastPathTest {
         assertTrue("Pre-armed Settings.Global must report usedFallback=true on DPM error 2", usedFallback)
         assertTrue("clearDnsRestorePending must be called when fail-closed global fallback is active", clearedRestorePending)
     }
+
+    @Test
+    fun testStandaloneDotEnforcer_skipsRecursiveResilienceNotifyWhenSuppressedOrEvaluating() {
+        val hostNotServing = CurfewVpnDnsBridge.COMPAT_PRIVATE_DNS_SET_ERROR_HOST_NOT_SERVING
+        assertFalse(
+            "Must skip resilience notify when suppressResilienceNotify=true",
+            StandaloneDotEnforcer.shouldNotifyResilienceOnHostNotServing(
+                dnsSetResult = hostNotServing,
+                isOffline = false,
+                suppressResilienceNotify = true,
+                isEvaluationInProgress = false
+            )
+        )
+        assertFalse(
+            "Must skip resilience notify when DnsResilienceManager evaluation is already in progress",
+            StandaloneDotEnforcer.shouldNotifyResilienceOnHostNotServing(
+                dnsSetResult = hostNotServing,
+                isOffline = false,
+                suppressResilienceNotify = false,
+                isEvaluationInProgress = true
+            )
+        )
+        assertFalse(
+            "Must skip resilience notify when device is offline",
+            StandaloneDotEnforcer.shouldNotifyResilienceOnHostNotServing(
+                dnsSetResult = hostNotServing,
+                isOffline = true,
+                suppressResilienceNotify = false,
+                isEvaluationInProgress = false
+            )
+        )
+        assertFalse(
+            "Must skip resilience notify when DPM succeeded",
+            StandaloneDotEnforcer.shouldNotifyResilienceOnHostNotServing(
+                dnsSetResult = CurfewVpnDnsBridge.COMPAT_PRIVATE_DNS_SET_NO_ERROR,
+                isOffline = false,
+                suppressResilienceNotify = false,
+                isEvaluationInProgress = false
+            )
+        )
+        assertTrue(
+            "Must notify resilience when online HOST_NOT_SERVING occurs outside evaluation and suppression",
+            StandaloneDotEnforcer.shouldNotifyResilienceOnHostNotServing(
+                dnsSetResult = hostNotServing,
+                isOffline = false,
+                suppressResilienceNotify = false,
+                isEvaluationInProgress = false
+            )
+        )
+
+        assertTrue(
+            "Normal callers must skip DPM hammering when network DoT is already exhausted",
+            StandaloneDotEnforcer.shouldSkipDpmForExhaustedNetwork(
+                suppressResilienceNotify = false,
+                isExhaustedOnNetwork = true
+            )
+        )
+        assertFalse(
+            "Resilience evaluator callers with suppressResilienceNotify=true must be allowed to probe DPM",
+            StandaloneDotEnforcer.shouldSkipDpmForExhaustedNetwork(
+                suppressResilienceNotify = true,
+                isExhaustedOnNetwork = true
+            )
+        )
+    }
 }

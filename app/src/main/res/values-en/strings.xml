@@ -1403,6 +1403,15 @@
     <string name="switch_full_system_filter_title">Apply Rules Across Entire Device</string>
     <string name="switch_full_system_filter_desc">Enforces site lists, Telegram Web, and YouTube Restricted across all apps</string>
     <string name="switch_block_ads_desc">Blocks ads and trackers via on-device local DNS filter</string>
+    <string name="switch_local_vpn_fallback_title">Local DNS VPN Backup Engine</string>
+    <string name="switch_local_vpn_fallback_desc">Stays off while Private DNS works, activates silently only when all Private DNS servers fail (useful on OPPO/Realme), and restores automatically when recovered</string>
+    <string name="notif_dns_fallback_consent_title">Action needed to resolve Private DNS issue</string>
+    <string name="notif_dns_fallback_consent_msg">Private DNS is stalling on this network. Tap to grant one-time approval for the silent Local DNS VPN backup engine when needed.</string>
+    <string name="dialog_dns_fallback_consent_title">Enable Local DNS VPN Backup?</string>
+    <string name="dialog_dns_fallback_consent_desc">Private DNS servers could not be reached on this network (common on some OPPO/Realme devices or restricted networks).\n\nWith one-time approval, the Local DNS VPN backup engine will run silently only when needed to keep protection and internet working, and automatically switch back to Private DNS when the network recovers.</string>
+    <string name="btn_dns_fallback_approve">Approve &amp; Enable</string>
+    <string name="btn_dns_fallback_not_now">Not Now</string>
+    <string name="toast_dns_fallback_enabled">Local DNS VPN backup enabled</string>
     <string name="web_ads_dns_confirmed_hint">Your selected DNS server already blocks ads without needing Local VPN.</string>
     <string name="web_ads_dns_custom_hint">If your custom DNS already blocks ads, you don\'t need Local VPN ad blocking.</string>
     <string name="web_unaffiliated_inline_warning">A secondary profile or dual app prevents Local VPN filtering. Core DNS protection remains active.</string>

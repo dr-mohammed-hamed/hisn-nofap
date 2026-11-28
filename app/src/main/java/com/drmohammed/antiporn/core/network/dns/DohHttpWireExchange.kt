@@ -19,157 +19,244 @@ import javax.net.ssl.SSLSocketFactory
 
 /**
  * Low-level RFC 8484 HTTP/1.1-over-TLS wire exchange helper for [DohUpstreamClient].
- * Enforces cumulative read/handshake deadlines and tracks active sockets for immediate reset cancellation.
+ * Uses [DohConnectionPool] for HTTP/1.1 keep-alive connection reuse, enforces cumulative
+ * read/handshake deadlines, and retries once on a fresh socket if a reused connection hits EOF/I/O error.
  */
 internal class DohHttpWireExchange(
     private val vpnService: VpnService,
     private val clockMs: () -> Long,
     private val handshakeWatchdog: ScheduledExecutorService,
-    private val activeSockets: MutableSet<Socket>
+    private val pool: DohConnectionPool,
+    private val connectionFactoryProvider: (() -> ((DohUpstreamClient.DohEndpoint, Int) -> DohSocketConnection)?)? = null
 ) {
 
     companion object {
+        private const val TAG = "AntiPorn_DohWire"
         private const val DOH_PORT = 443
         private const val MAX_HTTP_HEADER_BYTES = 8_192
         private const val MAX_DOH_RESPONSE_BYTES = 4_096
+        private const val MIN_RETRY_BUDGET_MS = 250L
     }
 
     fun execute(endpoint: DohUpstreamClient.DohEndpoint, rawPayload: ByteArray, timeoutMs: Int): ByteArray {
-        var baseSocket: Socket? = null
-        var sslSocket: SSLSocket? = null
-        val deadlineMs = clockMs() + timeoutMs
+        val deadlineMs = clockMs() + timeoutMs.coerceAtLeast(1)
+        val poolKey = pool.poolKey(endpoint)
+        var forceFresh = false
 
-        try {
-            val raw = Socket()
-            baseSocket = raw
-            activeSockets.add(raw)
-            raw.tcpNoDelay = true
+        while (true) {
+            val borrowed = pool.borrowOrPrepareHandle(poolKey, clockMs(), forceFresh)
+            val wasReused = borrowed.conn != null
+            var conn: DohSocketConnection? = borrowed.conn
+            val generation = borrowed.generation
+            val handle = borrowed.handle
+            var keepAlive = false
+
             try {
-                raw.bind(null)
-            } catch (_: Exception) {
-                // Best-effort pre-protect bind; some OEMs do not require explicit bind before protect()
-            }
-            if (!vpnService.protect(raw)) {
-                throw IOException("VpnService.protect() failed for DoH socket to ${endpoint.ip}")
-            }
+                val activeConn = conn ?: openConnection(endpoint, deadlineMs, handle).also {
+                    conn = it
+                }
 
-            val resolvedIp = try {
-                InetAddress.getByName(endpoint.ip)
-            } catch (_: Exception) {
-                null
-            }
-            val connectTimeout = (deadlineMs - clockMs()).toInt().coerceIn(100, timeoutMs)
-            raw.soTimeout = connectTimeout
-            val targetAddr = if (resolvedIp != null) {
-                InetSocketAddress(resolvedIp, DOH_PORT)
-            } else {
-                InetSocketAddress(endpoint.ip, DOH_PORT)
-            }
-            raw.connect(targetAddr, connectTimeout)
+                val remainingBeforeExchange = (deadlineMs - clockMs()).toInt()
+                if (remainingBeforeExchange <= 0) {
+                    throw SocketTimeoutException("DoH deadline exceeded before exchange")
+                }
+                activeConn.setReadTimeout(remainingBeforeExchange)
 
-            val sslFactory = SSLSocketFactory.getDefault() as? SSLSocketFactory
-                ?: throw IOException("Default SSLSocketFactory unavailable")
-            val wrapped = sslFactory.createSocket(raw, endpoint.host, DOH_PORT, true) as? SSLSocket
-                ?: throw IOException("Failed to wrap socket with SSLSocket")
-            sslSocket = wrapped
-            activeSockets.add(wrapped)
+                val requestHeader = "POST ${endpoint.path} HTTP/1.1\r\n" +
+                    "Host: ${endpoint.host}\r\n" +
+                    "User-Agent: AntiPorn-DoH\r\n" +
+                    "Accept: application/dns-message\r\n" +
+                    "Content-Type: application/dns-message\r\n" +
+                    "Content-Length: ${rawPayload.size}\r\n" +
+                    "Connection: keep-alive\r\n\r\n"
 
-            val sslParams = wrapped.sslParameters
-            sslParams.serverNames = listOf(SNIHostName(endpoint.host))
-            sslParams.endpointIdentificationAlgorithm = "HTTPS"
-            wrapped.sslParameters = sslParams
+                activeConn.outStream.write(requestHeader.toByteArray(Charsets.US_ASCII))
+                activeConn.outStream.write(rawPayload)
+                activeConn.outStream.flush()
 
-            val handshakeTimeout = (deadlineMs - clockMs()).toInt().coerceIn(100, timeoutMs)
-            wrapped.soTimeout = handshakeTimeout
+                val statusLine = readLineAscii(activeConn.ssl, activeConn.inStream, deadlineMs)
+                    ?: throw EOFException("Empty HTTP response from DoH server")
+                val statusParts = statusLine.split(" ")
+                if (statusParts.size < 2 || statusParts[1] != "200") {
+                    throw IOException("DoH server returned non-200 HTTP status: $statusLine")
+                }
 
-            val handshakeDeadlineTask = handshakeWatchdog.schedule(
-                {
-                    closeQuietly(wrapped)
-                    closeQuietly(raw)
-                },
-                handshakeTimeout.toLong(),
-                TimeUnit.MILLISECONDS
-            )
-            try {
-                wrapped.startHandshake()
-            } finally {
-                handshakeDeadlineTask.cancel(false)
-            }
-
-            if (!HttpsURLConnection.getDefaultHostnameVerifier().verify(endpoint.host, wrapped.session)) {
-                throw IOException("TLS certificate hostname verification failed for ${endpoint.host}")
-            }
-
-            wrapped.soTimeout = (deadlineMs - clockMs()).toInt().coerceAtLeast(1)
-
-            val outStream = DataOutputStream(wrapped.outputStream)
-            val inStream = DataInputStream(wrapped.inputStream)
-
-            val requestHeader = "POST ${endpoint.path} HTTP/1.1\r\n" +
-                "Host: ${endpoint.host}\r\n" +
-                "User-Agent: AntiPorn-DoH\r\n" +
-                "Accept: application/dns-message\r\n" +
-                "Content-Type: application/dns-message\r\n" +
-                "Content-Length: ${rawPayload.size}\r\n" +
-                "Connection: close\r\n\r\n"
-
-            outStream.write(requestHeader.toByteArray(Charsets.US_ASCII))
-            outStream.write(rawPayload)
-            outStream.flush()
-
-            val statusLine = readLineAscii(wrapped, inStream, deadlineMs)
-                ?: throw IOException("Empty HTTP response from DoH server")
-            val statusParts = statusLine.split(" ")
-            if (statusParts.size < 2 || statusParts[1] != "200") {
-                throw IOException("DoH server returned non-200 HTTP status: $statusLine")
-            }
-
-            var contentLength = -1
-            var isChunked = false
-            while (true) {
-                val headerLine = readLineAscii(wrapped, inStream, deadlineMs) ?: break
-                if (headerLine.isEmpty()) break
-                val colonIdx = headerLine.indexOf(':')
-                if (colonIdx > 0) {
-                    val name = headerLine.substring(0, colonIdx).trim().lowercase()
-                    val value = headerLine.substring(colonIdx + 1).trim()
-                    when (name) {
-                        "content-length" -> contentLength = value.toIntOrNull() ?: -1
-                        "transfer-encoding" -> isChunked = value.contains("chunked", ignoreCase = true)
+                var contentLength: Int? = null
+                var invalidContentLength = false
+                var isChunked = false
+                var serverRequestedClose = false
+                while (true) {
+                    val headerLine = readLineAscii(activeConn.ssl, activeConn.inStream, deadlineMs)
+                        ?: throw EOFException("Unexpected EOF reading DoH HTTP headers")
+                    if (headerLine.isEmpty()) break
+                    val colonIdx = headerLine.indexOf(':')
+                    if (colonIdx > 0) {
+                        val name = headerLine.substring(0, colonIdx).trim().lowercase()
+                        val value = headerLine.substring(colonIdx + 1).trim()
+                        when (name) {
+                            "content-length" -> {
+                                val parsed = value.toIntOrNull()
+                                if (parsed == null || parsed < 0 || (contentLength != null && contentLength != parsed)) {
+                                    invalidContentLength = true
+                                } else {
+                                    contentLength = parsed
+                                }
+                            }
+                            "transfer-encoding" -> isChunked = value.contains("chunked", ignoreCase = true)
+                            "connection" -> if (value.contains("close", ignoreCase = true)) {
+                                serverRequestedClose = true
+                            }
+                        }
                     }
                 }
-            }
-
-            val responseBody = when {
-                contentLength in 0..MAX_DOH_RESPONSE_BYTES -> {
-                    val buf = ByteArray(contentLength)
-                    readFullyWithDeadline(wrapped, inStream, buf, deadlineMs)
-                    buf
+                if (invalidContentLength) {
+                    throw IOException("Invalid DoH Content-Length header")
                 }
-                isChunked -> readChunkedBody(wrapped, inStream, deadlineMs)
-                contentLength > MAX_DOH_RESPONSE_BYTES -> {
-                    throw IOException("DoH response body too large: $contentLength bytes")
+                if (isChunked && contentLength != null) {
+                    throw IOException("Ambiguous DoH response framing (chunked + Content-Length)")
                 }
-                else -> readBodyUntilEof(wrapped, inStream, deadlineMs)
-            }
 
-            if (responseBody.size < DnsPacketParser.DNS_HEADER_LEN) {
-                throw IOException("DoH response body too short: ${responseBody.size} bytes")
-            }
-            if (!DnsWireValidator.isValidDnsResponse(responseBody, responseBody.size, rawPayload)) {
-                throw IOException("DoH response failed wire validation for ${endpoint.host}")
-            }
-            return responseBody
-        } finally {
-            sslSocket?.let {
-                activeSockets.remove(it)
-                closeQuietly(it)
-            }
-            baseSocket?.let {
-                activeSockets.remove(it)
-                closeQuietly(it)
+                var streamFramingAllowsReuse = true
+                val cl = contentLength
+                val responseBody = when {
+                    isChunked -> readChunkedBody(activeConn.ssl, activeConn.inStream, deadlineMs)
+                    cl != null && cl > MAX_DOH_RESPONSE_BYTES -> {
+                        throw IOException("DoH response body too large: $cl bytes")
+                    }
+                    cl != null -> {
+                        val buf = ByteArray(cl)
+                        readFullyWithDeadline(activeConn.ssl, activeConn.inStream, buf, deadlineMs)
+                        buf
+                    }
+                    else -> {
+                        streamFramingAllowsReuse = false
+                        readBodyUntilEof(activeConn.ssl, activeConn.inStream, deadlineMs)
+                    }
+                }
+
+                if (responseBody.size < DnsPacketParser.DNS_HEADER_LEN) {
+                    throw IOException("DoH response body too short: ${responseBody.size} bytes")
+                }
+                if (!DnsWireValidator.isValidDnsResponse(responseBody, responseBody.size, rawPayload)) {
+                    throw IOException("DoH response failed wire validation for ${endpoint.host}")
+                }
+                keepAlive = streamFramingAllowsReuse && !serverRequestedClose
+                return responseBody
+            } catch (e: IOException) {
+                val isCurrentGen = generation == pool.currentGeneration()
+                val remainingAfterError = deadlineMs - clockMs()
+                if (isCurrentGen && wasReused && !forceFresh && remainingAfterError >= MIN_RETRY_BUDGET_MS) {
+                    forceFresh = true
+                } else {
+                    throw e
+                }
+            } finally {
+                pool.releaseConnection(poolKey, conn, generation, handle, keepAlive)
             }
         }
+    }
+
+    private fun openConnection(
+        endpoint: DohUpstreamClient.DohEndpoint,
+        deadlineMs: Long,
+        activeHandle: ActiveHandle
+    ): DohSocketConnection {
+        val customFactory = connectionFactoryProvider?.invoke()
+        if (customFactory != null) {
+            val remaining = (deadlineMs - clockMs()).toInt()
+            if (remaining <= 0) {
+                throw SocketTimeoutException("DoH deadline exceeded before connect")
+            }
+            val customConn = customFactory.invoke(endpoint, remaining)
+            if (!activeHandle.attach(customConn)) {
+                throw IOException("DoH connection invalidated by network change")
+            }
+            return customConn
+        }
+        return openProductionConnection(endpoint, deadlineMs, activeHandle)
+    }
+
+    private fun openProductionConnection(
+        endpoint: DohUpstreamClient.DohEndpoint,
+        deadlineMs: Long,
+        activeHandle: ActiveHandle
+    ): DohSocketConnection {
+        val connectTimeout = (deadlineMs - clockMs()).toInt()
+        if (connectTimeout <= 0) {
+            throw SocketTimeoutException("DoH deadline exceeded before connect")
+        }
+
+        val raw = Socket()
+        if (!activeHandle.attach(raw)) {
+            throw IOException("DoH TCP socket invalidated before connect")
+        }
+        raw.tcpNoDelay = true
+        try {
+            raw.bind(null)
+        } catch (_: Exception) {
+            // Best-effort pre-protect bind; some OEMs do not require explicit bind before protect()
+        }
+        if (!vpnService.protect(raw)) {
+            throw IOException("VpnService.protect() failed for DoH socket to ${endpoint.ip}")
+        }
+
+        val resolvedIp = try {
+            InetAddress.getByName(endpoint.ip)
+        } catch (e: Exception) {
+            timber.log.Timber.tag(TAG).d(e, "Failed parsing endpoint IP ${endpoint.ip}; falling back to InetSocketAddress(host, port)")
+            null
+        }
+        raw.soTimeout = connectTimeout
+        val targetAddr = if (resolvedIp != null) {
+            InetSocketAddress(resolvedIp, DOH_PORT)
+        } else {
+            InetSocketAddress(endpoint.ip, DOH_PORT)
+        }
+        raw.connect(targetAddr, connectTimeout)
+
+        val sslFactory = SSLSocketFactory.getDefault() as? SSLSocketFactory
+            ?: throw IOException("Default SSLSocketFactory unavailable")
+        val wrapped = sslFactory.createSocket(raw, endpoint.host, DOH_PORT, true) as? SSLSocket
+            ?: throw IOException("Failed to wrap socket with SSLSocket")
+        if (!activeHandle.attach(wrapped)) {
+            throw IOException("DoH TLS socket invalidated before handshake")
+        }
+
+        val sslParams = wrapped.sslParameters
+        sslParams.serverNames = listOf(SNIHostName(endpoint.host))
+        sslParams.endpointIdentificationAlgorithm = "HTTPS"
+        wrapped.sslParameters = sslParams
+
+        val handshakeTimeout = (deadlineMs - clockMs()).toInt()
+        if (handshakeTimeout <= 0) {
+            throw SocketTimeoutException("DoH deadline exceeded before TLS handshake")
+        }
+        wrapped.soTimeout = handshakeTimeout
+
+        val handshakeDeadlineTask = handshakeWatchdog.schedule(
+            {
+                closeQuietly(wrapped)
+                closeQuietly(raw)
+            },
+            handshakeTimeout.toLong(),
+            TimeUnit.MILLISECONDS
+        )
+        try {
+            wrapped.startHandshake()
+        } finally {
+            handshakeDeadlineTask.cancel(false)
+        }
+
+        if (!HttpsURLConnection.getDefaultHostnameVerifier().verify(endpoint.host, wrapped.session)) {
+            throw IOException("TLS certificate hostname verification failed for ${endpoint.host}")
+        }
+
+        return DohSocketConnection(
+            raw = raw,
+            ssl = wrapped,
+            outStream = DataOutputStream(wrapped.outputStream),
+            inStream = DataInputStream(wrapped.inputStream)
+        )
     }
 
     private fun readLineAscii(socket: SSLSocket, inStream: DataInputStream, deadlineMs: Long): String? {
@@ -177,7 +264,7 @@ internal class DohHttpWireExchange(
         while (sb.length < MAX_HTTP_HEADER_BYTES) {
             val remaining = (deadlineMs - clockMs()).toInt()
             if (remaining <= 0) throw SocketTimeoutException("DoH header read deadline exceeded")
-            socket.soTimeout = remaining.coerceAtLeast(1)
+            setSoTimeoutQuietly(socket, remaining)
             val b = inStream.read()
             if (b == -1) {
                 return if (sb.isEmpty()) null else sb.toString()
@@ -198,17 +285,28 @@ internal class DohHttpWireExchange(
                 ?: throw EOFException("Unexpected EOF reading chunk length")
             val cleanHex = hexLenStr.substringBefore(';').trim()
             val chunkSize = cleanHex.toIntOrNull(16) ?: throw IOException("Invalid chunk length: $hexLenStr")
-            if (chunkSize <= 0) {
-                readLineAscii(socket, inStream, deadlineMs)
+            if (chunkSize < 0) {
+                throw IOException("Negative chunk length: $chunkSize")
+            }
+            if (chunkSize == 0) {
+                while (true) {
+                    val trailerLine = readLineAscii(socket, inStream, deadlineMs)
+                        ?: throw EOFException("Unexpected EOF reading chunked trailers")
+                    if (trailerLine.isEmpty()) break
+                }
                 break
             }
-            if (out.size() + chunkSize > MAX_DOH_RESPONSE_BYTES) {
+            if (chunkSize > MAX_DOH_RESPONSE_BYTES - out.size()) {
                 throw IOException("Chunked DoH body exceeded maximum size")
             }
             val chunkBuf = ByteArray(chunkSize)
             readFullyWithDeadline(socket, inStream, chunkBuf, deadlineMs)
             out.write(chunkBuf)
-            readLineAscii(socket, inStream, deadlineMs)
+            val chunkTerminator = readLineAscii(socket, inStream, deadlineMs)
+                ?: throw EOFException("Unexpected EOF after chunk payload")
+            if (chunkTerminator.isNotEmpty()) {
+                throw IOException("Malformed chunk terminator")
+            }
         }
         return out.toByteArray()
     }
@@ -219,7 +317,7 @@ internal class DohHttpWireExchange(
         while (true) {
             val remaining = (deadlineMs - clockMs()).toInt()
             if (remaining <= 0) throw SocketTimeoutException("DoH response read deadline exceeded")
-            socket.soTimeout = remaining.coerceAtLeast(1)
+            setSoTimeoutQuietly(socket, remaining)
             val count = inStream.read(buf)
             if (count == -1) break
             if (out.size() + count > MAX_DOH_RESPONSE_BYTES) {
@@ -235,10 +333,17 @@ internal class DohHttpWireExchange(
         while (offset < dst.size) {
             val remaining = (deadlineMs - clockMs()).toInt()
             if (remaining <= 0) throw SocketTimeoutException("DoH body read deadline exceeded")
-            socket.soTimeout = remaining.coerceAtLeast(1)
+            setSoTimeoutQuietly(socket, remaining)
             val n = inStream.read(dst, offset, dst.size - offset)
             if (n == -1) throw EOFException("Unexpected EOF reading DoH body")
             offset += n
+        }
+    }
+
+    private fun setSoTimeoutQuietly(socket: SSLSocket, timeoutMs: Int) {
+        try {
+            socket.soTimeout = timeoutMs.coerceAtLeast(1)
+        } catch (_: Exception) {
         }
     }
 

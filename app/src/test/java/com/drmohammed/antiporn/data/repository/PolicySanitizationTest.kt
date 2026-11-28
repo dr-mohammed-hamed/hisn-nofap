@@ -88,6 +88,7 @@ class PolicySanitizationTest {
             dnsHost = DevicePolicyBundle.ADGUARD_FAMILY_DNS_HOST,
             isYouTubeRestrictedModeEnabled = true,
             isAdBlockingEnabled = true,
+            isLocalVpnFallbackEnabled = true,
             isTelegramWebBlocked = true,
             isIncognitoBlocked = true,
             isBlockExternalVpnEnabled = true
@@ -101,6 +102,7 @@ class PolicySanitizationTest {
             dnsHost = "8.8.8.8",
             isYouTubeRestrictedModeEnabled = false,
             isAdBlockingEnabled = false,
+            isLocalVpnFallbackEnabled = false,
             isTelegramWebBlocked = false,
             isIncognitoBlocked = false,
             isBlockExternalVpnEnabled = false
@@ -115,6 +117,7 @@ class PolicySanitizationTest {
         assertEquals(current.dnsHost, sanitized.dnsHost)
         assertEquals(current.isYouTubeRestrictedModeEnabled, sanitized.isYouTubeRestrictedModeEnabled)
         assertEquals(current.isAdBlockingEnabled, sanitized.isAdBlockingEnabled)
+        assertTrue(sanitized.isLocalVpnFallbackEnabled)
         assertEquals(current.isTelegramWebBlocked, sanitized.isTelegramWebBlocked)
         assertEquals(current.isIncognitoBlocked, sanitized.isIncognitoBlocked)
         assertTrue(sanitized.isBlockExternalVpnEnabled)
@@ -131,12 +134,14 @@ class PolicySanitizationTest {
 
         val updated = current.copy(
             isBlockExternalVpnEnabled = false,
+            isLocalVpnFallbackEnabled = true,
             dnsHost = DevicePolicyBundle.ADGUARD_FAMILY_DNS_HOST
         )
 
         val sanitized = repository.sanitizeSupervisedSelfPolicy(updated, current)
 
         assertFalse(sanitized.isBlockExternalVpnEnabled)
+        assertTrue(sanitized.isLocalVpnFallbackEnabled)
         assertEquals(DevicePolicyBundle.ADGUARD_FAMILY_DNS_HOST, sanitized.dnsHost)
     }
 
@@ -259,6 +264,40 @@ class PolicySanitizationTest {
         assertFalse(saved.isClearAppDataAllowed)
         assertEquals("Asia/Riyadh", saved.timeZoneId)
         assertTrue(saved.isInstantInternetKillEnabled)
+    }
+
+    @Test
+    fun `approveLocalVpnFallbackLocally enables fallback even when supervised with selfControlWebAllowed false and preserves restrictions`() = runBlocking {
+        val initial = DevicePolicyBundle.defaultPolicy().copy(
+            isSupervised = true,
+            guardianUid = "guardian-1",
+            guardianName = "Parent",
+            isSelfControlAllowed = false,
+            selfControlWebAllowed = false,
+            isBlockExternalVpnEnabled = true,
+            isLocalVpnFallbackEnabled = false,
+            dnsHost = DevicePolicyBundle.ADGUARD_FAMILY_DNS_HOST,
+            version = 7L,
+            updatedAt = 1_780_000_000_000L
+        )
+        repository.updateLocalPolicyWithoutEnforcing(initial)
+
+        val approved = repository.approveLocalVpnFallbackLocally()
+
+        assertNotNull(approved)
+        assertTrue(approved!!.isLocalVpnFallbackEnabled)
+        assertEquals(8L, approved.version)
+        assertEquals(1_790_000_000_000L, approved.updatedAt)
+        assertTrue(approved.isSupervised)
+        assertFalse(approved.isSelfControlAllowed)
+        assertFalse(approved.selfControlWebAllowed)
+        assertTrue(approved.isBlockExternalVpnEnabled)
+        assertEquals(DevicePolicyBundle.ADGUARD_FAMILY_DNS_HOST, approved.dnsHost)
+        assertTrue(repository.getCurrentPolicy().isLocalVpnFallbackEnabled)
+
+        val idempotent = repository.approveLocalVpnFallbackLocally()
+        assertEquals(approved, idempotent)
+        assertEquals(8L, idempotent!!.version)
     }
 
     @Test

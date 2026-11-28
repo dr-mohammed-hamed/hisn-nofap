@@ -517,4 +517,68 @@ class CurfewHardeningTest {
             com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard.resetForTest()
         }
     }
+
+    @Test
+    fun testCurfewLifecycleSupport_isVpnReconcileNeeded_skipsDaytimeStartAndReleasesBlackhole() {
+        assertFalse(
+            "Daytime DNS_FILTERING_ONLY without active tunnel must not trigger curfew release reconcile",
+            CurfewLifecycleSupport.isVpnReconcileNeeded(
+                instantKill = false,
+                requiredMode = CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY,
+                isServiceOrTunnelActive = false,
+                currentMode = CurfewBlackholeVpnService.VpnMode.IDLE
+            )
+        )
+        assertFalse(
+            "Already running daytime DNS_FILTERING_ONLY must not trigger release reconcile",
+            CurfewLifecycleSupport.isVpnReconcileNeeded(
+                instantKill = false,
+                requiredMode = CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY,
+                isServiceOrTunnelActive = true,
+                currentMode = CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY
+            )
+        )
+        assertTrue(
+            "Active CURFEW_BLACKHOLE must trigger release reconcile when downgrading to DNS_FILTERING_ONLY",
+            CurfewLifecycleSupport.isVpnReconcileNeeded(
+                instantKill = false,
+                requiredMode = CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY,
+                isServiceOrTunnelActive = true,
+                currentMode = CurfewBlackholeVpnService.VpnMode.CURFEW_BLACKHOLE
+            )
+        )
+        assertTrue(
+            "Active tunnel must trigger release reconcile when requiredMode is IDLE",
+            CurfewLifecycleSupport.isVpnReconcileNeeded(
+                instantKill = false,
+                requiredMode = CurfewBlackholeVpnService.VpnMode.IDLE,
+                isServiceOrTunnelActive = true,
+                currentMode = CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY
+            )
+        )
+        assertFalse(
+            "Inactive tunnel with requiredMode=IDLE needs no reconcile",
+            CurfewLifecycleSupport.isVpnReconcileNeeded(
+                instantKill = false,
+                requiredMode = CurfewBlackholeVpnService.VpnMode.IDLE,
+                isServiceOrTunnelActive = false,
+                currentMode = CurfewBlackholeVpnService.VpnMode.IDLE
+            )
+        )
+        assertFalse(
+            "Instant kill active must skip release reconcile",
+            CurfewLifecycleSupport.isVpnReconcileNeeded(
+                instantKill = true,
+                requiredMode = CurfewBlackholeVpnService.VpnMode.IDLE,
+                isServiceOrTunnelActive = true,
+                currentMode = CurfewBlackholeVpnService.VpnMode.CURFEW_BLACKHOLE
+            )
+        )
+    }
+
+    @Test
+    fun testCurfewVpnTunnelHandler_shouldConfigureIpv6Tunnel() {
+        assertFalse(CurfewVpnTunnelHandler.shouldConfigureIpv6Tunnel(false))
+        assertTrue(CurfewVpnTunnelHandler.shouldConfigureIpv6Tunnel(true))
+    }
 }

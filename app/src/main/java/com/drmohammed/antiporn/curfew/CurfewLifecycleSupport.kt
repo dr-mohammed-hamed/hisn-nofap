@@ -187,13 +187,17 @@ internal object CurfewLifecycleSupport {
 
     fun isVpnReconcileNeeded(
         instantKill: Boolean,
-        requiredMode: CurfewBlackholeVpnService.VpnMode
-    ): Boolean = when {
-        instantKill -> false
-        requiredMode == CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY ->
-            !CurfewBlackholeVpnService.isServiceOrTunnelActive() ||
-                CurfewBlackholeVpnService.currentMode != CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY
-        else -> CurfewBlackholeVpnService.isServiceOrTunnelActive()
+        requiredMode: CurfewBlackholeVpnService.VpnMode,
+        isServiceOrTunnelActive: Boolean = CurfewBlackholeVpnService.isServiceOrTunnelActive(),
+        currentMode: CurfewBlackholeVpnService.VpnMode = CurfewBlackholeVpnService.currentMode
+    ): Boolean {
+        if (instantKill || !isServiceOrTunnelActive) return false
+        return when (requiredMode) {
+            CurfewBlackholeVpnService.VpnMode.IDLE -> true
+            CurfewBlackholeVpnService.VpnMode.DNS_FILTERING_ONLY ->
+                currentMode == CurfewBlackholeVpnService.VpnMode.CURFEW_BLACKHOLE
+            CurfewBlackholeVpnService.VpnMode.CURFEW_BLACKHOLE -> false
+        }
     }
 
     fun isAlwaysOnUpdateNeeded(

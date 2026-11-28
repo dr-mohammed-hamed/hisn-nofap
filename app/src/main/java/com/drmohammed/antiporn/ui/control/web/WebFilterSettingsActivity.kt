@@ -45,7 +45,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
     private val viewModel: WebFilterViewModel by viewModel()
     private lateinit var binding: ActivityWebFilterSettingsBinding
 
-    private enum class VpnConsentSource { FULL_SYSTEM, AD_BLOCKING }
+    private enum class VpnConsentSource { FULL_SYSTEM, AD_BLOCKING, LOCAL_VPN_FALLBACK, EXTERNAL_VPN_ALLOW }
 
     private var isProgrammaticUiUpdate = false
     private var pendingVpnConsentSource: VpnConsentSource? = null
@@ -56,18 +56,30 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         pendingVpnConsentSource = null
         if (isFinishing || isDestroyed || viewModel.uiState.value.isRemote) return@registerForActivityResult
         val granted = runCatching { VpnService.prepare(this) == null }.getOrDefault(false)
-        if (source == VpnConsentSource.FULL_SYSTEM) {
-            viewModel.setFullSystemFiltering(granted)
-            if (granted) {
-                val updated = viewModel.uiState.value
-                if (updated.isWhitelistOnlyMode) {
-                    showAlert(getString(R.string.dialog_whitelist_full_system_warning_title), getString(R.string.dialog_whitelist_full_system_warning_msg))
-                } else if (!updated.isBlockExternalVpn) {
-                    showAlert(getString(R.string.dialog_external_vpn_coexistence_title), getString(R.string.dialog_external_vpn_coexistence_msg))
+        when (source) {
+            VpnConsentSource.FULL_SYSTEM -> {
+                viewModel.setFullSystemFiltering(granted)
+                if (granted) {
+                    val updated = viewModel.uiState.value
+                    if (updated.isWhitelistOnlyMode) {
+                        showAlert(getString(R.string.dialog_whitelist_full_system_warning_title), getString(R.string.dialog_whitelist_full_system_warning_msg))
+                    } else if (!updated.isBlockExternalVpn) {
+                        showAlert(getString(R.string.dialog_external_vpn_coexistence_title), getString(R.string.dialog_external_vpn_coexistence_msg))
+                    }
                 }
             }
-        } else {
-            viewModel.setAdBlocking(granted)
+            VpnConsentSource.AD_BLOCKING -> viewModel.setAdBlocking(granted)
+            VpnConsentSource.LOCAL_VPN_FALLBACK -> viewModel.setLocalVpnFallbackEnabled(granted)
+            VpnConsentSource.EXTERNAL_VPN_ALLOW -> {
+                if (granted) {
+                    viewModel.setBlockExternalVpn(false)
+                    if (viewModel.uiState.value.isFullSystemFiltering) {
+                        showAlert(getString(R.string.dialog_external_vpn_coexistence_title), getString(R.string.dialog_external_vpn_coexistence_msg))
+                    }
+                } else {
+                    viewModel.setBlockExternalVpn(true)
+                }
+            }
         }
         if (!granted) Toast.makeText(this, R.string.vpn_permission_denied_msg, Toast.LENGTH_SHORT).show()
     }
@@ -169,9 +181,22 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         btnChangeDns.setOnClickListener(openDnsPicker)
         switchBlockExternalVpn.setOnCheckedChangeListener { _, isChecked ->
             if (isProgrammaticUiUpdate) return@setOnCheckedChangeListener
-            viewModel.setBlockExternalVpn(isChecked)
-            if (!isChecked && viewModel.uiState.value.isFullSystemFiltering) {
-                showAlert(getString(R.string.dialog_external_vpn_coexistence_title), getString(R.string.dialog_external_vpn_coexistence_msg))
+            val state = viewModel.uiState.value
+            if (!isChecked) {
+                val needsLocalVpnConsentCheck = !state.isRemote &&
+                    (state.isFullSystemFiltering || state.isAdBlocking || state.isLocalVpnFallbackEnabled)
+                if (needsLocalVpnConsentCheck && !ensureVpnConsentOrPrompt(VpnConsentSource.EXTERNAL_VPN_ALLOW)) {
+                    isProgrammaticUiUpdate = true
+                    switchBlockExternalVpn.isChecked = true
+                    isProgrammaticUiUpdate = false
+                    return@setOnCheckedChangeListener
+                }
+                viewModel.setBlockExternalVpn(false)
+                if (state.isFullSystemFiltering) {
+                    showAlert(getString(R.string.dialog_external_vpn_coexistence_title), getString(R.string.dialog_external_vpn_coexistence_msg))
+                }
+            } else {
+                viewModel.setBlockExternalVpn(true)
             }
         }
         switchBlockIncognito.setOnCheckedChangeListener { _, c -> if (!isProgrammaticUiUpdate) viewModel.setIncognitoBlocked(c) }
@@ -207,6 +232,14 @@ class WebFilterSettingsActivity : AppCompatActivity() {
                 return@setOnCheckedChangeListener
             }
             viewModel.setAdBlocking(isChecked)
+        }
+        switchLocalVpnFallback.setOnCheckedChangeListener { _, isChecked ->
+            if (isProgrammaticUiUpdate) return@setOnCheckedChangeListener
+            if (isChecked && !viewModel.uiState.value.isRemote && !ensureVpnConsentOrPrompt(VpnConsentSource.LOCAL_VPN_FALLBACK)) {
+                resetSwitchUnchecked(switchLocalVpnFallback)
+                return@setOnCheckedChangeListener
+            }
+            viewModel.setLocalVpnFallbackEnabled(isChecked)
         }
         btnResolveSecondaryProfile.setOnClickListener { if (!viewModel.uiState.value.isRemote) openSelectiveProfileResolutionFromWebFilter() }
         btnSaveWebFilterChanges.setOnClickListener { viewModel.saveChanges() }
@@ -245,6 +278,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         switchYouTubeRestricted.isChecked = state.isYouTubeRestricted
         switchFullSystemFilter.isChecked = state.isFullSystemFiltering
         switchBlockAds.isChecked = state.isAdBlocking
+        switchLocalVpnFallback.isChecked = state.isLocalVpnFallbackEnabled
         toggleGroupSiteMode.check(if (state.isWhitelistOnlyMode) R.id.btnModeWhitelist else R.id.btnModeBlocklist)
         isProgrammaticUiUpdate = false
 
@@ -263,7 +297,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
             layoutDnsSummaryRow, btnChangeDns, switchBlockExternalVpn, switchBlockIncognito,
             switchBlockTelegramWeb, switchYouTubeRestricted, btnModeBlocklist, btnModeWhitelist,
             btnManageWebsites, btnDisableFullSystemFromWarning, switchFullSystemFilter,
-            switchBlockAds, btnResolveSecondaryProfile
+            switchBlockAds, switchLocalVpnFallback, btnResolveSecondaryProfile
         ).forEach { it.isEnabled = !state.isSaving }
     }
 
@@ -304,7 +338,7 @@ class WebFilterSettingsActivity : AppCompatActivity() {
     }
 
     private fun ensureVpnConsentOrPrompt(source: VpnConsentSource): Boolean {
-        if (SafeDpmGateway.isDeviceOwner(this)) return true
+        if (SafeDpmGateway.isDeviceOwner(this) && viewModel.uiState.value.isBlockExternalVpn) return true
         if (pendingVpnConsentSource != null) return false
         val prepareIntent = runCatching { VpnService.prepare(this) }.getOrElse {
             Toast.makeText(this, R.string.vpn_permission_denied_msg, Toast.LENGTH_SHORT).show()

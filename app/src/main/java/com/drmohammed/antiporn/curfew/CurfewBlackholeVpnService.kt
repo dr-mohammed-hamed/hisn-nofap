@@ -4,16 +4,21 @@ import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
+import android.os.Process
 import android.os.SystemClock
 import androidx.annotation.VisibleForTesting
 import com.drmohammed.antiporn.core.engine.ProtectionTransitionGuard
 import com.drmohammed.antiporn.core.model.DevicePolicyBundle
+import com.drmohammed.antiporn.core.network.PhysicalNetworkResolver
 import com.drmohammed.antiporn.core.network.dns.BinaryDomainFilter
 import com.drmohammed.antiporn.core.network.dns.DnsPacketParser
+import com.drmohammed.antiporn.core.network.dns.DnsResilienceManager
 import com.drmohammed.antiporn.core.network.dns.DnsTunnelWorker
 import com.drmohammed.antiporn.core.network.dns.DnsUpstreamForwarder
 import com.drmohammed.antiporn.curfew.notification.ProtectionNotificationCoordinator
@@ -86,6 +91,27 @@ class CurfewBlackholeVpnService : VpnService() {
         onFlush = { reason ->
             dnsForwarder?.onNetworkChanged()
             Timber.tag(TAG).i("Flushed DNS cache, DoT pool & circuit breaker on network change ($reason)")
+            val appContext = applicationContext ?: this@CurfewBlackholeVpnService
+            if (currentMode == VpnMode.DNS_FILTERING_ONLY &&
+                vpnInterface != null &&
+                !isServiceDestroyed &&
+                !isServiceRevoked
+            ) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
+                    try {
+                        PhysicalNetworkResolver.resolveActivePhysicalNetwork(appContext)?.let { activeNet ->
+                            setUnderlyingNetworks(arrayOf(activeNet))
+                        }
+                    } catch (e: Exception) {
+                        Timber.tag(TAG).w(e, "Failed updating underlying networks on network change")
+                    }
+                }
+                val hasIpv6 = PhysicalNetworkResolver.detectActivePhysicalLinkFamilies(appContext).hasIpv6
+                if (lastAppliedHasIpv6 != null && hasIpv6 != lastAppliedHasIpv6) {
+                    Timber.tag(TAG).i("Physical IPv6 link family changed ($lastAppliedHasIpv6 -> $hasIpv6); rebuilding DNS tunnel")
+                    commandChannel.trySend(VpnCommand.StartOrUpdate(forceRebuild = true))
+                }
+            }
         }
     )
 
@@ -109,6 +135,12 @@ class CurfewBlackholeVpnService : VpnService() {
 
     @Volatile
     private var lastBypassedPackages: Set<String>? = null
+
+    @Volatile
+    private var lastAppliedHasIpv6: Boolean? = null
+
+    @Volatile
+    private var lastCachePolicySignature: String? = null
 
     private var dnsForwarder: DnsUpstreamForwarder? = null
     private var dnsTunnelWorker: DnsTunnelWorker? = null
@@ -307,8 +339,11 @@ class CurfewBlackholeVpnService : VpnService() {
                         return@withLock
                     }
                 } else if (dnsWorkerJob?.isActive == true) {
-                    CurfewVpnStateCoordinator.completeTunnelWaiters(true)
-                    return@withLock
+                    val currentHasIpv6 = PhysicalNetworkResolver.detectActivePhysicalLinkFamilies(appContext).hasIpv6
+                    if (lastAppliedHasIpv6 == currentHasIpv6) {
+                        CurfewVpnStateCoordinator.completeTunnelWaiters(true)
+                        return@withLock
+                    }
                 }
             }
 
@@ -354,6 +389,7 @@ class CurfewBlackholeVpnService : VpnService() {
                     pendingVpnInterface = null
                     currentMode = targetMode
                     lastBypassedPackages = tunnelConfig.appliedBypassedPackages
+                    lastAppliedHasIpv6 = tunnelConfig.hasIpv6
 
                     refreshBlockedUrlsCache()
                     if (targetMode == VpnMode.DNS_FILTERING_ONLY) {
@@ -435,13 +471,31 @@ class CurfewBlackholeVpnService : VpnService() {
         val appContext = applicationContext ?: this
         try {
             val policy = PolicyRepository.getInstance(appContext).getCurrentPolicy()
+            val newSig = buildCachePolicySignature(policy)
+            val shouldClearResponseCache = lastCachePolicySignature != null && lastCachePolicySignature != newSig
             activePolicy = policy
             compiledBlockedDomainsCache = DnsPacketParser.compileEffectiveBlockedDomains(policy.customBlockedUrls)
             dnsForwarder?.setCustomDnsHost(policy.dnsHost)
-            dnsForwarder?.clearResponseCache()
+            if (shouldClearResponseCache) {
+                dnsForwarder?.clearResponseCache()
+            }
+            lastCachePolicySignature = newSig
         } catch (e: Exception) {
             Timber.tag(TAG).w(e, "Failed to refresh policy cache")
         }
+    }
+
+    private fun buildCachePolicySignature(policy: DevicePolicyBundle): String = buildString {
+        append(policy.dnsHost).append('\u0001')
+        policy.customBlockedUrls.sorted().forEach { append(it).append('\u0002') }
+        append('\u0001')
+        policy.customAllowedUrls.sorted().forEach { append(it).append('\u0002') }
+        append('\u0001')
+        append(policy.browserFilterMode).append('\u0001')
+        append(policy.isFullSystemFilteringEnabled).append('\u0001')
+        append(policy.isAdBlockingEnabled).append('\u0001')
+        append(policy.isTelegramWebBlocked).append('\u0001')
+        append(policy.isYouTubeRestrictedModeEnabled)
     }
 
     private suspend fun stopActiveIoLoop() {
@@ -568,6 +622,7 @@ class CurfewBlackholeVpnService : VpnService() {
     private fun stopVpnInternal(removeActiveRef: Boolean) {
         currentMode = VpnMode.IDLE
         lastBypassedPackages = null
+        lastAppliedHasIpv6 = null
         val ownedActive = synchronized(CurfewVpnStateCoordinator.companionStateLock) {
             val isOwner = CurfewVpnStateCoordinator.activeService?.get() === this
             if (isOwner) {
@@ -654,6 +709,11 @@ class CurfewBlackholeVpnService : VpnService() {
                 if (ProtectionTransitionGuard.hasActiveTransitions() || !SafeDpmGateway.isDeviceOwner(appContext)) {
                     return@launch
                 }
+                if (wasRevoked && isExternalVpnCoexistenceActive(appContext)) {
+                    Timber.tag(TAG).i("External VPN coexistence revoke detected; skipping fail-closed DoT pre-arm")
+                    DnsResilienceManager.onExternalVpnCoexistenceRevoked(appContext)
+                    return@launch
+                }
                 if (CurfewVpnStateCoordinator.evaluateRequiredMode(appContext) != VpnMode.IDLE) {
                     if (wasRevoked || !CurfewVpnDnsBridge.isVpnConsentGranted(appContext)) {
                         ProtectionTransitionGuard.runInternalTransition {
@@ -676,6 +736,32 @@ class CurfewBlackholeVpnService : VpnService() {
                 throw e
             } catch (e: Exception) {
                 Timber.tag(TAG).w(e, "Error pre-arming Standalone DoT fail-closed on unexpected stop")
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun isExternalVpnCoexistenceActive(appContext: Context): Boolean {
+        if (CurfewVpnStateCoordinator.isBlackoutActive(appContext)) return false
+        val policy = try {
+            PolicyRepository.getInstance(appContext).getCurrentPolicy()
+        } catch (e: Exception) {
+            Timber.tag(TAG).d(e, "Failed reading current policy in isExternalVpnCoexistenceActive")
+            return false
+        }
+        if (policy.isBlockExternalVpnEnabled) return false
+        val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return false
+        val myUid = Process.myUid()
+        return cm.allNetworks.any { net ->
+            val caps = cm.getNetworkCapabilities(net) ?: return@any false
+            if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return@any false
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && caps.ownerUid >= 0) {
+                caps.ownerUid != myUid
+            } else {
+                val lp = cm.getLinkProperties(net)
+                val isHisnTun = lp?.linkAddresses?.any { it.address?.hostAddress == "10.255.255.1" } == true
+                !isHisnTun
             }
         }
     }
@@ -769,6 +855,9 @@ class CurfewBlackholeVpnService : VpnService() {
 
         fun evaluateRequiredMode(context: Context, fallbackOnFailure: VpnMode = currentMode): VpnMode =
             CurfewVpnStateCoordinator.evaluateRequiredMode(context, fallbackOnFailure)
+
+        fun isBlackoutActive(context: Context): Boolean =
+            CurfewVpnStateCoordinator.isBlackoutActive(context)
 
         fun syncPolicy(context: Context) =
             CurfewVpnStateCoordinator.syncPolicy(context)

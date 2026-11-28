@@ -140,8 +140,14 @@ internal class PolicyEnforcementHandler(
                 CurfewScheduler.scheduleNextAlarms(appContext)
                 CurfewConfig.setVpnBypassedPackages(appContext, bundle.curfewVpnBypassPackages)
                 CurfewEnforcer.syncBlockState(appContext)
-                if (bundle.dnsHost != effectivePreviousPolicy.dnsHost) {
+                val fallbackToggled = bundle.isLocalVpnFallbackEnabled != effectivePreviousPolicy.isLocalVpnFallbackEnabled
+                if (bundle.dnsHost != effectivePreviousPolicy.dnsHost ||
+                    (fallbackToggled && !bundle.isLocalVpnFallbackEnabled)
+                ) {
                     com.drmohammed.antiporn.core.network.dns.DnsResilienceManager.resetStateSync(appContext)
+                } else if (fallbackToggled && bundle.isLocalVpnFallbackEnabled) {
+                    com.drmohammed.antiporn.core.network.dns.DnsFallbackConsentNotifier.cancelNotification(appContext)
+                    com.drmohammed.antiporn.core.network.dns.DnsResilienceManager.triggerImmediateEvaluationForActiveNetwork(appContext)
                 }
                 if (isDeviceOwner) {
                     val requiredVpnMode = CurfewBlackholeVpnService.evaluateRequiredMode(appContext)
