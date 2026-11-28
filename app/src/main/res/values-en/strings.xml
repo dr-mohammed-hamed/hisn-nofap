@@ -1521,29 +1521,30 @@
     <string name="provisioning_recovery_notif_title">Restore Temporarily Disabled Apps</string>
     <string name="provisioning_recovery_notif_desc">Tap here to restore %1$d app(s) left disabled after an interrupted setup session.</string>
 
-    <!-- Waqf Support (Sadaqah Jariyah) -->
-    <string name="waqf_settings_card_title">Waqf Sustainability Share — Support Hisn</string>
-    <string name="waqf_settings_card_subtitle" formatted="false">100% free, ad-free digital Waqf — contribute to sustain it as Sadaqah Jariyah</string>
-    <string name="waqf_support_title">Waqf Sustainability Share — Support Hisn</string>
-    <string name="waqf_hero_badge">100% Free Digital Waqf • Sadaqah Jariyah</string>
-    <string name="waqf_hero_hadith">The Messenger of Allah ﷺ said: “Whoever guides someone to goodness will have a reward like one who did it.”</string>
-    <string name="waqf_hero_title">Waqf Sustainability Share &amp; System Stewardship</string>
-    <string name="waqf_hero_body" formatted="false">Hisn was engineered over thousands of hours by an individual developer as a 100% free, ad-free digital Waqf — dedicated to preventing fitnah and safeguarding the youth, hearts, honor, and homes of Muslims.\n\nSustaining the cloud update servers and ongoing AI protection research carries continuous operational costs. Contributing is completely optional, and every single pound you give is an open door to Sadaqah Jariyah and an ongoing share in keeping this shield alive.</string>
+    <!-- Developer Support (Voluntary Tip & Project Maintenance) -->
+    <string name="waqf_settings_card_title">Support Hisn Development</string>
+    <string name="waqf_settings_card_subtitle" formatted="false">100% free &amp; ad-free — if Hisn helped you, thank the developer with optional support</string>
+    <string name="waqf_support_title">Support the Developer — Keep Hisn Free</string>
+    <string name="waqf_hero_badge" formatted="false">100% Free Independent Open-Source Project</string>
+    <string name="waqf_hero_hadith">The Messenger of Allah ﷺ said: “Whoever does you a kindness, reward him; and if you find nothing to reward him with, pray for him.”</string>
+    <string name="waqf_hero_title">If Hisn Made a Real Difference… Help Keep It Going</string>
+    <string name="waqf_hero_body" formatted="false">Hisn was built over thousands of hours by an independent developer to remain 100% free, open-source, and ad-free for everyone seeking focus, self-discipline, and protection from digital addiction.\n\nKeeping the app actively maintained — covering cloud OTA hosting, on-device AI development hardware, and continuous engineering work — requires ongoing time and expenses.\n\nIf Hisn has made a real difference in your life and you wish to thank God for that benefit and appreciate the developer’s work, your voluntary financial support directly helps keep this project alive and free for all. If you cannot contribute today, a sincere prayer and sharing the app with someone who needs it mean just as much.</string>
+    <string name="waqf_hero_notice">Transparency Note: Hisn is an independent open-source software project maintained by an individual developer — not a registered charity, NGO, fundraising campaign, or official endowment (Waqf). Any financial contribution is a voluntary personal tip/sponsorship directly to the developer to appreciate his work and help cover development and hosting costs, and has no effect on the app remaining completely free for everyone.</string>
     <string name="waqf_offline_banner_title">Offline Mode</string>
     <string name="waqf_offline_banner_desc">Only the primary InstaPay link is shown right now. Connect to the internet and tap Retry to load mobile wallets and additional channels.</string>
     <string name="waqf_btn_retry">Retry</string>
-    <string name="waqf_channels_section_title">Available Support Channels</string>
+    <string name="waqf_channels_section_title">Developer Support Channels</string>
     <string name="waqf_tap_to_copy_hint">Tap to copy</string>
     <string name="waqf_copied_toast">Copied %1$s to clipboard</string>
     <string name="waqf_open_link_failed">Could not open link. Please copy the identifier and try manually.</string>
     <string name="waqf_invalid_action">This action is currently unavailable or invalid.</string>
     <string name="waqf_dial_failed">Could not open the phone dialer. You can copy the number instead.</string>
-    <string name="waqf_share_card_badge">Spread the Goodness</string>
+    <string name="waqf_share_card_badge">Spread the Benefit</string>
     <string name="waqf_share_card_title">Guiding to Good Earns the Same Reward</string>
-    <string name="waqf_share_card_body">Even if you cannot contribute financially today, sharing Hisn with someone who needs it or spreading the word may protect a heart and strengthen a home — earning you a share of the reward, God willing.</string>
-    <string name="waqf_share_btn_label">Share App &amp; Earn Reward</string>
+    <string name="waqf_share_card_body">Even if financial support is not possible today, a sincere prayer for the developer and sharing Hisn with someone who needs it may protect a heart and help a home.</string>
+    <string name="waqf_share_btn_label">Share App &amp; Spread the Benefit</string>
     <string name="waqf_share_chooser_title">Share Hisn via...</string>
-    <string name="waqf_share_message" formatted="false">Hisn — The first Android app to harness Android’s strongest system privilege (Device Owner) to block fitnah and digital addiction, freeing people from modern digital slavery and restoring willpower to those who lost it.\n\n100% free, ad-free digital Waqf for the sake of Allah.\n\nOfficial Website:\nhttps://hisn.uk/\n\nTelegram Channel:\nhttps://t.me/hisn_org</string>
+    <string name="waqf_share_message" formatted="false">Hisn — The first Android app to harness Android’s strongest system privilege (Device Owner) to block fitnah and digital addiction, helping restore willpower and focus.\n\n100% free and open-source app, with zero ads and zero subscriptions.\n\nOfficial Website:\nhttps://hisn.uk/\n\nTelegram Channel:\nhttps://t.me/hisn_org</string>
     <string name="waqf_share_failed">Could not open share dialog</string>
 
     <!-- Fortresses -->

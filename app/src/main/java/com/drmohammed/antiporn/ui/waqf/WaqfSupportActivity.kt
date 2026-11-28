@@ -32,11 +32,11 @@ import org.koin.androidx.viewmodel.ext.android.viewModel
 import timber.log.Timber
 
 /**
- * Full-screen Waqf Support & Sadaqah Jariyah screen.
+ * Full-screen Developer Support screen.
  *
- * Displays an inspirational Hadith & purpose Hero Card, dynamic Stale-While-Revalidate
- * contribution channels (with automatic Banking Cloak support for InstaPay), an inline
- * offline retry banner when cold-fallback is active, and a Spread-the-Reward share card.
+ * Displays an inspirational Hadith & purpose Hero Card with an always-visible transparency notice,
+ * dynamic Stale-While-Revalidate developer support channels (with automatic Banking Cloak support
+ * for InstaPay), an inline offline retry banner when cold-fallback is active, and a share card.
  */
 class WaqfSupportActivity : AppCompatActivity() {
 
@@ -123,8 +123,9 @@ class WaqfSupportActivity : AppCompatActivity() {
             ?: getString(R.string.waqf_hero_body)
 
         val notice = hero?.notice?.takeIf { it.isNotBlank() }
-        binding.cardHeroNotice.isVisible = notice != null
-        if (notice != null) {
+            ?: getString(R.string.waqf_hero_notice)
+        binding.cardHeroNotice.isVisible = notice.isNotBlank()
+        if (notice.isNotBlank()) {
             binding.tvHeroNotice.text = notice
         }
 

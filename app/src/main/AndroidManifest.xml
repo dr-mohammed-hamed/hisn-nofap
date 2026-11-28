@@ -310,7 +310,7 @@
             android:launchMode="singleTop"
             android:label="@string/title_notification_center" />
 
-        <!-- Waqf Support (Sadaqah Jariyah) -->
+        <!-- Developer Support Activity -->
         <activity
             android:name=".ui.waqf.WaqfSupportActivity"
             android:exported="false"

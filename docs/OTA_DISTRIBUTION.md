@@ -68,9 +68,9 @@ release.keystore.password=YourSecurePassword
 
 ---
 
-## 💖 4. إدارة التكوين السحابي لقنوات دعم الوقف (`waqf_config.json`)
+## 💖 4. إدارة التكوين السحابي لقنوات دعم المطور (`waqf_config.json`)
 
-بجانب استضافة التحديثات الهوائية (`version.json` وملفات الـ APK)، يستضيف خادم Cloudflare R2 ملف **`waqf_config.json`** لإدارة قنوات الدعم والمساهمة في «سهم استدامة الوقف» ديناميكياً دون الحاجة لإصدار تحديث جديد للتطبيق. يقرأ التطبيق هذا الملف عبر مسار `${ota.base.url}/waqf_config.json` بنمط **Stale-While-Revalidate (SWR)**.
+بجانب استضافة التحديثات الهوائية (`version.json` وملفات الـ APK)، يستضيف خادم Cloudflare R2 ملف **`waqf_config.json`** لإدارة قنوات الدعم الشخصي الاختياري للمطور ديناميكياً دون الحاجة لإصدار تحديث جديد للتطبيق. يقرأ التطبيق هذا الملف عبر مسار `${ota.base.url}/waqf_config.json` بنمط **Stale-While-Revalidate (SWR)**.
 
 ### 🔒 سياسة عدم التسريب الصارمة (Zero-Leak Policy)
 * لحماية خصوصية المطور وعدم رفع أي أرقام هواتف شخصية (مثل رقم محفظة فودافون كاش) على مستودع GitHub العام:
@@ -112,7 +112,7 @@ release.keystore.password=YourSecurePassword
       "type": "WEB_LINK",
       "badge": "دولي — PayPal",
       "title": "الدعم عبر PayPal",
-      "subtitle": "مساهمة فورية بالبطاقات البنكية من خارج مصر",
+      "subtitle": "دعم شخصي اختياري بالبطاقات البنكية من خارج مصر",
       "displayValue": "paypal.me/mh22887565",
       "accentStyle": "BLUE",
       "primaryAction": {
@@ -128,7 +128,7 @@ release.keystore.password=YourSecurePassword
       "type": "WEB_LINK",
       "badge": "دولي — Ko-fi",
       "title": "الدعم عبر Ko-fi",
-      "subtitle": "مساهمة لمرة واحدة أو كفالة دورية",
+      "subtitle": "دعم لمرة واحدة أو رعاية شهرية اختيارية للتطوير",
       "displayValue": "ko-fi.com/dr_mohammed_hamed",
       "accentStyle": "AMBER",
       "primaryAction": {
@@ -143,7 +143,7 @@ release.keystore.password=YourSecurePassword
       "sortOrder": 5,
       "type": "BANK_ACCOUNT",
       "badge": "تحويل بنكي — IBAN",
-      "title": "الحساب البنكي للوقف",
+      "title": "الحساب البنكي للمطور (دعم اختياري)",
       "subtitle": "تحويل بنكي محلي أو دولي عبر رقم الآيبان",
       "displayValue": "EG000000000000000000000000000",
       "accentStyle": "TEAL",

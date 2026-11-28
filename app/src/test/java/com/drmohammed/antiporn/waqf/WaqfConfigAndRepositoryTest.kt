@@ -62,9 +62,9 @@ class WaqfConfigAndRepositoryTest {
               "schemaVersion": 2,
               "updatedAt": "2026-11-25T10:00:00Z",
               "hero": {
-                "badge": "صدقة جارية",
-                "hadith": "إذا مات ابن آدم انقطع عمله إلا من ثلاث",
-                "title": "ساهم في استمرار حصن",
+                "badge": "مشروع فردي مجاني 100%",
+                "hadith": "من صنع إليكم معروفاً فكافئوه",
+                "title": "ادعم استمرار تطوير حصن",
                 "body": "مشروع مجاني مفتوح المصدر",
                 "notice": null
               },
@@ -117,7 +117,7 @@ class WaqfConfigAndRepositoryTest {
         assertEquals(2, config.schemaVersion)
         assertEquals("2026-11-25T10:00:00Z", config.updatedAt)
         assertNotNull(config.hero)
-        assertEquals("صدقة جارية", config.hero?.badge)
+        assertEquals("مشروع فردي مجاني 100%", config.hero?.badge)
         assertNull(config.hero?.notice)
 
         val active = config.activeChannels()

@@ -1799,29 +1799,30 @@
     <string name="provisioning_recovery_notif_title">استعادة التطبيقات المعطلة مؤقتاً</string>
     <string name="provisioning_recovery_notif_desc">اضغط هنا لاستعادة %1$d تطبيق/تطبيقات بقيت معطلة بعد انقطاع جلسة التفعيل السابقة.</string>
 
-    <!-- Waqf Support (صدقة جارية ووقف رقمي) -->
-    <string name="waqf_settings_card_title">سهم استدامة الوقف ورعاية «حِصْن»</string>
-    <string name="waqf_settings_card_subtitle">وقف تقني مجاني 100% بلا إعلانات — ساهم في استدامته كصدقة جارية</string>
-    <string name="waqf_support_title">سهم استدامة الوقف — دعم «حِصْن»</string>
-    <string name="waqf_hero_badge">وقف تقني مجاني 100% • صدقة جارية</string>
-    <string name="waqf_hero_hadith">قال رسول الله ﷺ: «مَنْ دَلَّ عَلَى خَيْرٍ فَلَهُ مِثْلُ أَجْرِ فَاعِلِهِ»</string>
-    <string name="waqf_hero_title">سهم استدامة الوقف ورعاية المنظومة</string>
-    <string name="waqf_hero_body">تم تصميم وهندسة مشروع «حِصْن» عبر آلاف الساعات من العمل على يد مطور فردي ليكون وقفاً تقنياً مجانياً بنسبة 100% بلا أي إعلانات أو قيود تجارية، في سبيل منع الفتنة وحفظ أعراض وقلوب وبيوت المسلمين وشبابهم.\n\nاستدامة خوادم التحديثات السحابية وأبحاث دروع الحماية والذكاء الاصطناعي تتطلب تكاليف تشغيلية مستمرة؛ فالمساهمة اختيارية تماماً، وكل جنيه تساهم به هو باب مفتوح لصدقة جارية وسهم جارٍ في بقاء هذا الصرح ونمائه.</string>
+    <!-- Developer Support (دعم المطور واستمرار المشروع) -->
+    <string name="waqf_settings_card_title">ادعم تطوير «حِصْن» واستمراره</string>
+    <string name="waqf_settings_card_subtitle" formatted="false">مجاني 100% بلا إعلانات — إن لمست نفعاً، يمكنك شكر المطور بدعم اختياري</string>
+    <string name="waqf_support_title">دعم المطور وتطوير «حِصْن»</string>
+    <string name="waqf_hero_badge" formatted="false">مشروع فردي مجاني 100% • بلا إعلانات</string>
+    <string name="waqf_hero_hadith">قال رسول الله ﷺ: «مَنْ صَنَعَ إِلَيْكُمْ مَعْرُوفاً فَكَافِئُوهُ، فَإِنْ لَمْ تَجِدُوا مَا تُكَافِئُونَهُ فَادْعُوا لَهُ»</string>
+    <string name="waqf_hero_title">إن لمست في «حِصْن» نفعاً حقيقياً… ادعم استمرار تطويره</string>
+    <string name="waqf_hero_body" formatted="false">بُني تطبيق «حِصْن» بجهدٍ فرديّ خالص وآلاف الساعات من العمل الطبي والبرمجي، ليكون متاحاً للجميع مجاناً بنسبة 100% بلا إعلانات ولا اشتراكات مدفوعة، عوناً لكل من يسعى لحفظ وقته وقلبه وأسرته.\n\nاستمرار هذا التطبيق قوياً ومتجدداً — وتغطية التكاليف الفعلية لخوادم التحديثات السحابية، وعتاد تطوير نماذج الذكاء الاصطناعي، وساعات البحث والبرمجة المتواصلة — يتطلب وقتاً ونفقةً مستمرة.\n\nإن وجدت في «حِصْن» أثراً حقيقياً في حياتك، وأردت أن تشكر الله على هذه النعمة وتُكافئ مطور التطبيق على جهده، فدعمك المادي الاختياري هو رسالة تقدير عملية تُعينني على الاستمرار في تطويره وإبقائه مجانياً للجميع. وإن لم يتيسر لك ذلك اليوم، فدعوةٌ صادقةٌ بظهر الغيب هي أثمنُ مكافأة.</string>
+    <string name="waqf_hero_notice">توضيح شفاف: «حِصْن» مشروع برمجي مفتوح المصدر يطوّره ويديره مطوّر فردي بصفة شخصية، وليس جمعية خيرية أو مؤسسة أهلية أو صندوق تبرعات أو وقفاً رسمياً. أي تحويل مالي هو مكافأة تقديرية ودعم شخصي اختياري مباشر للمطوّر مقابل جهده ولتغطية تكاليف التشغيل والتطوير، ولا يؤثر بأي شكل على مجانية التطبيق الكاملة للجميع.</string>
     <string name="waqf_offline_banner_title">وضع عدم الاتصال</string>
     <string name="waqf_offline_banner_desc">يظهر حالياً رابط InstaPay الأساسي فقط. اتصل بالإنترنت واضغط إعادة المحاولة لتحميل المحافظ الإلكترونية وبقية قنوات الدعم.</string>
     <string name="waqf_btn_retry">إعادة المحاولة</string>
-    <string name="waqf_channels_section_title">قنوات المساهمة المتاحة</string>
+    <string name="waqf_channels_section_title">قنوات دعم المطور</string>
     <string name="waqf_tap_to_copy_hint">اضغط للنسخ</string>
     <string name="waqf_copied_toast">تم نسخ %1$s إلى الحافظة</string>
     <string name="waqf_open_link_failed">تعذر فتح الرابط. يمكنك نسخ المعرّف واستخدامه يدوياً.</string>
     <string name="waqf_invalid_action">هذا الإجراء غير متاح أو غير صالح حالياً.</string>
     <string name="waqf_dial_failed">تعذر فتح تطبيق الاتصال. يمكنك نسخ الرقم بدلاً من ذلك.</string>
-    <string name="waqf_share_card_badge">الدلالة على الخير</string>
+    <string name="waqf_share_card_badge">نشر الفائدة</string>
     <string name="waqf_share_card_title">الدالّ على الخير كفاعله</string>
-    <string name="waqf_share_card_body">قد لا تتيسر المساهمة المالية الآن، لكن دلالتك على هذا التطبيق لمن يحتاجه أو نشره بين أصدقائك قد تكون سبباً في نجاة قلب وصلاح بيت، ولك مثل أجر كل من ينتفع به بإذن الله.</string>
-    <string name="waqf_share_btn_label">شارك التطبيق واكسب الأجر</string>
+    <string name="waqf_share_card_body">إن لم يتيسر الدعم المادي اليوم، فدعوتك الصادقة للمطور ومشاركتك لتطبيق «حِصْن» مع من يحتاجه قد تكون سبباً في نفع إنسان وحفظ بيت، فالدالّ على الخير كفاعله.</string>
+    <string name="waqf_share_btn_label">شارك التطبيق وانشر الفائدة</string>
     <string name="waqf_share_chooser_title">مشاركة تطبيق حِصن عبر...</string>
-    <string name="waqf_share_message">تطبيق «حِصْن» — أول تطبيق يستخدم أقوى صلاحية في نظام أندرويد (Device Owner) لمنع الفتنة والإدمان الرقمي، ليُحرّر الإنسان من ذلّ العبودية الحديثة ويعيد الإرادة لمن سُلبت منه.\n\nمشروع وقفي مجاني 100% لوجه الله، بلا إعلانات ولا اشتراكات.\n\nالموقع الرسمي:\nhttps://hisn.uk/\n\nقناة تيليجرام:\nhttps://t.me/hisn_org</string>
+    <string name="waqf_share_message" formatted="false">تطبيق «حِصْن» — أول تطبيق يستخدم أقوى صلاحية في نظام أندرويد (Device Owner) للحماية من الفتنة والإدمان الرقمي، واستعادة الإرادة والتركيز.\n\nتطبيق مجاني 100% ومفتوح المصدر، بلا إعلانات ولا اشتراكات.\n\nالموقع الرسمي:\nhttps://hisn.uk/\n\nقناة تيليجرام:\nhttps://t.me/hisn_org</string>
     <string name="waqf_share_failed">تعذر فتح نافذة المشاركة</string>
 
     <!-- Fortresses -->

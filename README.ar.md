@@ -22,7 +22,7 @@
   <a href="docs/APP_POLICY_REGISTRY.md"><img src="https://img.shields.io/badge/Security-Zero--Trust%20DO-red.svg?style=for-the-badge&logo=securityscorecard" alt="Security: Zero-Trust DO" /></a>
   <a href="docs/GENERATIONAL_ANTIPORN_ROADMAP.md"><img src="https://img.shields.io/badge/AI-100%25%20On--Device%20(Zero--Cloud)-purple.svg?style=for-the-badge&logo=tensorflow" alt="Edge AI" /></a>
   <a href="docs/OTA_DISTRIBUTION.md"><img src="https://img.shields.io/badge/OTA-Cloudflare%20R2%20%7C%20v2%2Fv3%20Lineage-orange.svg?style=for-the-badge&logo=cloudflare" alt="OTA Distribution" /></a>
-  <a href="#-سهم-استدامة-الوقف-ورعاية-المنظومة-waqf-sponsorship"><img src="https://img.shields.io/badge/Waqf-💖%20سهم_استدامة_الوقف-ff69b4.svg?style=for-the-badge&logo=githubsponsors" alt="سهم استدامة الوقف" /></a>
+  <a href="#-دعم-المطور-واستمرار-حصن-support-the-developer"><img src="https://img.shields.io/badge/Support-💖%20ادعم_تطوير_حصن-ff69b4.svg?style=for-the-badge&logo=githubsponsors" alt="دعم تطوير حصن" /></a>
 </p>
 
 ---
@@ -31,7 +31,7 @@
 
 1. [نظرة عامة والرؤية الطبية والهندسية (Executive Vision)](#-نظرة-عامة-والرؤية-الطبية-والهندسية-executive-vision)
 2. [معرض الواجهات والتجربة الحية (Visual Product Showcase)](#-معرض-الواجهات-والتجربة-الحية-visual-product-showcase)
-3. [سهم استدامة الوقف ورعاية المنظومة (Waqf Sponsorship)](#-سهم-استدامة-الوقف-ورعاية-المنظومة-waqf-sponsorship)
+3. [دعم المطور واستمرار حصن (Support the Developer)](#-دعم-المطور-واستمرار-حصن-support-the-developer)
 4. [المحدد الهندسي الصارم لحماية بيئة المطور (Core Developer Invariant)](#-المحدد-الهندسي-الصارم-لحماية-بيئة-المطور-core-developer-invariant)
 5. [المعمارية الهندسية الشاملة للنظام (High-Level System Topology)](#-المعمارية-الهندسية-الشاملة-للنظام-high-level-system-topology)
 6. [مصفوفة دروع الحماية السبعة (The 7 Modular Zero-Trust Shields)](#-مصفوفة-دروع-الحماية-السبعة-the-7-modular-zero-trust-shields)
@@ -90,28 +90,30 @@
 
 ---
 
-## 🏛️ سهم استدامة الوقف ورعاية المنظومة (Waqf Sponsorship)
+## 💖 دعم المطور واستمرار حصن (Support the Developer)
 
-> ### 🌿 قال رسول الله ﷺ: «مَنْ دَلَّ عَلَى خَيْرٍ فَلَهُ مِثْلُ أَجْرِ فَاعِلِهِ»
+> ### 🌿 قال رسول الله ﷺ: «مَنْ صَنَعَ إِلَيْكُمْ مَعْرُوفاً فَكَافِئُوهُ، فَإِنْ لَمْ تَجِدُوا مَا تُكَافِئُونَهُ فَادْعُوا لَهُ»
 > 
-> تم تصميم وهندسة مشروع **«حِصْن»** عبر آلاف الساعات من العمل الطبي والبرمجي المتخصص، وهو **وقف تقني متاح مجاناً بنسبة 100% وبلا أي إعلانات أو قيود تجارية** لحماية عقول وأعراض وأبناء وبنات الأمة من مخاطر الإباحية والإدمان الرقمي.
+> بُني تطبيق **«حِصْن»** بجهدٍ فرديّ خالص وآلاف الساعات من العمل الطبي والبرمجي، ليكون متاحاً للجميع **مجاناً بنسبة 100% وبلا أي إعلانات أو اشتراكات مدفوعة**، عوناً لكل من يسعى لحفظ وقته وقلبه وأسرته من مخاطر الإباحية والإدمان الرقمي.
 > 
-> **استدامة هذا الصرح وتطويره يتطلب تكاليف تشغيلية دورية مستمرة** (استضافة خوادم التحديثات الهوائية السحابية عبر Cloudflare R2، وعتاد فحص وتدريب نماذج الذكاء الاصطناعي على الجهاز، وأبحاث دروع الحماية المتقدمة).
+> **استمرار هذا التطبيق قوياً ومتجدداً يتطلب وقتاً ونفقةً تشغيلية مستمرة** (استضافة خوادم التحديثات الهوائية السحابية عبر Cloudflare R2، وعتاد فحص وتدريب نماذج الذكاء الاصطناعي على الجهاز، وساعات البحث والتطوير المتواصلة).
 > 
-> **المنظومة مجانية بالكامل لكل مستفيد ومحتاج؛ والمساهمة المالية ليست مطلوبة من الجميع، بل هي باب شرف مفتوح لمن وسّع الله عليه في الرزق ورأى في هذا المشروع ثغراً حقيقياً يستحق البقاء والنماء، ليكون له سهم جارٍ وصدقة جارية في حفظ بيوت المسلمين.**
+> **إن وجدت في «حِصْن» أثراً حقيقياً في حياتك، وأردت أن تشكر الله على هذه النعمة وتُكافئ مطور التطبيق على جهده، فدعمك المادي الاختياري هو رسالة تقدير عملية تُعينني على الاستمرار في تطويره وإبقائه مجانياً للجميع. وإن لم يتيسر لك ذلك اليوم، فدعوةٌ صادقةٌ بظهر الغيب ومشاركة التطبيق مع من يحتاجه هما أثمنُ مكافأة.**
+>
+> **توضيح شفاف:** «حِصْن» مشروع برمجي مفتوح المصدر يطوّره ويديره مطوّر فردي بصفة شخصية، وليس جمعية خيرية أو مؤسسة أهلية أو صندوق تبرعات أو وقفاً رسمياً. أي تحويل مالي هو **مكافأة تقديرية ودعم شخصي اختياري مباشر للمطوّر** مقابل جهده ولتغطية تكاليف التشغيل والتطوير، ولا يؤثر بأي شكل على مجانية التطبيق الكاملة للجميع.
 
 <div align="center">
 
 <a href="https://paypal.me/mh22887565" target="_blank">
-  <img src="https://img.shields.io/badge/PayPal-Sponsor_Hisn-00457C?style=for-the-badge&logo=paypal&logoColor=white" alt="PayPal Waqf Support" />
+  <img src="https://img.shields.io/badge/PayPal-Sponsor_Hisn-00457C?style=for-the-badge&logo=paypal&logoColor=white" alt="PayPal Developer Support" />
 </a>
 &nbsp;&nbsp;
 <a href="https://ko-fi.com/dr_mohammed_hamed" target="_blank">
-  <img src="https://img.shields.io/badge/Ko--fi-Support_Waqf-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white" alt="Ko-fi Support" />
+  <img src="https://img.shields.io/badge/Ko--fi-Support_Hisn-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white" alt="Ko-fi Developer Support" />
 </a>
 &nbsp;&nbsp;
 <a href="https://ipn.eg/S/mh22887565/instapay/4zd31u" target="_blank">
-  <img src="https://img.shields.io/badge/InstaPay-Egypt_Direct-0A6C74?style=for-the-badge&logo=cashapp&logoColor=white" alt="InstaPay Waqf Support" />
+  <img src="https://img.shields.io/badge/InstaPay-Egypt_Direct-0A6C74?style=for-the-badge&logo=cashapp&logoColor=white" alt="InstaPay Developer Support" />
 </a>
 
 </div>
@@ -120,11 +122,11 @@
 
 <div dir="rtl">
 
-| قنوات المساهمة ورعاية الوقف | آلية التحويل والوصول |
+| قنوات دعم المطور | آلية التحويل والوصول |
 | :--- | :--- |
-| **🌐 عبر منصة PayPal (الخليج وكافة الدول)** | 🔗 **[paypal.me/mh22887565](https://paypal.me/mh22887565)** — دعم فوري ببطاقات الائتمان والحسابات البنكية الدولية |
-| **☕ عبر منصة Ko-fi (دولي)** | 🔗 **[ko-fi.com/dr_mohammed_hamed](https://ko-fi.com/dr_mohammed_hamed)** — مساهمة لمرة واحدة أو كفالة دورية مستمرة |
-| **🇪🇬 عبر تطبيق InstaPay (داخل مصر)** | 🔗 **[رابط التحويل الفوري المباشر (ipn.eg)](https://ipn.eg/S/mh22887565/instapay/4zd31u)** — أو عنوان الدفع اللحظي: `mh22887565` |
+| **🌐 عبر منصة PayPal (الخليج وكافة الدول)** | 🔗 **[paypal.me/mh22887565](https://paypal.me/mh22887565)** — دعم شخصي اختياري ببطاقات الائتمان والحسابات البنكية الدولية |
+| **☕ عبر منصة Ko-fi (دولي)** | 🔗 **[ko-fi.com/dr_mohammed_hamed](https://ko-fi.com/dr_mohammed_hamed)** — دعم لمرة واحدة أو رعاية شهرية اختيارية للتطوير |
+| **🇪🇬 عبر تطبيق InstaPay (داخل مصر)** | 🔗 **[رابط التحويل الفوري المباشر (ipn.eg)](https://ipn.eg/S/mh22887565/instapay/4zd31u)** — أو عنوان الدفع اللحظي: `mh22887565` *(يفضل ترك ملاحظة التحويل فارغة أو كتابة: دعم تطوير تطبيق)* |
 
 </div>
 
@@ -415,7 +417,7 @@ adb shell pm enable com.google.android.gms
 ## 📜 الترخيص والملكية الفكرية (License & Attribution)
 
 مشروع **«حِصْن» (AntiPorn DO)** برمجية حرة ومفتوحة المصدر مرخصة بموجب **[رخصة جنو العمومية الإصدار 3.0 (GNU General Public License v3.0 - GPL-3.0)](LICENSE)**.  
-هذا المشروع وقف لله تعالى لحماية عقول وأعراض وأوقات الأمة والشباب من الإدمان الرقمي والمحتوى المشتت.
+متاح مجاناً لخدمة المجتمع وحماية الشباب والأسر من الإدمان الرقمي والمحتوى المشتت.
 
 ---
 

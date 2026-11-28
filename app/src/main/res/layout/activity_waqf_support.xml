@@ -155,19 +155,18 @@
                         android:textColor="?attr/colorOnSurfaceVariant"
                         android:textSize="14sp" />
 
-                    <!-- Optional Cloud Notice Callout -->
+                    <!-- Transparency & Legal Notice Callout -->
                     <com.google.android.material.card.MaterialCardView
                         android:id="@+id/cardHeroNotice"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="14dp"
-                        android:visibility="gone"
+                        android:visibility="visible"
                         app:cardBackgroundColor="@color/shield_amber_soft_bg"
                         app:cardCornerRadius="14dp"
                         app:cardElevation="0dp"
                         app:strokeColor="@color/shield_amber_calm"
-                        app:strokeWidth="1dp"
-                        tools:visibility="visible">
+                        app:strokeWidth="1dp">
 
                         <TextView
                             android:id="@+id/tvHeroNotice"
@@ -177,9 +176,9 @@
                             android:lineSpacingMultiplier="1.2"
                             android:paddingHorizontal="14dp"
                             android:paddingVertical="10dp"
+                            android:text="@string/waqf_hero_notice"
                             android:textColor="?attr/colorOnSurface"
-                            android:textSize="13sp"
-                            tools:text="تنبيه مؤقت حول أحد الحسابات" />
+                            android:textSize="13sp" />
                     </com.google.android.material.card.MaterialCardView>
 
                 </LinearLayout>

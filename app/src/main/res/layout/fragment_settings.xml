@@ -459,7 +459,7 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- Waqf Support Entry Card (Dignified Emerald-Accented Sadaqah Jariyah Entry) -->
+        <!-- Developer Support Entry Card -->
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/cardWaqfSupport"
             android:layout_width="match_parent"
