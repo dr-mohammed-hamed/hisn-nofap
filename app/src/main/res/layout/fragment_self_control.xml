@@ -149,15 +149,35 @@
                     </LinearLayout>
 
                     <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnManageActiveModesSelfControl"
+                        android:id="@+id/btnUnlockFortressSelfControl"
                         style="@style/Widget.Material3.Button.TonalButton"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="@dimen/hisn_card_gap"
+                        android:fontFamily="@font/tajawal"
+                        android:gravity="center"
                         android:minHeight="@dimen/hisn_control_height"
-                        android:text="@string/active_modes_manage"
-                        android:textAlignment="viewStart"
+                        android:text="@string/guardian_btn_unlock_fortress"
+                        android:textAlignment="center"
                         android:textSize="13sp"
+                        android:textStyle="bold"
+                        android:visibility="gone"
+                        app:cornerRadius="12dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnUnlockCurfewSelfControl"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:fontFamily="@font/tajawal"
+                        android:gravity="center"
+                        android:minHeight="@dimen/hisn_control_height"
+                        android:text="@string/guardian_btn_unlock_curfew"
+                        android:textAlignment="center"
+                        android:textSize="13sp"
+                        android:textStyle="bold"
+                        android:visibility="gone"
                         app:cornerRadius="12dp" />
 
                 </LinearLayout>
