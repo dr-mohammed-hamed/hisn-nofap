@@ -37,6 +37,19 @@ class GuardianApprovalsAdapter(
 ) : ListAdapter<WardApprovalModel, GuardianApprovalsAdapter.ApprovalViewHolder>(DiffCallback) {
 
     private val inFlightKeys = mutableSetOf<String>()
+    private var externalInFlightKeys: Set<String> = emptySet()
+
+    fun setInFlightKeys(keys: Set<String>) {
+        if (externalInFlightKeys == keys) return
+        val changed = (externalInFlightKeys - keys) + (keys - externalInFlightKeys)
+        externalInFlightKeys = keys
+        currentList.forEachIndexed { index, item ->
+            val key = "${item.wardId}_${item.packageName}"
+            if (key in changed) {
+                notifyItemChanged(index)
+            }
+        }
+    }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ApprovalViewHolder {
         val view = LayoutInflater.from(parent.context).inflate(R.layout.item_ward_approval, parent, false)
@@ -67,7 +80,7 @@ class GuardianApprovalsAdapter(
         fun bind(item: WardApprovalModel) {
             val ctx = itemView.context
             val itemKey = "${item.wardId}_${item.packageName}"
-            val isOperating = inFlightKeys.contains(itemKey)
+            val isOperating = externalInFlightKeys.contains(itemKey) || inFlightKeys.contains(itemKey)
 
             tvAppName.text = item.appName
             tvPackageName.text = item.packageName

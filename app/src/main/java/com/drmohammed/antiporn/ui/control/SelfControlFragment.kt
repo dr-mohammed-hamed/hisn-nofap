@@ -21,6 +21,8 @@ import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.data.repository.ApprovalRepository
 import com.drmohammed.antiporn.databinding.FragmentSelfControlBinding
 import com.drmohammed.antiporn.ui.accountability.RemoteAppManagerActivity
+import com.drmohammed.antiporn.ui.common.ConfirmActionDialogFragment
+import com.drmohammed.antiporn.ui.common.showSafely
 import com.drmohammed.antiporn.ui.control.curfew.CurfewSettingsActivity
 import com.drmohammed.antiporn.ui.control.other.OtherSettingsActivity
 import com.drmohammed.antiporn.ui.control.qr.QrExportDialog
@@ -28,7 +30,6 @@ import com.drmohammed.antiporn.ui.control.qr.QrScannerBottomSheet
 import com.drmohammed.antiporn.ui.control.qr.SelfControlQrManager
 import com.drmohammed.antiporn.ui.control.web.WebFilterSettingsActivity
 import com.drmohammed.antiporn.waqfa.ui.settings.WaqfaSettingsActivity
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -41,7 +42,7 @@ import org.koin.androidx.viewmodel.ext.android.viewModel
 class SelfControlFragment : Fragment() {
 
     private var _binding: FragmentSelfControlBinding? = null
-    private val binding get() = _binding!!
+    private val binding get() = _binding ?: throw IllegalStateException("Binding is only valid between onCreateView and onDestroyView")
 
     private val selfControlViewModel: SelfControlViewModel by viewModel()
     private var approvalsViewBinder: SelfControlApprovalsViewBinder? = null
@@ -188,9 +189,7 @@ class SelfControlFragment : Fragment() {
                 if (!qrManager.hasToken()) {
                     qrManager.generateAndSaveNewToken()
                 }
-                if (!childFragmentManager.isStateSaved && childFragmentManager.findFragmentByTag(QrExportDialog.TAG) == null) {
-                    QrExportDialog.newInstance().show(childFragmentManager, QrExportDialog.TAG)
-                }
+                childFragmentManager.showSafely(QrExportDialog.TAG) { QrExportDialog.newInstance() }
             } else {
                 if (qrManager.isQrLockEnabled()) {
                     isQrPolicyLoading = true
@@ -295,6 +294,20 @@ class SelfControlFragment : Fragment() {
                 }
             }
         }
+
+        childFragmentManager.setFragmentResultListener(REQ_REGENERATE_QR_CONFIRM, viewLifecycleOwner) { _, bundle ->
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) == ConfirmActionDialogFragment.BUTTON_POSITIVE) {
+                val appCtx = context?.applicationContext ?: return@setFragmentResultListener
+                val qrManager = SelfControlQrManager.getInstance(appCtx)
+                qrManager.generateAndSaveNewToken()
+                qrManager.setQrLockEnabled(false)
+                isQrPolicyLoading = true
+                _binding?.switchQrLockEnabled?.isChecked = false
+                _binding?.layoutQrActionButtons?.isVisible = false
+                isQrPolicyLoading = false
+                childFragmentManager.showSafely(QrExportDialog.TAG) { QrExportDialog.newInstance() }
+            }
+        }
     }
 
     private fun executeWithQrProtection(tag: String) {
@@ -347,29 +360,18 @@ class SelfControlFragment : Fragment() {
                 Toast.makeText(context ?: ctx, R.string.self_control_qr_disabled_toast, Toast.LENGTH_SHORT).show()
             }
             TAG_SHOW_QR_CODE -> {
-                if (!childFragmentManager.isStateSaved && childFragmentManager.findFragmentByTag(QrExportDialog.TAG) == null) {
-                    QrExportDialog.newInstance().show(childFragmentManager, QrExportDialog.TAG)
-                }
+                childFragmentManager.showSafely(QrExportDialog.TAG) { QrExportDialog.newInstance() }
             }
             TAG_REGENERATE_QR_AUTH -> {
-                val act = activity ?: return
-                val qrManager = SelfControlQrManager.getInstance(ctx)
-                MaterialAlertDialogBuilder(act)
-                    .setTitle(R.string.self_control_qr_regenerate_confirm_title)
-                    .setMessage(R.string.self_control_qr_regenerate_confirm_message)
-                    .setNegativeButton(android.R.string.cancel, null)
-                    .setPositiveButton(R.string.self_control_qr_btn_regenerate_confirm) { _, _ ->
-                        qrManager.generateAndSaveNewToken()
-                        qrManager.setQrLockEnabled(false)
-                        isQrPolicyLoading = true
-                        _binding?.switchQrLockEnabled?.isChecked = false
-                        _binding?.layoutQrActionButtons?.isVisible = false
-                        isQrPolicyLoading = false
-                        if (!childFragmentManager.isStateSaved && childFragmentManager.findFragmentByTag(QrExportDialog.TAG) == null) {
-                            QrExportDialog.newInstance().show(childFragmentManager, QrExportDialog.TAG)
-                        }
-                    }
-                    .show()
+                childFragmentManager.showSafely(TAG_REGENERATE_QR_CONFIRM) {
+                    ConfirmActionDialogFragment.newInstance(
+                        requestKey = REQ_REGENERATE_QR_CONFIRM,
+                        titleRes = R.string.self_control_qr_regenerate_confirm_title,
+                        messageRes = R.string.self_control_qr_regenerate_confirm_message,
+                        positiveRes = R.string.self_control_qr_btn_regenerate_confirm,
+                        negativeRes = android.R.string.cancel
+                    )
+                }
             }
             TAG_NAV_CURFEW -> launchSubScreen(CurfewSettingsActivity::class.java)
             TAG_NAV_WEB -> launchSubScreen(WebFilterSettingsActivity::class.java)
@@ -435,5 +437,7 @@ class SelfControlFragment : Fragment() {
         private const val TAG_NAV_WAQFA = "qr_nav_waqfa"
         private const val TAG_NAV_PAGE_SHIELD = "qr_nav_page_shield"
         private const val TAG_NAV_OTHER = "qr_nav_other"
+        private const val REQ_REGENERATE_QR_CONFIRM = "req_regenerate_qr_confirm"
+        private const val TAG_REGENERATE_QR_CONFIRM = "tag_regenerate_qr_confirm"
     }
 }

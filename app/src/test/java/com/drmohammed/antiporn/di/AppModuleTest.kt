@@ -13,10 +13,14 @@ import com.drmohammed.antiporn.data.repository.AppInventoryManager
 import com.drmohammed.antiporn.data.repository.ApprovalRepository
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.ota.repository.OtaRepository
+import com.drmohammed.antiporn.provisioning.ui.SystemAppsManagerViewModel
 import com.drmohammed.antiporn.ui.accountability.AccountabilityViewModel
+import com.drmohammed.antiporn.ui.accountability.GuardianApprovalsHubViewModel
 import com.drmohammed.antiporn.ui.accountability.GuardianControlViewModel
+import com.drmohammed.antiporn.ui.accountability.GuardianSelfControlSettingsViewModel
 import com.drmohammed.antiporn.ui.accountability.RemoteAppManagerViewModel
 import com.drmohammed.antiporn.ui.control.SelfControlViewModel
+import com.drmohammed.antiporn.ui.control.web.DnsPickerValidationViewModel
 import com.drmohammed.antiporn.ui.control.web.WebFilterViewModel
 import com.drmohammed.antiporn.ui.home.HomeViewModel
 import com.drmohammed.antiporn.ui.main.MainViewModel
@@ -91,9 +95,14 @@ class AppModuleTest : KoinTest {
             HomeViewModel::class,
             SelfControlViewModel::class,
             WebFilterViewModel::class,
+            DnsPickerValidationViewModel::class,
             AccountabilityViewModel::class,
             RemoteAppManagerViewModel::class,
             GuardianControlViewModel::class,
+            GuardianSelfControlSettingsViewModel::class,
+            GuardianApprovalsHubViewModel::class,
+            SystemAppsManagerViewModel::class,
+            com.drmohammed.antiporn.provisioning.ui.ProvisioningWizardViewModel::class,
             SettingsViewModel::class,
             NotificationRepository::class,
             AppNotificationManager::class,
@@ -115,7 +124,7 @@ class AppModuleTest : KoinTest {
                 registeredTypes.contains(expected)
             )
         }
-        assertEquals(35, registeredTypes.size)
+        assertEquals(40, registeredTypes.size)
     }
 
     @Test

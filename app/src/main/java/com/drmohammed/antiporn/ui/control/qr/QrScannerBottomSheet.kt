@@ -9,7 +9,6 @@ import android.os.Bundle
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
-import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -27,8 +26,11 @@ import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.databinding.BottomSheetQrScannerBinding
+import com.drmohammed.antiporn.ui.common.ConfirmActionDialogFragment
+import com.drmohammed.antiporn.ui.common.applyBottomSheetInsets
+import com.drmohammed.antiporn.ui.common.configureLandscapeFriendlySheet
+import com.drmohammed.antiporn.ui.common.showSafely
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.mlkit.vision.barcode.BarcodeScanner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
@@ -40,6 +42,8 @@ import kotlinx.coroutines.asExecutor
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import timber.log.Timber
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -47,9 +51,6 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Self-Control barrier QR codes using CameraX, ML Kit Barcode Scanning, and ViewBinding.
  */
 class QrScannerBottomSheet : BottomSheetDialogFragment() {
-
-    var onVerified: (() -> Unit)? = null
-    var onEmergencyBypassTriggered: (() -> Unit)? = null
 
     private var _binding: BottomSheetQrScannerBinding? = null
     private val binding get() = _binding ?: throw IllegalStateException("QrScannerBottomSheet binding accessed outside view lifecycle")
@@ -93,6 +94,10 @@ class QrScannerBottomSheet : BottomSheetDialogFragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
+        configureLandscapeFriendlySheet(enableImeResize = false)
+        applyBottomSheetInsets(view, includeIme = false)
+        isTorchOn = savedInstanceState?.getBoolean(KEY_IS_TORCH_ON, false) ?: false
+
         defaultStatusColor = binding.tvScanStatus.currentTextColor
         cameraExecutor = Dispatchers.Default.asExecutor()
 
@@ -102,7 +107,7 @@ class QrScannerBottomSheet : BottomSheetDialogFragment() {
                 .build()
             barcodeScanner = BarcodeScanning.getClient(options)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize BarcodeScanner client", e)
+            Timber.tag(TAG).e(e, "Failed to initialize BarcodeScanner client")
             barcodeScanner = null
             binding.tvScanStatus.text = getString(R.string.qr_scan_error_init)
             binding.tvScanStatus.setTextColor(ContextCompat.getColor(requireContext(), R.color.status_red))
@@ -118,6 +123,23 @@ class QrScannerBottomSheet : BottomSheetDialogFragment() {
 
         binding.btnGrantPermission.setOnClickListener {
             cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+
+        childFragmentManager.setFragmentResultListener(REQ_EMERGENCY_CONFIRM, viewLifecycleOwner) { _, bundle ->
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) == ConfirmActionDialogFragment.BUTTON_POSITIVE) {
+                val started = qrManager.requestEmergencyDelay()
+                if (isAdded && _binding != null) {
+                    refreshEmergencyDelayState()
+                    if (!started) {
+                        binding.tvEmergencyBypassInfo.text = getString(R.string.qr_emergency_trusted_time_required)
+                        android.widget.Toast.makeText(
+                            requireContext().applicationContext,
+                            R.string.qr_emergency_trusted_time_required,
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            }
         }
 
         setupEmergencyBypassUi()
@@ -149,7 +171,7 @@ class QrScannerBottomSheet : BottomSheetDialogFragment() {
                 cameraProvider = cameraProviderFuture.get()
                 bindCameraUseCases()
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to initialize CameraX provider", e)
+                Timber.tag(TAG).e(e, "Failed to initialize CameraX provider")
                 if (isAdded) {
                     _binding?.tvScanStatus?.text = getString(R.string.qr_scan_camera_permission_required)
                 }
@@ -163,7 +185,7 @@ class QrScannerBottomSheet : BottomSheetDialogFragment() {
             try {
                 provider.unbindAll()
             } catch (e: Exception) {
-                Log.w(TAG, "Unbind failed during detached bindCameraUseCases", e)
+                Timber.tag(TAG).w(e, "Unbind failed during detached bindCameraUseCases")
             }
             return
         }
@@ -195,7 +217,7 @@ class QrScannerBottomSheet : BottomSheetDialogFragment() {
             )
             updateTorchAvailability()
         } catch (e: Exception) {
-            Log.e(TAG, "Use case binding failed", e)
+            Timber.tag(TAG).e(e, "Use case binding failed")
         }
     }
 
@@ -225,13 +247,13 @@ class QrScannerBottomSheet : BottomSheetDialogFragment() {
                     }
                 }
                 .addOnFailureListener { error ->
-                    Log.d(TAG, "Barcode analysis failed", error)
+                    Timber.tag(TAG).d(error, "Barcode analysis failed")
                 }
                 .addOnCompleteListener {
                     imageProxy.close()
                 }
         } catch (e: Exception) {
-            Log.w(TAG, "Exception during barcode image processing", e)
+            Timber.tag(TAG).w(e, "Exception during barcode image processing")
             imageProxy.close()
         }
     }
@@ -247,12 +269,13 @@ class QrScannerBottomSheet : BottomSheetDialogFragment() {
             return
         }
 
-        val isValid = qrManager.verifyToken(token)
-
-        currentActivity.runOnUiThread {
+        viewLifecycleOwner.lifecycleScope.launch {
+            val isValid = withContext(Dispatchers.Default) {
+                qrManager.verifyToken(token)
+            }
             if (!isAdded || _binding == null) {
                 isCodeProcessing.set(false)
-                return@runOnUiThread
+                return@launch
             }
 
             if (isValid) {
@@ -260,7 +283,7 @@ class QrScannerBottomSheet : BottomSheetDialogFragment() {
                 try {
                     cameraProvider?.unbindAll()
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error unbinding camera on successful scan", e)
+                    Timber.tag(TAG).w(e, "Error unbinding camera on successful scan")
                 }
                 binding.tvScanStatus.text = getString(R.string.qr_scan_success)
                 binding.tvScanStatus.setTextColor(ContextCompat.getColor(requireContext(), R.color.status_green))
@@ -278,8 +301,6 @@ class QrScannerBottomSheet : BottomSheetDialogFragment() {
                                 if (payload != null) putString(RESULT_KEY_PAYLOAD, payload)
                             }
                         )
-                    } else {
-                        onVerified?.invoke()
                     }
                     dismissAllowingStateLoss()
                 }
@@ -299,11 +320,21 @@ class QrScannerBottomSheet : BottomSheetDialogFragment() {
         }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(KEY_IS_TORCH_ON, isTorchOn)
+    }
+
     private fun updateTorchAvailability() {
         if (_binding == null) return
-        val hasFlash = camera?.cameraInfo?.hasFlashUnit() == true
+        val cam = camera
+        val hasFlash = cam?.cameraInfo?.hasFlashUnit() == true
         binding.btnToggleTorch.isVisible = hasFlash
+        if (hasFlash && isTorchOn) {
+            cam?.cameraControl?.enableTorch(true)
+        }
         binding.btnToggleTorch.setIconResource(if (isTorchOn) R.drawable.ic_flash_on else R.drawable.ic_flash_off)
+        binding.btnToggleTorch.contentDescription = getString(if (isTorchOn) R.string.qr_torch_off else R.string.qr_torch_on)
     }
 
     private fun toggleTorch() {
@@ -334,7 +365,7 @@ class QrScannerBottomSheet : BottomSheetDialogFragment() {
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Haptic vibration failed", e)
+            Timber.tag(TAG).w(e, "Haptic vibration failed")
         }
     }
 
@@ -395,8 +426,6 @@ class QrScannerBottomSheet : BottomSheetDialogFragment() {
                                 if (payload != null) putString(RESULT_KEY_PAYLOAD, payload)
                             }
                         )
-                    } else {
-                        onEmergencyBypassTriggered?.invoke()
                     }
                     dismissAllowingStateLoss()
                 }
@@ -422,26 +451,15 @@ class QrScannerBottomSheet : BottomSheetDialogFragment() {
     }
 
     private fun showEmergencyConfirmationDialog(hours: Int) {
-        val ctx = context ?: return
-        MaterialAlertDialogBuilder(ctx)
-            .setTitle(R.string.qr_emergency_confirm_title)
-            .setMessage(getString(R.string.qr_emergency_confirm_message, hours))
-            .setPositiveButton(android.R.string.ok) { _, _ ->
-                val started = qrManager.requestEmergencyDelay()
-                if (isAdded && _binding != null) {
-                    refreshEmergencyDelayState()
-                    if (!started) {
-                        binding.tvEmergencyBypassInfo.text = getString(R.string.qr_emergency_trusted_time_required)
-                        android.widget.Toast.makeText(
-                            ctx.applicationContext ?: ctx,
-                            R.string.qr_emergency_trusted_time_required,
-                            android.widget.Toast.LENGTH_LONG
-                        ).show()
-                    }
-                }
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
+        childFragmentManager.showSafely(TAG_EMERGENCY_CONFIRM) {
+            ConfirmActionDialogFragment.newInstance(
+                requestKey = REQ_EMERGENCY_CONFIRM,
+                titleRes = R.string.qr_emergency_confirm_title,
+                messageText = getString(R.string.qr_emergency_confirm_message, hours),
+                positiveRes = android.R.string.ok,
+                negativeRes = android.R.string.cancel
+            )
+        }
     }
 
     override fun onDestroyView() {
@@ -454,14 +472,14 @@ class QrScannerBottomSheet : BottomSheetDialogFragment() {
             cameraProvider?.unbindAll()
             camera = null
         } catch (e: Exception) {
-            Log.w(TAG, "Camera unbind failed", e)
+            Timber.tag(TAG).w(e, "Camera unbind failed")
         }
 
         try {
             barcodeScanner?.close()
             barcodeScanner = null
         } catch (e: Exception) {
-            Log.w(TAG, "Barcode scanner close failed", e)
+            Timber.tag(TAG).w(e, "Barcode scanner close failed")
         }
 
         cameraExecutor = null
@@ -475,6 +493,9 @@ class QrScannerBottomSheet : BottomSheetDialogFragment() {
         const val RESULT_KEY_VERIFIED = "result_key_verified"
         const val RESULT_KEY_EMERGENCY_BYPASS = "result_key_emergency_bypass"
         const val RESULT_KEY_PAYLOAD = "result_key_payload"
+        private const val KEY_IS_TORCH_ON = "key_is_torch_on"
+        private const val REQ_EMERGENCY_CONFIRM = "req_qr_emergency_confirm"
+        private const val TAG_EMERGENCY_CONFIRM = "tag_qr_emergency_confirm"
 
         fun newInstance(requestKey: String? = null, payload: String? = null): QrScannerBottomSheet {
             return QrScannerBottomSheet().apply {

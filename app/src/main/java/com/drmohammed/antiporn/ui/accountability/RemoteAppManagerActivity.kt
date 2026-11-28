@@ -13,6 +13,7 @@ import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.os.bundleOf
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
@@ -24,10 +25,11 @@ import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.data.model.InstalledAppDto
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.shields.AppSuspensionShield
+import com.drmohammed.antiporn.ui.common.ConfirmActionDialogFragment
+import com.drmohammed.antiporn.ui.common.showSafely
 import com.drmohammed.antiporn.ui.control.gate.SelfControlAccessGateRegistry
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.textfield.TextInputEditText
 import kotlinx.coroutines.launch
@@ -92,11 +94,47 @@ class RemoteAppManagerActivity : AppCompatActivity() {
 
         onBackPressedDispatcher.addCallback(this, backPressedCallback)
 
+        setupFragmentResultListeners()
         initViews()
         setupListeners()
         observeViewModel()
 
         viewModel.initialize(isLocalMode, wardId, wardName)
+    }
+
+    private fun setupFragmentResultListeners() {
+        supportFragmentManager.setFragmentResultListener(REQ_FREEZE_NEW_INSTALLS, this) { _, bundle ->
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) == ConfirmActionDialogFragment.BUTTON_POSITIVE) {
+                viewModel.setLockNewInstalls(true)
+            } else {
+                switchLockNewInstalls.setOnCheckedChangeListener(null)
+                switchLockNewInstalls.isChecked = false
+                switchLockNewInstalls.setOnCheckedChangeListener { _, isChecked ->
+                    onLockNewInstallsSwitched(isChecked)
+                }
+                viewModel.setLockNewInstalls(false)
+            }
+        }
+
+        supportFragmentManager.setFragmentResultListener(REQ_DISCARD_CHANGES, this) { _, bundle ->
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) == ConfirmActionDialogFragment.BUTTON_POSITIVE) {
+                backPressedCallback.isEnabled = false
+                finish()
+            }
+        }
+
+        supportFragmentManager.setFragmentResultListener(REQ_QUICK_UNSUSPEND, this) { _, bundle ->
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) == ConfirmActionDialogFragment.BUTTON_POSITIVE) {
+                val payload = bundle.getBundle(ConfirmActionDialogFragment.RESULT_PAYLOAD)
+                    ?: return@setFragmentResultListener
+                val pkg = payload.getString(KEY_UNSUSPEND_PKG).orEmpty()
+                val appName = payload.getString(KEY_UNSUSPEND_APP_NAME).orEmpty()
+                if (pkg.isBlank()) return@setFragmentResultListener
+                val matched = viewModel.uiState.value.displayedApps.firstOrNull { it.packageName == pkg }
+                    ?: InstalledAppDto(packageName = pkg, appName = appName, isSuspended = true)
+                viewModel.executeQuickUnsuspend(matched)
+            }
+        }
     }
 
     private fun applyWindowInsets() {
@@ -286,40 +324,29 @@ class RemoteAppManagerActivity : AppCompatActivity() {
 
     private fun showFreezeNewInstallsConfirmationDialog() {
         if (isFinishing || isDestroyed) return
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.dialog_freeze_new_installs_title)
-            .setMessage(R.string.dialog_freeze_new_installs_msg)
-            .setCancelable(false)
-            .setNegativeButton(android.R.string.cancel) { dialog, _ ->
-                dialog.dismiss()
-                switchLockNewInstalls.setOnCheckedChangeListener(null)
-                switchLockNewInstalls.isChecked = false
-                switchLockNewInstalls.setOnCheckedChangeListener { _, isChecked ->
-                    onLockNewInstallsSwitched(isChecked)
-                }
-                viewModel.setLockNewInstalls(false)
-            }
-            .setPositiveButton(R.string.btn_confirm_freeze_new_installs) { dialog, _ ->
-                dialog.dismiss()
-                viewModel.setLockNewInstalls(true)
-            }
-            .show()
+        supportFragmentManager.showSafely(TAG_FREEZE_NEW_INSTALLS) {
+            ConfirmActionDialogFragment.newInstance(
+                requestKey = REQ_FREEZE_NEW_INSTALLS,
+                titleRes = R.string.dialog_freeze_new_installs_title,
+                messageRes = R.string.dialog_freeze_new_installs_msg,
+                positiveRes = R.string.btn_confirm_freeze_new_installs,
+                negativeRes = android.R.string.cancel,
+                cancelable = false
+            )
+        }
     }
 
     private fun showDiscardConfirmationDialog() {
         if (isFinishing || isDestroyed) return
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.dialog_unsaved_changes_title)
-            .setMessage(R.string.dialog_unsaved_changes_msg)
-            .setNegativeButton(R.string.btn_keep_editing) { dialog, _ ->
-                dialog.dismiss()
-            }
-            .setPositiveButton(R.string.btn_discard_changes) { dialog, _ ->
-                dialog.dismiss()
-                backPressedCallback.isEnabled = false
-                finish()
-            }
-            .show()
+        supportFragmentManager.showSafely(TAG_DISCARD_CHANGES) {
+            ConfirmActionDialogFragment.newInstance(
+                requestKey = REQ_DISCARD_CHANGES,
+                titleRes = R.string.dialog_unsaved_changes_title,
+                messageRes = R.string.dialog_unsaved_changes_msg,
+                positiveRes = R.string.btn_discard_changes,
+                negativeRes = R.string.btn_keep_editing
+            )
+        }
     }
 
     private fun confirmAndExecuteQuickUnsuspend(app: InstalledAppDto) {
@@ -327,22 +354,25 @@ class RemoteAppManagerActivity : AppCompatActivity() {
         val pkg = app.packageName
         val displayName = app.appName.ifBlank { pkg }
 
-        val title = getString(R.string.dialog_quick_unsuspend_title)
         val message = if (isLocalMode) {
             getString(R.string.dialog_quick_unsuspend_msg_local, displayName)
         } else {
             getString(R.string.dialog_quick_unsuspend_msg_remote, displayName, wardName)
         }
 
-        MaterialAlertDialogBuilder(this)
-            .setTitle(title)
-            .setMessage(message)
-            .setNegativeButton(android.R.string.cancel) { dialog, _ -> dialog.dismiss() }
-            .setPositiveButton(R.string.btn_unsuspend_action) { dialog, _ ->
-                dialog.dismiss()
-                viewModel.executeQuickUnsuspend(app)
-            }
-            .show()
+        supportFragmentManager.showSafely(TAG_QUICK_UNSUSPEND) {
+            ConfirmActionDialogFragment.newInstance(
+                requestKey = REQ_QUICK_UNSUSPEND,
+                titleRes = R.string.dialog_quick_unsuspend_title,
+                messageText = message,
+                positiveRes = R.string.btn_unsuspend_action,
+                negativeRes = android.R.string.cancel,
+                payload = bundleOf(
+                    KEY_UNSUSPEND_PKG to pkg,
+                    KEY_UNSUSPEND_APP_NAME to displayName
+                )
+            )
+        }
     }
 
     override fun onResume() {
@@ -360,6 +390,14 @@ class RemoteAppManagerActivity : AppCompatActivity() {
         const val EXTRA_WARD_ID = "extra_ward_id"
         const val EXTRA_WARD_NAME = "extra_ward_name"
         const val EXTRA_IS_LOCAL = "extra_is_local"
+        private const val REQ_FREEZE_NEW_INSTALLS = "req_ram_freeze_new_installs"
+        private const val TAG_FREEZE_NEW_INSTALLS = "tag_ram_freeze_new_installs"
+        private const val REQ_DISCARD_CHANGES = "req_ram_discard_changes"
+        private const val TAG_DISCARD_CHANGES = "tag_ram_discard_changes"
+        private const val REQ_QUICK_UNSUSPEND = "req_ram_quick_unsuspend"
+        private const val TAG_QUICK_UNSUSPEND = "tag_ram_quick_unsuspend"
+        private const val KEY_UNSUSPEND_PKG = "key_unsuspend_pkg"
+        private const val KEY_UNSUSPEND_APP_NAME = "key_unsuspend_app_name"
     }
 
     /**

@@ -20,13 +20,14 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.widget.doAfterTextChanged
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.drmohammed.antiporn.MainActivity
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.engine.ProtectionEngine
@@ -34,22 +35,18 @@ import com.drmohammed.antiporn.provisioning.engine.AdbSecondaryUserInspector
 import com.drmohammed.antiporn.provisioning.engine.BlockingSecondaryUser
 import com.drmohammed.antiporn.provisioning.engine.DeviceOwnerPromoter
 import com.drmohammed.antiporn.provisioning.engine.OemProvisioningHelper
-import com.drmohammed.antiporn.provisioning.engine.PromotionResult
 import com.drmohammed.antiporn.provisioning.engine.ProvisioningAckStore
 import com.drmohammed.antiporn.provisioning.engine.ProvisioningWifiWatcher
 import com.drmohammed.antiporn.provisioning.receiver.PairingCodeReceiver
 import com.drmohammed.antiporn.provisioning.service.AdbPairingNotificationService
+import com.drmohammed.antiporn.ui.common.ConfirmActionDialogFragment
+import com.drmohammed.antiporn.ui.common.showSafely
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
-import com.google.android.material.checkbox.MaterialCheckBox
 import com.google.android.material.color.MaterialColors
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.textfield.TextInputEditText
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import org.koin.androidx.viewmodel.ext.android.viewModel
 import timber.log.Timber
 
 /**
@@ -112,13 +109,9 @@ class ProvisioningWizardActivity : AppCompatActivity() {
     private lateinit var etPairingCode: TextInputEditText
     private lateinit var btnPairAndActivate: MaterialButton
 
-    private var discoveredPairingPort = 0
-    private var discoveredConnectPort = 0
-    private var isPromoting = false
+    private val viewModel: ProvisioningWizardViewModel by viewModel()
+
     private var isWifiValid = false
-    private var dangerDialog: AlertDialog? = null
-    private val blockingUsersDialogHelper = BlockingSecondaryUsersDialogHelper()
-    private var pendingBlockingUsersJson: String? = null
     private var hasAutoLaunchedAdjacent = false
 
     private val wifiWatcher by lazy {
@@ -135,39 +128,22 @@ class ProvisioningWizardActivity : AppCompatActivity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
                 AdbPairingNotificationService.ACTION_PORTS_DISCOVERED -> {
-                    discoveredPairingPort = intent.getIntExtra(AdbPairingNotificationService.EXTRA_PAIRING_PORT, 0)
+                    val pairingPort = intent.getIntExtra(AdbPairingNotificationService.EXTRA_PAIRING_PORT, 0)
                     val connPort = intent.getIntExtra(AdbPairingNotificationService.EXTRA_CONNECT_PORT, 0)
-                    if (connPort > 0) {
-                        discoveredConnectPort = connPort
-                    }
-                    updateRadarUi()
+                    viewModel.updateDiscoveredPorts(pairingPort, connPort)
                 }
                 PairingCodeReceiver.ACTION_PROVISIONING_RESULT -> {
                     if (isFinishing || isDestroyed) return
                     if (intent.getBooleanExtra(PairingCodeReceiver.EXTRA_SUCCESS, false)) {
-                        pendingBlockingUsersJson = null
+                        viewModel.setPendingBlockingUsersJson(null)
                         onProvisioningSuccessful()
                     } else {
                         val blockingJson = intent.getStringExtra(PairingCodeReceiver.EXTRA_BLOCKING_USERS_JSON)
                         val connPort = intent.getIntExtra(AdbPairingNotificationService.EXTRA_CONNECT_PORT, 0)
-                        if (connPort > 0) {
-                            discoveredConnectPort = connPort
-                        }
+                        viewModel.updateConnectPort(connPort)
                         val blockingUsers = BlockingSecondaryUser.listFromJson(blockingJson)
-                        if (blockingUsers.isEmpty() && isPromoting && DeviceOwnerPromoter.isPromotionActive) {
-                            Timber.tag(TAG).i("Ignoring concurrent failure broadcast while local promotion is active")
-                            return
-                        }
-                        isPromoting = false
-                        btnPairAndActivate.setText(R.string.provisioning_btn_pair_and_activate)
-                        btnSplitPairAndActivate.setText(R.string.provisioning_btn_pair_and_activate)
-                        validateInputs()
-                        if (blockingUsers.isNotEmpty()) {
-                            showBlockingSecondaryUsersDialog(blockingUsers)
-                            return
-                        }
                         val error = intent.getStringExtra(PairingCodeReceiver.EXTRA_ERROR_MESSAGE)
-                        Toast.makeText(this@ProvisioningWizardActivity, getString(R.string.toast_provisioning_failed, error ?: ""), Toast.LENGTH_LONG).show()
+                        viewModel.onExternalBroadcastFailure(blockingUsers, error)
                     }
                 }
             }
@@ -188,13 +164,16 @@ class ProvisioningWizardActivity : AppCompatActivity() {
         }
 
         bindViews()
+        setupFragmentResultListeners()
         setupListeners()
+        observeViewModel()
         setupOemGuidance()
         setupLegacyPureSite()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInMultiWindowMode) {
             updateMultiWindowUi(true)
         }
         val restoredJson = savedInstanceState?.getString(KEY_PENDING_BLOCKING_USERS_JSON)
+            ?: viewModel.uiState.value.pendingBlockingUsersJson
         if (!restoredJson.isNullOrBlank()) {
             val restoredUsers = BlockingSecondaryUser.listFromJson(restoredJson)
             if (restoredUsers.isNotEmpty()) {
@@ -203,7 +182,7 @@ class ProvisioningWizardActivity : AppCompatActivity() {
         } else if (savedInstanceState == null) {
             if (intent?.getBooleanExtra(EXTRA_REQUIRE_DANGER_ACK, false) == true) {
                 intent?.removeExtra(EXTRA_REQUIRE_DANGER_ACK)
-                ensureDangerAcknowledgedBeforeAction {}
+                ensureDangerAcknowledgedBeforeAction(DANGER_ACTION_NONE) {}
             }
             handleBlockingUsersIntentExtra(intent)
         }
@@ -211,7 +190,9 @@ class ProvisioningWizardActivity : AppCompatActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
-        pendingBlockingUsersJson?.let { outState.putString(KEY_PENDING_BLOCKING_USERS_JSON, it) }
+        viewModel.uiState.value.pendingBlockingUsersJson?.let {
+            outState.putString(KEY_PENDING_BLOCKING_USERS_JSON, it)
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -219,7 +200,7 @@ class ProvisioningWizardActivity : AppCompatActivity() {
         setIntent(intent)
         if (intent.getBooleanExtra(EXTRA_REQUIRE_DANGER_ACK, false)) {
             intent.removeExtra(EXTRA_REQUIRE_DANGER_ACK)
-            ensureDangerAcknowledgedBeforeAction {}
+            ensureDangerAcknowledgedBeforeAction(DANGER_ACTION_NONE) {}
         }
         handleBlockingUsersIntentExtra(intent)
     }
@@ -227,7 +208,7 @@ class ProvisioningWizardActivity : AppCompatActivity() {
     private fun handleBlockingUsersIntentExtra(targetIntent: Intent?) {
         val extraConnPort = targetIntent?.getIntExtra(EXTRA_CONNECT_PORT, 0) ?: 0
         if (extraConnPort > 0) {
-            discoveredConnectPort = extraConnPort
+            viewModel.updateConnectPort(extraConnPort)
             targetIntent?.removeExtra(EXTRA_CONNECT_PORT)
         }
         val usersJson = targetIntent?.getStringExtra(EXTRA_BLOCKING_USERS_JSON)
@@ -331,7 +312,7 @@ class ProvisioningWizardActivity : AppCompatActivity() {
                 Toast.makeText(this, R.string.provisioning_wifi_required_title, Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            ensureDangerAcknowledgedBeforeAction {
+            ensureDangerAcknowledgedBeforeAction(DANGER_ACTION_DEV_OPTIONS) {
                 if (!isDevOptionsEnabled()) {
                     showEnableDevOptionsDialog()
                 } else {
@@ -341,19 +322,19 @@ class ProvisioningWizardActivity : AppCompatActivity() {
         }
 
         btnTrySplitScreen.setOnClickListener {
-            ensureDangerAcknowledgedBeforeAction {
+            ensureDangerAcknowledgedBeforeAction(DANGER_ACTION_ADJACENT) {
                 launchAdjacentDevSettings()
             }
         }
 
         btnStartXiaomiSplit.setOnClickListener {
-            ensureDangerAcknowledgedBeforeAction {
+            ensureDangerAcknowledgedBeforeAction(DANGER_ACTION_ADJACENT) {
                 launchAdjacentDevSettings()
             }
         }
 
         btnSplitReopenSettings.setOnClickListener {
-            ensureDangerAcknowledgedBeforeAction {
+            ensureDangerAcknowledgedBeforeAction(DANGER_ACTION_ADJACENT) {
                 launchAdjacentDevSettings()
             }
         }
@@ -386,14 +367,15 @@ class ProvisioningWizardActivity : AppCompatActivity() {
         }
 
         btnPairAndActivate.setOnClickListener {
-            if (isPromoting) return@setOnClickListener
+            val state = viewModel.uiState.value
+            if (state.isPromoting) return@setOnClickListener
             val code = PairingCodeReceiver.sanitizePairingCode(etPairingCode.text?.toString())
-            if (code.length != 6 || discoveredPairingPort == 0 || discoveredConnectPort == 0) {
+            if (code.length != 6 || state.discoveredPairingPort == 0 || state.discoveredConnectPort == 0) {
                 Toast.makeText(this, R.string.provisioning_input_label, Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
 
-            ensureDangerAcknowledgedBeforeAction {
+            ensureDangerAcknowledgedBeforeAction(DANGER_ACTION_PAIR, code) {
                 executePairingAndPromotion(code)
             }
         }
@@ -403,51 +385,133 @@ class ProvisioningWizardActivity : AppCompatActivity() {
         }
     }
 
-    private fun executePairingAndPromotion(code: String) {
-        if (isPromoting || DeviceOwnerPromoter.isPromotionActive) return
-        isPromoting = true
-        btnPairAndActivate.isEnabled = false
-        btnSplitPairAndActivate.isEnabled = false
-        btnPairAndActivate.setText(R.string.provisioning_in_progress_title)
-        btnSplitPairAndActivate.setText(R.string.provisioning_in_progress_title)
+    private fun observeViewModel() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                launch {
+                    viewModel.uiState.collect { state ->
+                        renderPromotionUi(state)
+                    }
+                }
+                launch {
+                    viewModel.events.collect { event ->
+                        if (isFinishing || isDestroyed) return@collect
+                        when (event) {
+                            is ProvisioningWizardEvent.PromotionSucceeded -> onProvisioningSuccessful()
+                            is ProvisioningWizardEvent.SecondaryUsersBlocking -> {
+                                showBlockingSecondaryUsersDialog(event.users)
+                            }
+                            is ProvisioningWizardEvent.PromotionFailed -> {
+                                Toast.makeText(
+                                    this@ProvisioningWizardActivity,
+                                    getString(R.string.toast_provisioning_failed, event.message),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                            is ProvisioningWizardEvent.UnexpectedError -> {
+                                val errMsg = "${event.className}: ${event.message ?: getString(R.string.provisioning_error_unknown)}"
+                                Toast.makeText(
+                                    this@ProvisioningWizardActivity,
+                                    getString(R.string.toast_provisioning_failed, errMsg),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val result = DeviceOwnerPromoter.pairAndPromote(
-                    this@ProvisioningWizardActivity, discoveredPairingPort, discoveredConnectPort, code
-                )
-                withContext(Dispatchers.Main) {
-                    if (isFinishing || isDestroyed) return@withContext
-                    when (result) {
-                        is PromotionResult.Success -> onProvisioningSuccessful()
-                        is PromotionResult.SecondaryUsersBlocking -> {
-                            btnPairAndActivate.setText(R.string.provisioning_btn_pair_and_activate)
-                            btnSplitPairAndActivate.setText(R.string.provisioning_btn_pair_and_activate)
-                            showBlockingSecondaryUsersDialog(result.users)
+    private fun renderPromotionUi(state: ProvisioningWizardUiState) {
+        val textRes = when {
+            state.isPromoting && state.isCleaningSecondaryUsers -> R.string.provisioning_cleaning_and_activating
+            state.isPromoting -> R.string.provisioning_in_progress_title
+            else -> R.string.provisioning_btn_pair_and_activate
+        }
+        btnPairAndActivate.setText(textRes)
+        btnSplitPairAndActivate.setText(textRes)
+        updateRadarUi()
+    }
+
+    private fun executePairingAndPromotion(code: String) {
+        viewModel.startPairingAndPromotion(code)
+    }
+
+    private fun setupFragmentResultListeners() {
+        supportFragmentManager.setFragmentResultListener(
+            BlockingSecondaryUsersDialogFragment.REQUEST_KEY,
+            this
+        ) { _, bundle ->
+            when (bundle.getString(BlockingSecondaryUsersDialogFragment.RESULT_ACTION)) {
+                BlockingSecondaryUsersDialogFragment.ACTION_OPEN_SETTINGS -> {
+                    val usersJson = bundle.getString(BlockingSecondaryUsersDialogFragment.RESULT_USERS_JSON)
+                    val users = BlockingSecondaryUser.listFromJson(usersJson)
+                    try {
+                        startActivity(AdbSecondaryUserInspector.resolveSettingsIntentForUsers(this, users))
+                    } catch (e: Exception) {
+                        Timber.tag(TAG).w(e, "Failed opening settings for blocking secondary users")
+                        Toast.makeText(this, R.string.toast_open_settings_failed, Toast.LENGTH_SHORT).show()
+                    }
+                }
+                BlockingSecondaryUsersDialogFragment.ACTION_CONFIRM -> {
+                    ProvisioningAckStore.recordAck(this)
+                    val approvedUserIds = bundle.getIntArray(BlockingSecondaryUsersDialogFragment.RESULT_USER_IDS)
+                        ?.toSet()
+                        ?: emptySet()
+                    executeRemoveSecondaryUsersAndPromote(approvedUserIds)
+                }
+                BlockingSecondaryUsersDialogFragment.ACTION_CANCEL -> {
+                    viewModel.setPendingBlockingUsersJson(null)
+                }
+            }
+        }
+
+        supportFragmentManager.setFragmentResultListener(
+            DangerPrivateSpaceDialogFragment.REQUEST_KEY,
+            this
+        ) { _, bundle ->
+            when (bundle.getString(DangerPrivateSpaceDialogFragment.RESULT_ACTION)) {
+                DangerPrivateSpaceDialogFragment.ACTION_PROCEED -> {
+                    ProvisioningAckStore.recordAck(this)
+                    AdbPairingNotificationService.refreshNotificationState(this)
+                    when (bundle.getString(DangerPrivateSpaceDialogFragment.RESULT_ACTION_TYPE)) {
+                        DANGER_ACTION_DEV_OPTIONS -> {
+                            if (!isDevOptionsEnabled()) {
+                                showEnableDevOptionsDialog()
+                            } else {
+                                launchWirelessDebuggingScreen()
+                            }
                         }
-                        is PromotionResult.Failure -> {
-                            Toast.makeText(this@ProvisioningWizardActivity, getString(R.string.toast_provisioning_failed, result.message), Toast.LENGTH_LONG).show()
-                            btnPairAndActivate.setText(R.string.provisioning_btn_pair_and_activate)
-                            btnSplitPairAndActivate.setText(R.string.provisioning_btn_pair_and_activate)
+                        DANGER_ACTION_ADJACENT -> launchAdjacentDevSettings()
+                        DANGER_ACTION_PAIR -> {
+                            val code = bundle.getString(DangerPrivateSpaceDialogFragment.RESULT_PAIRING_CODE).orEmpty()
+                            if (code.length == 6) {
+                                executePairingAndPromotion(code)
+                            }
                         }
                     }
                 }
-            } catch (t: Throwable) {
-                if (t is CancellationException) throw t
-                Timber.tag(TAG).e(t, "Unexpected error in wizard activation")
-                withContext(Dispatchers.Main) {
-                    if (!isFinishing && !isDestroyed) {
-                        val errMsg = "${t.javaClass.simpleName}: ${t.message ?: getString(R.string.provisioning_error_unknown)}"
-                        Toast.makeText(this@ProvisioningWizardActivity, getString(R.string.toast_provisioning_failed, errMsg), Toast.LENGTH_LONG).show()
-                        btnPairAndActivate.setText(R.string.provisioning_btn_pair_and_activate)
-                        btnSplitPairAndActivate.setText(R.string.provisioning_btn_pair_and_activate)
-                    }
+                DangerPrivateSpaceDialogFragment.ACTION_CLEARED_PROFILE -> {
+                    setupOemGuidance()
                 }
-            } finally {
-                withContext(NonCancellable + Dispatchers.Main) {
-                    if (!isFinishing && !isDestroyed) {
-                        isPromoting = false
-                        validateInputs()
+                DangerPrivateSpaceDialogFragment.ACTION_CANCEL -> {
+                    ProvisioningAckStore.clearAck(this)
+                }
+            }
+        }
+
+        supportFragmentManager.setFragmentResultListener(REQ_ENABLE_DEV_OPTIONS, this) { _, bundle ->
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) == ConfirmActionDialogFragment.BUTTON_POSITIVE) {
+                try {
+                    startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK })
+                } catch (e: Exception) {
+                    Timber.tag(TAG).w(e, "Failed opening device info settings, falling back to general settings")
+                    try {
+                        startActivity(Intent(Settings.ACTION_SETTINGS).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK })
+                    } catch (fallbackEx: Exception) {
+                        Timber.tag(TAG).w(fallbackEx, "Failed opening settings for dev options")
+                        Toast.makeText(this, R.string.toast_open_settings_failed, Toast.LENGTH_SHORT).show()
                     }
                 }
             }
@@ -456,190 +520,33 @@ class ProvisioningWizardActivity : AppCompatActivity() {
 
     private fun showBlockingSecondaryUsersDialog(users: List<BlockingSecondaryUser>) {
         if (isFinishing || isDestroyed || users.isEmpty()) return
-        pendingBlockingUsersJson = BlockingSecondaryUser.listToJson(users)
-        blockingUsersDialogHelper.show(
-            activity = this,
-            users = users,
-            onOpenSettings = {
-                try {
-                    startActivity(AdbSecondaryUserInspector.resolveSettingsIntentForUsers(this, users))
-                } catch (e: Exception) {
-                    Timber.tag(TAG).w(e, "Failed opening settings for blocking secondary users")
-                    Toast.makeText(this, R.string.toast_open_settings_failed, Toast.LENGTH_SHORT).show()
-                }
-            },
-            onConfirmedDeleteAndActivate = { approvedUserIds ->
-                pendingBlockingUsersJson = null
-                ProvisioningAckStore.recordAck(this)
-                executeRemoveSecondaryUsersAndPromote(approvedUserIds)
-            },
-            onCancel = {
-                pendingBlockingUsersJson = null
-            }
-        )
-    }
-
-    private fun executeRemoveSecondaryUsersAndPromote(approvedUserIds: Set<Int>) {
-        if (isPromoting || DeviceOwnerPromoter.isPromotionActive) return
-        isPromoting = true
-        btnPairAndActivate.isEnabled = false
-        btnSplitPairAndActivate.isEnabled = false
-        btnPairAndActivate.setText(R.string.provisioning_cleaning_and_activating)
-        btnSplitPairAndActivate.setText(R.string.provisioning_cleaning_and_activating)
-
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val effectiveConnectPort = discoveredConnectPort.takeIf { it > 0 }
-                    ?: AdbPairingNotificationService.capturedConnectPort
-                val result = DeviceOwnerPromoter.removeSecondaryUsersAndPromote(
-                    context = this@ProvisioningWizardActivity,
-                    connectPort = effectiveConnectPort,
-                    approvedUserIds = approvedUserIds,
-                    explicitUserConsentConfirmed = true
-                )
-                withContext(Dispatchers.Main) {
-                    if (isFinishing || isDestroyed) return@withContext
-                    when (result) {
-                        is PromotionResult.Success -> onProvisioningSuccessful()
-                        is PromotionResult.SecondaryUsersBlocking -> {
-                            btnPairAndActivate.setText(R.string.provisioning_btn_pair_and_activate)
-                            btnSplitPairAndActivate.setText(R.string.provisioning_btn_pair_and_activate)
-                            showBlockingSecondaryUsersDialog(result.users)
-                        }
-                        is PromotionResult.Failure -> {
-                            Toast.makeText(
-                                this@ProvisioningWizardActivity,
-                                getString(R.string.toast_provisioning_failed, result.message),
-                                Toast.LENGTH_LONG
-                            ).show()
-                            btnPairAndActivate.setText(R.string.provisioning_btn_pair_and_activate)
-                            btnSplitPairAndActivate.setText(R.string.provisioning_btn_pair_and_activate)
-                        }
-                    }
-                }
-            } catch (t: Throwable) {
-                if (t is CancellationException) throw t
-                Timber.tag(TAG).e(t, "Unexpected error during secondary user removal and activation")
-                withContext(Dispatchers.Main) {
-                    if (!isFinishing && !isDestroyed) {
-                        val errMsg = "${t.javaClass.simpleName}: ${t.message ?: getString(R.string.provisioning_error_unknown)}"
-                        Toast.makeText(
-                            this@ProvisioningWizardActivity,
-                            getString(R.string.toast_provisioning_failed, errMsg),
-                            Toast.LENGTH_LONG
-                        ).show()
-                        btnPairAndActivate.setText(R.string.provisioning_btn_pair_and_activate)
-                        btnSplitPairAndActivate.setText(R.string.provisioning_btn_pair_and_activate)
-                    }
-                }
-            } finally {
-                withContext(NonCancellable + Dispatchers.Main) {
-                    if (!isFinishing && !isDestroyed) {
-                        isPromoting = false
-                        validateInputs()
-                    }
-                }
-            }
+        viewModel.setPendingBlockingUsersJson(BlockingSecondaryUser.listToJson(users))
+        supportFragmentManager.showSafely(BlockingSecondaryUsersDialogFragment.TAG) {
+            BlockingSecondaryUsersDialogFragment.newInstance(users)
         }
     }
 
-    private fun ensureDangerAcknowledgedBeforeAction(onReady: () -> Unit) {
+    private fun executeRemoveSecondaryUsersAndPromote(approvedUserIds: Set<Int>) {
+        viewModel.startRemoveSecondaryUsersAndPromote(approvedUserIds)
+    }
+
+    private fun ensureDangerAcknowledgedBeforeAction(
+        actionType: String,
+        pairingCode: String? = null,
+        onReady: () -> Unit
+    ) {
         if (!OemProvisioningHelper.requiresPreActivationDangerAck(this) || ProvisioningAckStore.hasValidAck(this)) {
             onReady()
             return
         }
-        showDangerPrivateSpaceDialog(
-            onProceed = {
-                ProvisioningAckStore.recordAck(this)
-                AdbPairingNotificationService.refreshNotificationState(this)
-                onReady()
-            },
-            onCancel = {
-                ProvisioningAckStore.clearAck(this)
-            }
-        )
+        showDangerPrivateSpaceDialog(actionType, pairingCode)
     }
 
-    private fun showDangerPrivateSpaceDialog(onProceed: () -> Unit, onCancel: (() -> Unit)? = null) {
+    private fun showDangerPrivateSpaceDialog(actionType: String, pairingCode: String? = null) {
         if (isFinishing || isDestroyed) return
-        dangerDialog?.let {
-            if (it.isShowing) {
-                try { it.dismiss() } catch (_: Exception) {}
-            }
+        supportFragmentManager.showSafely(DangerPrivateSpaceDialogFragment.TAG) {
+            DangerPrivateSpaceDialogFragment.newInstance(actionType, pairingCode)
         }
-        dangerDialog = null
-
-        val dialogView = layoutInflater.inflate(R.layout.dialog_private_space_danger, null)
-        val dialog = MaterialAlertDialogBuilder(this)
-            .setView(dialogView)
-            .setCancelable(true)
-            .create()
-        dangerDialog = dialog
-
-        val copy = OemProvisioningHelper.getDangerDialogStrings(this)
-        val tvDangerTitle = dialogView.findViewById<TextView>(R.id.tvDangerTitle)
-        val tvDangerDesc = dialogView.findViewById<TextView>(R.id.tvDangerDesc)
-        tvDangerTitle.setText(copy.titleRes)
-        tvDangerDesc.setText(copy.descRes)
-
-        val chkAcknowledgeDanger = dialogView.findViewById<MaterialCheckBox>(R.id.chkAcknowledgeDanger)
-        val btnDialogProceed = dialogView.findViewById<MaterialButton>(R.id.btnDialogProceed)
-        val btnDialogRecheck = dialogView.findViewById<MaterialButton>(R.id.btnDialogRecheck)
-        val btnDialogCancel = dialogView.findViewById<MaterialButton>(R.id.btnDialogCancel)
-
-        btnDialogRecheck.visibility = if (copy.showRecheckButton) View.VISIBLE else View.GONE
-
-        chkAcknowledgeDanger.setOnCheckedChangeListener { _, isChecked ->
-            btnDialogProceed.isEnabled = isChecked
-        }
-
-        var proceeded = false
-        var canceled = false
-        val notifyCancel = {
-            if (!canceled && !proceeded) {
-                canceled = true
-                onCancel?.invoke()
-            }
-        }
-
-        btnDialogProceed.setOnClickListener {
-            if (proceeded) return@setOnClickListener
-            proceeded = true
-            btnDialogProceed.isEnabled = false
-            if (!isFinishing && !isDestroyed) {
-                dialog.dismiss()
-            }
-            onProceed()
-        }
-
-        btnDialogRecheck.setOnClickListener {
-            val stillExists = OemProvisioningHelper.hasConflictingProfile(this)
-            if (!stillExists) {
-                Toast.makeText(this, R.string.dialog_danger_private_space_cleared, Toast.LENGTH_LONG).show()
-                if (!isFinishing && !isDestroyed) {
-                    dialog.dismiss()
-                }
-                setupOemGuidance()
-            } else {
-                Toast.makeText(this, R.string.dialog_danger_private_space_still_exists, Toast.LENGTH_LONG).show()
-            }
-        }
-
-        btnDialogCancel.setOnClickListener {
-            notifyCancel()
-            if (!isFinishing && !isDestroyed) {
-                dialog.dismiss()
-            }
-        }
-
-        dialog.setOnDismissListener {
-            if (dangerDialog === dialog) {
-                dangerDialog = null
-            }
-            notifyCancel()
-        }
-
-        dialog.show()
     }
 
     private fun launchWirelessDebuggingScreen() {
@@ -755,10 +662,10 @@ class ProvisioningWizardActivity : AppCompatActivity() {
             onProvisioningSuccessful()
             return
         }
-        discoveredPairingPort = AdbPairingNotificationService.capturedPairingPort
-        if (AdbPairingNotificationService.capturedConnectPort > 0) {
-            discoveredConnectPort = AdbPairingNotificationService.capturedConnectPort
-        }
+        viewModel.updateDiscoveredPorts(
+            AdbPairingNotificationService.capturedPairingPort,
+            AdbPairingNotificationService.capturedConnectPort
+        )
         updateRadarUi()
         setupOemGuidance()
         checkDevOptionsStatus()
@@ -834,14 +741,8 @@ class ProvisioningWizardActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        blockingUsersDialogHelper.dismiss()
-        dangerDialog?.let {
-            if (it.isShowing) {
-                try { it.dismiss() } catch (_: Exception) {}
-            }
-        }
-        dangerDialog = null
-        if (!isChangingConfigurations && !ProtectionEngine.isDeviceOwner(this) && !isPromoting && !DeviceOwnerPromoter.isPromotionActive) {
+        val promoting = viewModel.uiState.value.isPromoting || DeviceOwnerPromoter.isPromotionActive
+        if (!isChangingConfigurations && !ProtectionEngine.isDeviceOwner(this) && !promoting) {
             AdbPairingNotificationService.stop(this)
         }
         super.onDestroy()
@@ -863,24 +764,20 @@ class ProvisioningWizardActivity : AppCompatActivity() {
         val devEnabled = isDevOptionsEnabled()
         btnOpenDevOptions.setText(if (devEnabled) R.string.provisioning_btn_open_dev_options else R.string.provisioning_btn_enable_dev_options)
         tvStep2Desc.setText(if (devEnabled) R.string.provisioning_step2_desc else R.string.provisioning_step2_desc_disabled)
-        updateStepperUi(devEnabled, discoveredPairingPort > 0)
+        updateStepperUi(devEnabled, viewModel.uiState.value.discoveredPairingPort > 0)
     }
 
     private fun showEnableDevOptionsDialog() {
         if (isFinishing || isDestroyed) return
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.dialog_enable_dev_title)
-            .setMessage(OemProvisioningHelper.getDevOptionsDialogDescription())
-            .setPositiveButton(R.string.dialog_enable_dev_btn_open) { _, _ ->
-                try {
-                    startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK })
-                } catch (_: Exception) {
-                    try { startActivity(Intent(Settings.ACTION_SETTINGS).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }) }
-                    catch (_: Exception) { Toast.makeText(this, R.string.toast_open_settings_failed, Toast.LENGTH_SHORT).show() }
-                }
-            }
-            .setNegativeButton(R.string.btn_back, null)
-            .show()
+        supportFragmentManager.showSafely(TAG_ENABLE_DEV_OPTIONS) {
+            ConfirmActionDialogFragment.newInstance(
+                requestKey = REQ_ENABLE_DEV_OPTIONS,
+                titleRes = R.string.dialog_enable_dev_title,
+                messageText = getString(OemProvisioningHelper.getDevOptionsDialogDescription()),
+                positiveRes = R.string.dialog_enable_dev_btn_open,
+                negativeRes = R.string.btn_back
+            )
+        }
     }
 
     private fun updateStepperUi(devOptionsEnabled: Boolean, portsDiscovered: Boolean) {
@@ -906,9 +803,10 @@ class ProvisioningWizardActivity : AppCompatActivity() {
     private fun updateRadarUi() {
         val colorGreen = ContextCompat.getColor(this, R.color.status_green)
         val colorOrange = ContextCompat.getColor(this, R.color.status_orange)
+        val pairingPort = viewModel.uiState.value.discoveredPairingPort
 
-        if (discoveredPairingPort > 0) {
-            val foundText = getString(R.string.provisioning_radar_port_found, discoveredPairingPort)
+        if (pairingPort > 0) {
+            val foundText = getString(R.string.provisioning_radar_port_found, pairingPort)
             tvRadarStatus.text = foundText
             tvRadarStatus.setTextColor(colorGreen)
             ivRadarIcon.setColorFilter(colorGreen)
@@ -925,19 +823,22 @@ class ProvisioningWizardActivity : AppCompatActivity() {
             tvSplitRadarStatus.setTextColor(colorOrange)
             ivSplitRadarIcon.setColorFilter(colorOrange)
         }
-        updateStepperUi(isDevOptionsEnabled(), discoveredPairingPort > 0)
+        updateStepperUi(isDevOptionsEnabled(), pairingPort > 0)
         validateInputs()
     }
 
     private fun validateInputs() {
-        if (isPromoting) {
+        val state = viewModel.uiState.value
+        if (state.isPromoting) {
             btnPairAndActivate.isEnabled = false
             btnSplitPairAndActivate.isEnabled = false
             return
         }
         val sanitizedCode = PairingCodeReceiver.sanitizePairingCode(etPairingCode.text?.toString())
         val codeLength = sanitizedCode.length
-        val isValid = (codeLength == 6) && (discoveredPairingPort > 0 && discoveredConnectPort > 0) && isWifiValid
+        val isValid = (codeLength == 6) &&
+            (state.discoveredPairingPort > 0 && state.discoveredConnectPort > 0) &&
+            isWifiValid
         btnPairAndActivate.isEnabled = isValid
         btnSplitPairAndActivate.isEnabled = isValid
     }
@@ -956,6 +857,12 @@ class ProvisioningWizardActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "AntiPorn_WizardAct"
         private const val KEY_PENDING_BLOCKING_USERS_JSON = "key_pending_blocking_users_json"
+        private const val DANGER_ACTION_NONE = "danger_action_none"
+        private const val DANGER_ACTION_DEV_OPTIONS = "danger_action_dev_options"
+        private const val DANGER_ACTION_ADJACENT = "danger_action_adjacent"
+        private const val DANGER_ACTION_PAIR = "danger_action_pair"
+        private const val REQ_ENABLE_DEV_OPTIONS = "req_wizard_enable_dev_options"
+        private const val TAG_ENABLE_DEV_OPTIONS = "tag_wizard_enable_dev_options"
         const val EXTRA_REQUIRE_DANGER_ACK = "extra_require_danger_ack"
         const val EXTRA_BLOCKING_USERS_JSON = "extra_blocking_users_json"
         const val EXTRA_CONNECT_PORT = "extra_connect_port"

@@ -17,13 +17,28 @@ import com.drmohammed.antiporn.waqfa.model.WaqfaConfig
 import com.drmohammed.antiporn.waqfa.model.WaqfaTimeoutReactionType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import timber.log.Timber
+
+sealed class WaqfaSettingsEvent {
+    data class SaveSucceeded(
+        val updatedPolicy: DevicePolicyBundle?,
+        val reconcileResult: AccessibilityReconcileResult?,
+        val pendingUsageAccessPrompt: Boolean,
+        val isRemote: Boolean
+    ) : WaqfaSettingsEvent()
+
+    data object SaveFailed : WaqfaSettingsEvent()
+}
 
 enum class WaqfaEngineType {
     INSTANT_0MS,
@@ -59,9 +74,18 @@ class WaqfaSettingsViewModel(
     private val _uiState = MutableStateFlow(WaqfaSettingsUiState())
     val uiState: StateFlow<WaqfaSettingsUiState> = _uiState.asStateFlow()
 
+    private val _events = Channel<WaqfaSettingsEvent>(Channel.BUFFERED)
+    val events: Flow<WaqfaSettingsEvent> = _events.receiveAsFlow()
+
     private var initialPolicy: DevicePolicyBundle? = null
+    private var isInitialized = false
 
     fun initialize(isRemote: Boolean, wardId: String?, policyJson: String?) {
+        if (isInitialized) {
+            refreshEngineStatus()
+            return
+        }
+        isInitialized = true
         val policy = if (!policyJson.isNullOrBlank()) {
             try {
                 DevicePolicyBundle.fromJson(policyJson)
@@ -217,9 +241,9 @@ class WaqfaSettingsViewModel(
         }
     }
 
-    fun saveSettings(onComplete: (Boolean, DevicePolicyBundle?, AccessibilityReconcileResult?) -> Unit) {
+    fun saveSettings(onComplete: ((Boolean, DevicePolicyBundle?, AccessibilityReconcileResult?) -> Unit)? = null) {
         if (_uiState.value.isLoading) {
-            onComplete(false, null, null)
+            onComplete?.invoke(false, null, null)
             return
         }
         val state = _uiState.value
@@ -235,39 +259,56 @@ class WaqfaSettingsViewModel(
         viewModelScope.launch {
             try {
                 if (state.isRemote) {
-                    val base = initialPolicy ?: policyRepository.getCurrentPolicy()
-                    val updated = base.copy(waqfaConfig = state.config)
-                    val ward = state.wardId
-                    val success = if (!ward.isNullOrBlank()) {
-                        policyRepository.pushPolicyToWard(ward, updated)
-                    } else {
-                        true
+                    val (success, updated) = withContext(Dispatchers.IO + NonCancellable) {
+                        val base = initialPolicy ?: policyRepository.getCurrentPolicy()
+                        val updatedPolicy = base.copy(waqfaConfig = state.config)
+                        val ward = state.wardId
+                        val pushed = if (!ward.isNullOrBlank()) {
+                            policyRepository.pushPolicyToWard(ward, updatedPolicy)
+                        } else {
+                            true
+                        }
+                        pushed to updatedPolicy
                     }
 
                     _uiState.update { it.copy(isLoading = false, isSaved = success) }
-                    onComplete(success, updated, null)
+                    if (success) {
+                        _events.send(
+                            WaqfaSettingsEvent.SaveSucceeded(
+                                updatedPolicy = updated,
+                                reconcileResult = null,
+                                pendingUsageAccessPrompt = false,
+                                isRemote = true
+                            )
+                        )
+                    } else {
+                        _events.send(WaqfaSettingsEvent.SaveFailed)
+                    }
+                    onComplete?.invoke(success, updated, null)
                 } else {
                     val app = getApplication<Application>()
-                    val wasA11yActiveBeforeSave = HisnAccessibilityService.instance != null ||
-                        withContext(Dispatchers.IO) {
+                    val resultTriple = withContext(Dispatchers.IO + NonCancellable) {
+                        val wasA11yActiveBeforeSave = HisnAccessibilityService.instance != null ||
                             AccessibilitySelfActivator.isServiceEnabledInSettings(app)
+
+                        val current = policyRepository.getCurrentPolicy()
+                        val updatedPolicy = current.copy(waqfaConfig = state.config)
+                        val success = policyRepository.saveAndEnforceSelfPolicy(updatedPolicy)
+                        var reconcileResult: AccessibilityReconcileResult? = null
+                        if (success) {
+                            sessionManager.updateConfig(state.config)
+                            val rawReconcile = AccessibilityPolicyCoordinator.reconcile(app, updatedPolicy)
+                            reconcileResult = if (!wasA11yActiveBeforeSave && rawReconcile is AccessibilityReconcileResult.AlreadyActive) {
+                                AccessibilityReconcileResult.EnabledSilently
+                            } else {
+                                rawReconcile
+                            }
                         }
+                        Triple(success, updatedPolicy, reconcileResult)
+                    }
 
-                    val current = policyRepository.getCurrentPolicy()
-                    val updatedPolicy = current.copy(waqfaConfig = state.config)
-                    val success = policyRepository.saveAndEnforceSelfPolicy(updatedPolicy)
-
-                    var reconcileResult: AccessibilityReconcileResult? = null
+                    val (success, updatedPolicy, reconcileResult) = resultTriple
                     if (success) {
-                        sessionManager.updateConfig(state.config)
-                        val rawReconcile = withContext(Dispatchers.IO) {
-                            AccessibilityPolicyCoordinator.reconcile(app, updatedPolicy)
-                        }
-                        reconcileResult = if (!wasA11yActiveBeforeSave && rawReconcile is AccessibilityReconcileResult.AlreadyActive) {
-                            AccessibilityReconcileResult.EnabledSilently
-                        } else {
-                            rawReconcile
-                        }
                         refreshEngineStatus()
 
                         val autoUpgraded = computeAutoUpgradedByOtherFeature(updatedPolicy)
@@ -289,17 +330,27 @@ class WaqfaSettingsViewModel(
                                 pendingUsageAccessPrompt = needsUsagePrompt
                             )
                         }
+                        _events.send(
+                            WaqfaSettingsEvent.SaveSucceeded(
+                                updatedPolicy = updatedPolicy,
+                                reconcileResult = reconcileResult,
+                                pendingUsageAccessPrompt = needsUsagePrompt,
+                                isRemote = false
+                            )
+                        )
                     } else {
                         val failedMsg = app.getString(com.drmohammed.antiporn.R.string.waqfa_settings_save_failed_toast)
                         _uiState.update { it.copy(isLoading = false, errorMessage = failedMsg) }
+                        _events.send(WaqfaSettingsEvent.SaveFailed)
                     }
-                    onComplete(success, updatedPolicy, reconcileResult)
+                    onComplete?.invoke(success, updatedPolicy, reconcileResult)
                 }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 Timber.tag(TAG).e(e, "Error saving waqfa settings")
                 _uiState.update { it.copy(isLoading = false, errorMessage = e.message) }
-                onComplete(false, null, null)
+                _events.send(WaqfaSettingsEvent.SaveFailed)
+                onComplete?.invoke(false, null, null)
             }
         }
     }

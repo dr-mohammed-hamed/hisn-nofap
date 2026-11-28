@@ -9,7 +9,6 @@ import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -25,11 +24,12 @@ import com.drmohammed.antiporn.curfew.WebFilterCapabilityResult
 import com.drmohammed.antiporn.data.repository.PolicyRepository
 import com.drmohammed.antiporn.databinding.ActivityWebFilterSettingsBinding
 import com.drmohammed.antiporn.telemetry.SafeDpmGateway
-import com.drmohammed.antiporn.ui.common.SecondaryProfileResolutionDialogHelper
+import com.drmohammed.antiporn.ui.common.ConfirmActionDialogFragment
+import com.drmohammed.antiporn.ui.common.SecondaryProfileResolutionDialogFragment
+import com.drmohammed.antiporn.ui.common.showSafely
 import com.drmohammed.antiporn.ui.control.gate.SelfControlAccessGateRegistry
 import com.drmohammed.antiporn.ui.control.gate.SelfControlSection
 import com.google.android.material.color.MaterialColors
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -49,7 +49,6 @@ class WebFilterSettingsActivity : AppCompatActivity() {
 
     private var isProgrammaticUiUpdate = false
     private var pendingVpnConsentSource: VpnConsentSource? = null
-    private var activeDialog: AlertDialog? = null
 
     private val vpnConsentLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         val source = pendingVpnConsentSource ?: VpnConsentSource.FULL_SYSTEM
@@ -156,13 +155,34 @@ class WebFilterSettingsActivity : AppCompatActivity() {
             val allowed = bundle.getStringArrayList(WebsiteRulesBottomSheet.RESULT_ALLOWED_URLS)?.toSet() ?: emptySet()
             viewModel.updateWebsiteRules(blocked, allowed)
         }
+        supportFragmentManager.setFragmentResultListener(SecondaryProfileResolutionDialogFragment.REQUEST_KEY, this) { _, bundle ->
+            when (bundle.getString(SecondaryProfileResolutionDialogFragment.RESULT_ACTION)) {
+                SecondaryProfileResolutionDialogFragment.ACTION_OPEN_SETTINGS -> openCloneSettingsFallback()
+                SecondaryProfileResolutionDialogFragment.ACTION_CONFIRM_REMOVE -> {
+                    val profile = SecondaryProfileResolutionDialogFragment.extractConfirmedProfile(bundle)
+                        ?: return@setFragmentResultListener
+                    executeSingleProfileRemovalFromWebFilter(profile)
+                }
+            }
+        }
+        supportFragmentManager.setFragmentResultListener(REQ_CAPABILITY_BLOCKED, this) { _, bundle ->
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) == ConfirmActionDialogFragment.BUTTON_POSITIVE) {
+                openSelectiveProfileResolutionFromWebFilter()
+            }
+        }
+        supportFragmentManager.setFragmentResultListener(REQ_DISCARD_CHANGES, this) { _, bundle ->
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) == ConfirmActionDialogFragment.BUTTON_POSITIVE) {
+                backPressedCallback.isEnabled = false
+                finish()
+            }
+        }
     }
 
     private fun setupListeners() = with(binding) {
         toolbarWebFilter.setNavigationOnClickListener { onBackPressedDispatcher.onBackPressed() }
         val openDnsPicker = View.OnClickListener {
-            if (supportFragmentManager.findFragmentByTag(DnsPickerBottomSheet.TAG) == null) {
-                DnsPickerBottomSheet.newInstance(viewModel.uiState.value.dnsHost).show(supportFragmentManager, DnsPickerBottomSheet.TAG)
+            supportFragmentManager.showSafely(DnsPickerBottomSheet.TAG) {
+                DnsPickerBottomSheet.newInstance(viewModel.uiState.value.dnsHost)
             }
         }
         layoutDnsSummaryRow.setOnClickListener(openDnsPicker)
@@ -179,10 +199,9 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         switchYouTubeRestricted.setOnCheckedChangeListener { _, c -> if (!isProgrammaticUiUpdate) viewModel.setYouTubeRestricted(c) }
         toggleGroupSiteMode.addOnButtonCheckedListener { _, id, c -> if (!isProgrammaticUiUpdate && c) viewModel.setWhitelistOnlyMode(id == R.id.btnModeWhitelist) }
         btnManageWebsites.setOnClickListener {
-            if (supportFragmentManager.findFragmentByTag(WebsiteRulesBottomSheet.TAG) == null) {
+            supportFragmentManager.showSafely(WebsiteRulesBottomSheet.TAG) {
                 val s = viewModel.uiState.value
                 WebsiteRulesBottomSheet.newInstance(s.blockedUrls, s.allowedUrls, s.isWhitelistOnlyMode)
-                    .show(supportFragmentManager, WebsiteRulesBottomSheet.TAG)
             }
         }
         btnDisableFullSystemFromWarning.setOnClickListener { viewModel.setFullSystemFiltering(false) }
@@ -307,12 +326,14 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         if (SafeDpmGateway.isDeviceOwner(this)) return true
         if (pendingVpnConsentSource != null) return false
         val prepareIntent = runCatching { VpnService.prepare(this) }.getOrElse {
+            Timber.w(it, "VpnService.prepare failed")
             Toast.makeText(this, R.string.vpn_permission_denied_msg, Toast.LENGTH_SHORT).show()
             return false
         }
         if (prepareIntent != null) {
             pendingVpnConsentSource = source
             runCatching { vpnConsentLauncher.launch(prepareIntent) }.onFailure {
+                Timber.w(it, "Failed launching VPN consent activity")
                 pendingVpnConsentSource = null
                 Toast.makeText(this, R.string.vpn_permission_denied_msg, Toast.LENGTH_SHORT).show()
             }
@@ -329,14 +350,15 @@ class WebFilterSettingsActivity : AppCompatActivity() {
             is WebFilterCapabilityResult.BlockedHostilePrivateDns -> getString(R.string.dialog_web_filter_save_blocked_hostile_msg, capability.hostileHost)
             is WebFilterCapabilityResult.Allowed -> return
         }
-        showDialog(
-            MaterialAlertDialogBuilder(this)
-                .setTitle(R.string.dialog_web_filter_save_blocked_title)
-                .setMessage(message)
-                .setPositiveButton(R.string.btn_resolve_secondary_profile_now) { _, _ -> openSelectiveProfileResolutionFromWebFilter() }
-                .setNegativeButton(android.R.string.cancel, null)
-                .create()
-        )
+        supportFragmentManager.showSafely(TAG_CAPABILITY_BLOCKED) {
+            ConfirmActionDialogFragment.newInstance(
+                requestKey = REQ_CAPABILITY_BLOCKED,
+                titleRes = R.string.dialog_web_filter_save_blocked_title,
+                messageText = message,
+                positiveRes = R.string.btn_resolve_secondary_profile_now,
+                negativeRes = android.R.string.cancel
+            )
+        }
     }
 
     private fun openSelectiveProfileResolutionFromWebFilter() {
@@ -347,13 +369,9 @@ class WebFilterSettingsActivity : AppCompatActivity() {
                 withContext(Dispatchers.Main) {
                     if (isFinishing || isDestroyed) return@withContext
                     if (secondaries.isEmpty()) { openCloneSettingsFallback(); return@withContext }
-                    activeDialog?.dismiss()
-                    SecondaryProfileResolutionDialogHelper.showProfileSelectionDialog(
-                        context = this@WebFilterSettingsActivity, secondaries = secondaries,
-                        onOpenSettings = { openCloneSettingsFallback() },
-                        onConfirmRemoveSingleProfile = { executeSingleProfileRemovalFromWebFilter(it) },
-                        onActiveDialogChanged = { activeDialog = it }
-                    )
+                    supportFragmentManager.showSafely(SecondaryProfileResolutionDialogFragment.TAG_SELECT) {
+                        SecondaryProfileResolutionDialogFragment.newSelectionInstance(secondaries)
+                    }
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
@@ -366,7 +384,10 @@ class WebFilterSettingsActivity : AppCompatActivity() {
     }
 
     private fun openCloneSettingsFallback() = runCatching { startActivity(SecondaryProfileDetector.resolveCloneSettingsIntent(this)) }
-        .onFailure { Toast.makeText(applicationContext, R.string.toast_open_settings_failed, Toast.LENGTH_SHORT).show() }
+        .onFailure {
+            Timber.w(it, "Failed opening clone settings fallback")
+            Toast.makeText(applicationContext, R.string.toast_open_settings_failed, Toast.LENGTH_SHORT).show()
+        }
 
     private fun executeSingleProfileRemovalFromWebFilter(profile: SecondaryProfileDetector.UnaffiliatedProfileInfo) {
         val appCtx = applicationContext
@@ -397,25 +418,29 @@ class WebFilterSettingsActivity : AppCompatActivity() {
     }
 
     private fun showDiscardConfirmationDialog() {
-        showDialog(
-            MaterialAlertDialogBuilder(this).setTitle(R.string.dialog_unsaved_changes_title).setMessage(R.string.dialog_unsaved_changes_msg)
-                .setNegativeButton(R.string.btn_keep_editing) { d, _ -> d.dismiss() }
-                .setPositiveButton(R.string.btn_discard_changes) { d, _ -> d.dismiss(); backPressedCallback.isEnabled = false; finish() }
-                .create()
-        )
-    }
-
-    private fun showAlert(title: String, message: String) = showDialog(MaterialAlertDialogBuilder(this).setTitle(title).setMessage(message).setPositiveButton(android.R.string.ok, null).create())
-
-    private fun showDialog(dialog: AlertDialog) {
         if (isFinishing || isDestroyed) return
-        activeDialog?.dismiss()
-        dialog.setOnDismissListener { if (activeDialog === dialog) activeDialog = null }
-        activeDialog = dialog
-        dialog.show()
+        supportFragmentManager.showSafely(TAG_DISCARD_CHANGES) {
+            ConfirmActionDialogFragment.newInstance(
+                requestKey = REQ_DISCARD_CHANGES,
+                titleRes = R.string.dialog_unsaved_changes_title,
+                messageRes = R.string.dialog_unsaved_changes_msg,
+                positiveRes = R.string.btn_discard_changes,
+                negativeRes = R.string.btn_keep_editing
+            )
+        }
     }
 
-    override fun onDestroy() { activeDialog?.dismiss(); activeDialog = null; super.onDestroy() }
+    private fun showAlert(title: String, message: String) {
+        if (isFinishing || isDestroyed) return
+        supportFragmentManager.showSafely(TAG_ALERT) {
+            ConfirmActionDialogFragment.newInstance(
+                requestKey = REQ_ALERT,
+                titleText = title,
+                messageText = message,
+                positiveRes = android.R.string.ok
+            )
+        }
+    }
 
     companion object {
         const val EXTRA_IS_REMOTE = "extra_is_remote"
@@ -423,5 +448,11 @@ class WebFilterSettingsActivity : AppCompatActivity() {
         const val EXTRA_POLICY_JSON = "extra_policy_json"
         const val EXTRA_UPDATED_POLICY_JSON = "extra_updated_policy_json"
         private const val STATE_PENDING_VPN_CONSENT_SOURCE = "state_pending_vpn_consent_source"
+        private const val REQ_CAPABILITY_BLOCKED = "req_wf_capability_blocked"
+        private const val TAG_CAPABILITY_BLOCKED = "tag_wf_capability_blocked"
+        private const val REQ_DISCARD_CHANGES = "req_wf_discard_changes"
+        private const val TAG_DISCARD_CHANGES = "tag_wf_discard_changes"
+        private const val REQ_ALERT = "req_wf_alert"
+        private const val TAG_ALERT = "tag_wf_alert"
     }
 }

@@ -4,10 +4,14 @@ import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
+import android.text.InputType
 import android.view.View
 import android.widget.Toast
+import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -17,13 +21,16 @@ import com.drmohammed.antiporn.accessibility.control.AccessibilityReconcileResul
 import com.drmohammed.antiporn.accessibility.ui.AccessibilityOnboardingBottomSheet
 import com.drmohammed.antiporn.banking.BankingShortcutPromptHelper
 import com.drmohammed.antiporn.databinding.ActivityWaqfaSettingsBinding
+import com.drmohammed.antiporn.ui.common.ConfirmActionDialogFragment
+import com.drmohammed.antiporn.ui.common.TextInputDialogFragment
+import com.drmohammed.antiporn.ui.common.showSafely
 import com.drmohammed.antiporn.ui.control.gate.SelfControlAccessGateRegistry
 import com.drmohammed.antiporn.ui.control.gate.SelfControlSection
 import com.drmohammed.antiporn.waqfa.model.WaqfaTimeoutReactionType
 import com.google.android.material.color.MaterialColors
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.launch
 import org.koin.androidx.viewmodel.ext.android.viewModel
+import timber.log.Timber
 
 /**
  * شاشة إعدادات وإدارة نظام «وَقْفَة».
@@ -39,11 +46,27 @@ class WaqfaSettingsActivity : AppCompatActivity() {
     private var awaitingUsageReturn = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         awaitingA11yReturn = savedInstanceState?.getBoolean(KEY_AWAITING_A11Y_RETURN, false) ?: false
         awaitingUsageReturn = savedInstanceState?.getBoolean(KEY_AWAITING_USAGE_RETURN, false) ?: false
         binding = ActivityWaqfaSettingsBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        val rootView = binding.layoutRootWaqfaSettings
+        val baseL = rootView.paddingLeft
+        val baseT = rootView.paddingTop
+        val baseR = rootView.paddingRight
+        val baseB = rootView.paddingBottom
+        ViewCompat.setOnApplyWindowInsetsListener(rootView) { view, windowInsets ->
+            val insets = windowInsets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or
+                    WindowInsetsCompat.Type.displayCutout() or
+                    WindowInsetsCompat.Type.ime()
+            )
+            view.setPadding(baseL + insets.left, baseT + insets.top, baseR + insets.right, baseB + insets.bottom)
+            windowInsets
+        }
 
         supportFragmentManager.setFragmentResultListener(
             WaqfaAppPickerBottomSheet.REQUEST_KEY,
@@ -51,6 +74,21 @@ class WaqfaSettingsActivity : AppCompatActivity() {
         ) { _, bundle ->
             val targets = bundle.getStringArrayList(WaqfaAppPickerBottomSheet.RESULT_TARGETS)?.toSet() ?: emptySet()
             viewModel.setTargetPackages(targets)
+        }
+
+        supportFragmentManager.setFragmentResultListener(REQ_ADD_DURATION, this) { _, bundle ->
+            if (bundle.getBoolean(TextInputDialogFragment.RESULT_CONFIRMED, false)) {
+                val mins = bundle.getString(TextInputDialogFragment.RESULT_TEXT)?.toIntOrNull()
+                if (mins != null && mins in 1..180) {
+                    viewModel.addQuickDuration(mins)
+                }
+            }
+        }
+
+        supportFragmentManager.setFragmentResultListener(REQ_USAGE_ACCESS_PROMPT, this) { _, bundle ->
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) == ConfirmActionDialogFragment.BUTTON_POSITIVE) {
+                openUsageAccessSettings()
+            }
         }
 
         val isRemote = intent.getBooleanExtra(EXTRA_IS_REMOTE, false)
@@ -146,14 +184,14 @@ class WaqfaSettingsActivity : AppCompatActivity() {
         }
 
         binding.btnSelectApps.setOnClickListener {
-            if (supportFragmentManager.findFragmentByTag(WaqfaAppPickerBottomSheet.TAG) != null) return@setOnClickListener
             val state = viewModel.uiState.value
-            val sheet = WaqfaAppPickerBottomSheet.newInstance(
-                isRemote = state.isRemote,
-                wardId = state.wardId.orEmpty(),
-                initialTargets = state.config.targetPackages
-            )
-            sheet.show(supportFragmentManager, WaqfaAppPickerBottomSheet.TAG)
+            supportFragmentManager.showSafely(WaqfaAppPickerBottomSheet.TAG) {
+                WaqfaAppPickerBottomSheet.newInstance(
+                    isRemote = state.isRemote,
+                    wardId = state.wardId.orEmpty(),
+                    initialTargets = state.config.targetPackages
+                )
+            }
         }
 
         binding.swReasonRequired.setOnCheckedChangeListener { _, isChecked ->
@@ -201,59 +239,53 @@ class WaqfaSettingsActivity : AppCompatActivity() {
 
         binding.btnSaveWaqfaSettings.setOnClickListener {
             binding.btnSaveWaqfaSettings.isEnabled = false
-            viewModel.saveSettings { success, updatedPolicy, reconcileResult ->
-                if (isFinishing || isDestroyed) return@saveSettings
-                if (!success) {
-                    binding.btnSaveWaqfaSettings.isEnabled = true
-                    Toast.makeText(this, getString(R.string.waqfa_settings_save_failed_toast), Toast.LENGTH_SHORT).show()
-                    return@saveSettings
-                }
+            viewModel.saveSettings()
+        }
+    }
 
-                if (updatedPolicy != null) {
-                    setResult(
-                        Activity.RESULT_OK,
-                        Intent().putExtra(EXTRA_POLICY_JSON, updatedPolicy.toJson())
-                    )
-                }
-                Toast.makeText(this, getString(R.string.waqfa_settings_saved_toast), Toast.LENGTH_SHORT).show()
+    private fun handleSaveSucceeded(event: WaqfaSettingsEvent.SaveSucceeded) {
+        if (isFinishing || isDestroyed) return
+        if (event.updatedPolicy != null) {
+            setResult(
+                Activity.RESULT_OK,
+                Intent().putExtra(EXTRA_POLICY_JSON, event.updatedPolicy.toJson())
+            )
+        }
+        Toast.makeText(this, getString(R.string.waqfa_settings_saved_toast), Toast.LENGTH_SHORT).show()
 
-                val latestState = viewModel.uiState.value
-                if (latestState.isRemote) {
+        if (event.isRemote) {
+            finish()
+            return
+        }
+
+        val reconcileResult = event.reconcileResult
+        when {
+            reconcileResult is AccessibilityReconcileResult.NeedsManualActivation -> {
+                binding.btnSaveWaqfaSettings.isEnabled = true
+                awaitingA11yReturn = true
+                val reason = AccessibilityOnboardingBottomSheet.reasonFromSet(reconcileResult.reasons)
+                AccessibilityOnboardingBottomSheet.showIfNotShowing(
+                    fragmentManager = supportFragmentManager,
+                    reason = reason
+                )
+                viewModel.clearPendingPrompts()
+            }
+            event.pendingUsageAccessPrompt -> {
+                binding.btnSaveWaqfaSettings.isEnabled = true
+                awaitingUsageReturn = true
+                showUsageAccessPromptDialog()
+                viewModel.clearPendingPrompts()
+            }
+            reconcileResult is AccessibilityReconcileResult.EnabledSilently -> {
+                val shown = BankingShortcutPromptHelper.maybePrompt(this) {
+                    if (!isFinishing && !isDestroyed) finish()
+                }
+                if (!shown) {
                     finish()
-                    return@saveSettings
                 }
-
-                when {
-                    reconcileResult is AccessibilityReconcileResult.NeedsManualActivation -> {
-                        // إبقاء الشاشة مفتوحة حتى يكمل المستخدم التفعيل اليدوي ويعود
-                        binding.btnSaveWaqfaSettings.isEnabled = true
-                        awaitingA11yReturn = true
-                        val reason = AccessibilityOnboardingBottomSheet.reasonFromSet(reconcileResult.reasons)
-                        AccessibilityOnboardingBottomSheet.showIfNotShowing(
-                            fragmentManager = supportFragmentManager,
-                            reason = reason
-                        )
-                        viewModel.clearPendingPrompts()
-                    }
-                    latestState.pendingUsageAccessPrompt -> {
-                        // إبقاء الشاشة مفتوحة لتوجيه المستخدم نحو إذن الوصول لبيانات الاستخدام
-                        binding.btnSaveWaqfaSettings.isEnabled = true
-                        awaitingUsageReturn = true
-                        showUsageAccessPromptDialog()
-                        viewModel.clearPendingPrompts()
-                    }
-                    reconcileResult is AccessibilityReconcileResult.EnabledSilently -> {
-                        val shown = BankingShortcutPromptHelper.maybePrompt(this) {
-                            if (!isFinishing && !isDestroyed) finish()
-                        }
-                        if (!shown) {
-                            finish()
-                        }
-                    }
-                    else -> {
-                        finish()
-                    }
-                }
+            }
+            else -> {
+                finish()
             }
         }
     }
@@ -261,8 +293,27 @@ class WaqfaSettingsActivity : AppCompatActivity() {
     private fun observeUiState() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                viewModel.uiState.collect { state ->
-                    renderUi(state)
+                launch {
+                    viewModel.uiState.collect { state ->
+                        renderUi(state)
+                    }
+                }
+                launch {
+                    viewModel.events.collect { event ->
+                        when (event) {
+                            is WaqfaSettingsEvent.SaveSucceeded -> handleSaveSucceeded(event)
+                            is WaqfaSettingsEvent.SaveFailed -> {
+                                if (!isFinishing && !isDestroyed) {
+                                    binding.btnSaveWaqfaSettings.isEnabled = true
+                                    Toast.makeText(
+                                        this@WaqfaSettingsActivity,
+                                        getString(R.string.waqfa_settings_save_failed_toast),
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -434,45 +485,38 @@ class WaqfaSettingsActivity : AppCompatActivity() {
     }
 
     private fun showAddDurationDialog() {
-        val input = android.widget.EditText(this).apply {
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
-            hint = getString(R.string.waqfa_dialog_add_duration_hint)
+        supportFragmentManager.showSafely(TAG_ADD_DURATION) {
+            TextInputDialogFragment.newInstance(
+                requestKey = REQ_ADD_DURATION,
+                titleRes = R.string.waqfa_dialog_add_duration_title,
+                hintRes = R.string.waqfa_dialog_add_duration_hint,
+                positiveRes = R.string.waqfa_btn_add,
+                negativeRes = R.string.waqfa_btn_cancel,
+                inputType = InputType.TYPE_CLASS_NUMBER,
+                singleLine = true,
+                validationMode = TextInputDialogFragment.VALIDATION_INT_RANGE_1_180
+            )
         }
-        val container = android.widget.FrameLayout(this).apply {
-            setPadding(64, 24, 64, 16)
-            addView(input)
-        }
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.waqfa_dialog_add_duration_title)
-            .setView(container)
-            .setPositiveButton(R.string.waqfa_btn_add) { _, _ ->
-                val mins = input.text?.toString()?.toIntOrNull()
-                if (mins != null && mins in 1..180) {
-                    viewModel.addQuickDuration(mins)
-                } else {
-                    Toast.makeText(this, getString(R.string.waqfa_error_invalid_duration), Toast.LENGTH_SHORT).show()
-                }
-            }
-            .setNegativeButton(R.string.waqfa_btn_cancel, null)
-            .show()
     }
 
     private fun showUsageAccessPromptDialog() {
         if (isFinishing || isDestroyed) return
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.waqfa_usage_access_dialog_title)
-            .setMessage(R.string.waqfa_usage_access_dialog_msg)
-            .setPositiveButton(R.string.waqfa_usage_access_dialog_open_btn) { _, _ ->
-                openUsageAccessSettings()
-            }
-            .setNegativeButton(R.string.waqfa_permission_dialog_skip_btn, null)
-            .show()
+        supportFragmentManager.showSafely(TAG_USAGE_ACCESS_PROMPT) {
+            ConfirmActionDialogFragment.newInstance(
+                requestKey = REQ_USAGE_ACCESS_PROMPT,
+                titleRes = R.string.waqfa_usage_access_dialog_title,
+                messageRes = R.string.waqfa_usage_access_dialog_msg,
+                positiveRes = R.string.waqfa_usage_access_dialog_open_btn,
+                negativeRes = R.string.waqfa_permission_dialog_skip_btn
+            )
+        }
     }
 
     private fun openUsageAccessSettings() {
         try {
             startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
         } catch (e: Exception) {
+            Timber.w(e, "Unable to open Usage Access Settings")
             Toast.makeText(this, getString(R.string.waqfa_could_not_open_settings), Toast.LENGTH_SHORT).show()
         }
     }
@@ -489,5 +533,9 @@ class WaqfaSettingsActivity : AppCompatActivity() {
         const val EXTRA_POLICY_JSON = "extra_policy_json"
         private const val KEY_AWAITING_A11Y_RETURN = "key_awaiting_a11y_return"
         private const val KEY_AWAITING_USAGE_RETURN = "key_awaiting_usage_return"
+        private const val REQ_ADD_DURATION = "req_waqfa_add_duration"
+        private const val TAG_ADD_DURATION = "tag_waqfa_add_duration"
+        private const val REQ_USAGE_ACCESS_PROMPT = "req_waqfa_usage_access"
+        private const val TAG_USAGE_ACCESS_PROMPT = "tag_waqfa_usage_access"
     }
 }

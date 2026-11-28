@@ -3,12 +3,10 @@ package com.drmohammed.antiporn.ui.control.curfew
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
-import android.util.Log
 import android.view.View
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -20,12 +18,14 @@ import com.drmohammed.antiporn.curfew.CurfewConfig
 import com.drmohammed.antiporn.curfew.CurfewEnforcer
 import com.drmohammed.antiporn.curfew.CurfewScheduler
 import com.drmohammed.antiporn.data.repository.PolicyRepository
+import com.drmohammed.antiporn.ui.common.ConfirmActionDialogFragment
+import com.drmohammed.antiporn.ui.common.showSafely
 import com.drmohammed.antiporn.ui.control.gate.SelfControlAccessGateRegistry
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import timber.log.Timber
 
 /**
  * Dedicated Sub-Screen for Night Curfew Settings.
@@ -39,8 +39,6 @@ class CurfewSettingsActivity : AppCompatActivity() {
     private lateinit var viewBinder: CurfewSettingsViewBinder
 
     private var isSaving = false
-    private var immediateConfirmDialog: AlertDialog? = null
-    private var discardConfirmDialog: AlertDialog? = null
 
     private val backPressedCallback = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() {
@@ -73,14 +71,14 @@ class CurfewSettingsActivity : AppCompatActivity() {
 
         if (isRemote) {
             if (wardId.isBlank() || policyJson.isNullOrBlank()) {
-                Log.e(TAG, "Refusing remote curfew settings launch: missing EXTRA_WARD_ID or EXTRA_POLICY_JSON")
+                Timber.tag(TAG).e("Refusing remote curfew settings launch: missing EXTRA_WARD_ID or EXTRA_POLICY_JSON")
                 Toast.makeText(applicationContext, R.string.toast_guardian_policy_save_failed, Toast.LENGTH_LONG).show()
                 finish()
                 return
             }
             val parsed = DevicePolicyBundle.fromJsonOrNull(policyJson)
             if (parsed == null) {
-                Log.e(TAG, "Refusing remote curfew settings launch: invalid EXTRA_POLICY_JSON")
+                Timber.tag(TAG).e("Refusing remote curfew settings launch: invalid EXTRA_POLICY_JSON")
                 Toast.makeText(applicationContext, R.string.toast_guardian_policy_save_failed, Toast.LENGTH_LONG).show()
                 finish()
                 return
@@ -104,6 +102,19 @@ class CurfewSettingsActivity : AppCompatActivity() {
             viewBinder.selectedCurfewVpnBypass = vpnBypass
             viewBinder.updateAllowedAppsLabel()
             updateSaveButtonState()
+        }
+
+        supportFragmentManager.setFragmentResultListener(REQ_IMMEDIATE_CURFEW_CONFIRM, this) { _, bundle ->
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) == ConfirmActionDialogFragment.BUTTON_POSITIVE) {
+                performSaveChanges()
+            }
+        }
+
+        supportFragmentManager.setFragmentResultListener(REQ_DISCARD_CHANGES, this) { _, bundle ->
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) == ConfirmActionDialogFragment.BUTTON_POSITIVE) {
+                backPressedCallback.isEnabled = false
+                finish()
+            }
         }
 
         viewBinder.bindViews(canGoBack = { !isSaving })
@@ -141,10 +152,6 @@ class CurfewSettingsActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        immediateConfirmDialog?.dismiss()
-        immediateConfirmDialog = null
-        discardConfirmDialog?.dismiss()
-        discardConfirmDialog = null
         super.onDestroy()
     }
 
@@ -188,7 +195,7 @@ class CurfewSettingsActivity : AppCompatActivity() {
         }
 
         if (shouldConfirmImmediateCurfewActivation()) {
-            if (isFinishing || isDestroyed || immediateConfirmDialog?.isShowing == true) return
+            if (isFinishing || isDestroyed) return
             showImmediateCurfewConfirmationDialog()
             return
         }
@@ -226,24 +233,21 @@ class CurfewSettingsActivity : AppCompatActivity() {
 
     private fun showImmediateCurfewConfirmationDialog() {
         if (isFinishing || isDestroyed) return
-        immediateConfirmDialog = MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.dialog_curfew_immediate_title)
-            .setMessage(R.string.dialog_curfew_immediate_msg)
-            .setPositiveButton(R.string.btn_curfew_enable_now) { dialog, _ ->
-                dialog.dismiss()
-                performSaveChanges()
-            }
-            .setNegativeButton(R.string.dialog_btn_cancel, null)
-            .setOnDismissListener {
-                immediateConfirmDialog = null
-            }
-            .show()
+        supportFragmentManager.showSafely(TAG_IMMEDIATE_CURFEW_CONFIRM) {
+            ConfirmActionDialogFragment.newInstance(
+                requestKey = REQ_IMMEDIATE_CURFEW_CONFIRM,
+                titleRes = R.string.dialog_curfew_immediate_title,
+                messageRes = R.string.dialog_curfew_immediate_msg,
+                positiveRes = R.string.btn_curfew_enable_now,
+                negativeRes = R.string.dialog_btn_cancel
+            )
+        }
     }
 
     private fun performSaveChanges() {
         if (isSaving || !hasUnsavedChanges()) return
         if (isRemote && wardId.isBlank()) {
-            Log.e(TAG, "Refusing remote policy push: wardId is blank")
+            Timber.tag(TAG).e("Refusing remote policy push: wardId is blank")
             Toast.makeText(applicationContext, R.string.toast_guardian_policy_save_failed, Toast.LENGTH_LONG).show()
             return
         }
@@ -284,7 +288,7 @@ class CurfewSettingsActivity : AppCompatActivity() {
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.e(TAG, "Error saving curfew settings", e)
+                Timber.tag(TAG).e(e, "Error saving curfew settings")
                 if (isFinishing || isDestroyed) return@launch
                 isSaving = false
                 updateSaveButtonState()
@@ -295,26 +299,24 @@ class CurfewSettingsActivity : AppCompatActivity() {
     }
 
     private fun showDiscardConfirmationDialog() {
-        if (isFinishing || isDestroyed || discardConfirmDialog?.isShowing == true) return
-        discardConfirmDialog = MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.dialog_unsaved_changes_title)
-            .setMessage(R.string.dialog_unsaved_changes_msg)
-            .setNegativeButton(R.string.btn_keep_editing) { dialog, _ ->
-                dialog.dismiss()
-            }
-            .setPositiveButton(R.string.btn_discard_changes) { dialog, _ ->
-                dialog.dismiss()
-                backPressedCallback.isEnabled = false
-                finish()
-            }
-            .setOnDismissListener {
-                discardConfirmDialog = null
-            }
-            .show()
+        if (isFinishing || isDestroyed) return
+        supportFragmentManager.showSafely(TAG_DISCARD_CHANGES) {
+            ConfirmActionDialogFragment.newInstance(
+                requestKey = REQ_DISCARD_CHANGES,
+                titleRes = R.string.dialog_unsaved_changes_title,
+                messageRes = R.string.dialog_unsaved_changes_msg,
+                positiveRes = R.string.btn_discard_changes,
+                negativeRes = R.string.btn_keep_editing
+            )
+        }
     }
 
     companion object {
         private const val TAG = "CurfewSettings"
+        private const val REQ_IMMEDIATE_CURFEW_CONFIRM = "req_curfew_immediate_confirm"
+        private const val TAG_IMMEDIATE_CURFEW_CONFIRM = "tag_curfew_immediate_confirm"
+        private const val REQ_DISCARD_CHANGES = "req_curfew_discard_changes"
+        private const val TAG_DISCARD_CHANGES = "tag_curfew_discard_changes"
         const val EXTRA_IS_REMOTE = "extra_is_remote"
         const val EXTRA_WARD_ID = "extra_ward_id"
         const val EXTRA_POLICY_JSON = "extra_policy_json"

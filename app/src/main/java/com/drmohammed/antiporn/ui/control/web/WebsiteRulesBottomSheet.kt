@@ -1,26 +1,24 @@
 package com.drmohammed.antiporn.ui.control.web
 
-import android.app.Dialog
+import android.content.res.Configuration
 import android.os.Bundle
+import android.text.InputType
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.view.inputmethod.EditorInfo
-import android.widget.FrameLayout
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
 import androidx.core.os.bundleOf
+import androidx.core.view.isVisible
 import androidx.core.widget.doAfterTextChanged
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.core.util.BrowserUrlSanitizer
 import com.drmohammed.antiporn.databinding.BottomSheetWebsiteRulesBinding
-import com.google.android.material.bottomsheet.BottomSheetBehavior
-import com.google.android.material.bottomsheet.BottomSheetDialog
+import com.drmohammed.antiporn.ui.common.TextInputDialogFragment
+import com.drmohammed.antiporn.ui.common.applyBottomSheetInsets
+import com.drmohammed.antiporn.ui.common.configureLandscapeFriendlySheet
+import com.drmohammed.antiporn.ui.common.showSafely
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import com.google.android.material.textfield.TextInputEditText
-import com.google.android.material.textfield.TextInputLayout
 
 /**
  * BottomSheet for managing blocked and allowed website lists with search and mutual exclusivity.
@@ -37,18 +35,6 @@ class WebsiteRulesBottomSheet : BottomSheetDialogFragment() {
     private var searchQuery: String = ""
 
     private lateinit var adapter: WebsiteRulesAdapter
-    private var activeAddDialog: AlertDialog? = null
-
-    override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
-        val dialog = super.onCreateDialog(savedInstanceState)
-        dialog.setOnShowListener {
-            (dialog as? BottomSheetDialog)?.behavior?.apply {
-                skipCollapsed = true
-                state = BottomSheetBehavior.STATE_EXPANDED
-            }
-        }
-        return dialog
-    }
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -61,6 +47,14 @@ class WebsiteRulesBottomSheet : BottomSheetDialogFragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+
+        configureLandscapeFriendlySheet(enableImeResize = true)
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        applyBottomSheetInsets(view, includeIme = true) { imeVisible ->
+            if (_binding != null && isLandscape) {
+                binding.btnDoneWebsites.isVisible = !imeVisible
+            }
+        }
 
         restoreState(savedInstanceState)
 
@@ -81,6 +75,12 @@ class WebsiteRulesBottomSheet : BottomSheetDialogFragment() {
         }
 
         setupListeners()
+        childFragmentManager.setFragmentResultListener(REQ_ADD_WEBSITE, viewLifecycleOwner) { _, bundle ->
+            if (bundle.getBoolean(TextInputDialogFragment.RESULT_CONFIRMED, false)) {
+                val raw = bundle.getString(TextInputDialogFragment.RESULT_TEXT).orEmpty()
+                handleAddWebsite(raw)
+            }
+        }
         refreshUi()
     }
 
@@ -168,56 +168,25 @@ class WebsiteRulesBottomSheet : BottomSheetDialogFragment() {
     }
 
     private fun showAddWebsiteDialog() {
-        val ctx = context ?: return
-        val density = resources.displayMetrics.density
-        val horizontalMargin = (20 * density).toInt()
-        val topMargin = (8 * density).toInt()
-
-        val textInputLayout = TextInputLayout(ctx).apply {
-            boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
-            hint = getString(R.string.dialog_add_url_hint)
-        }
-        val editText = TextInputEditText(textInputLayout.context).apply {
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
-            imeOptions = EditorInfo.IME_ACTION_DONE
-            maxLines = 1
-            textDirection = View.TEXT_DIRECTION_LTR
-        }
-        textInputLayout.addView(editText)
-
-        val container = FrameLayout(ctx).apply {
-            setPadding(horizontalMargin, topMargin, horizontalMargin, 0)
-            addView(textInputLayout)
-        }
-
         val titleRes = if (isAllowedTab) R.string.dialog_add_allowed_title else R.string.dialog_add_url_title
-        val dialog = MaterialAlertDialogBuilder(ctx)
-            .setTitle(titleRes)
-            .setView(container)
-            .setPositiveButton(R.string.browser_filter_btn_add) { _, _ ->
-                val raw = editText.text?.toString().orEmpty()
-                handleAddWebsite(raw)
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .create()
-
-        editText.setOnEditorActionListener { _, actionId, _ ->
-            if (actionId == EditorInfo.IME_ACTION_DONE) {
-                dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.performClick()
-                true
-            } else {
-                false
-            }
+        val validationMode = if (isAllowedTab) {
+            TextInputDialogFragment.VALIDATION_WEBSITE_ALLOW
+        } else {
+            TextInputDialogFragment.VALIDATION_WEBSITE_BLOCK
         }
-
-        dialog.setOnDismissListener {
-            if (activeAddDialog === dialog) {
-                activeAddDialog = null
-            }
+        childFragmentManager.showSafely(TAG_ADD_WEBSITE) {
+            TextInputDialogFragment.newInstance(
+                requestKey = REQ_ADD_WEBSITE,
+                titleRes = titleRes,
+                hintRes = R.string.dialog_add_url_hint,
+                positiveRes = R.string.browser_filter_btn_add,
+                negativeRes = android.R.string.cancel,
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI,
+                singleLine = true,
+                ltrTextDirection = true,
+                validationMode = validationMode
+            )
         }
-        activeAddDialog?.dismiss()
-        activeAddDialog = dialog
-        dialog.show()
     }
 
     private fun handleAddWebsite(raw: String) {
@@ -251,8 +220,6 @@ class WebsiteRulesBottomSheet : BottomSheetDialogFragment() {
 
     override fun onDestroyView() {
         super.onDestroyView()
-        activeAddDialog?.dismiss()
-        activeAddDialog = null
         _binding = null
     }
 
@@ -261,6 +228,8 @@ class WebsiteRulesBottomSheet : BottomSheetDialogFragment() {
         const val REQUEST_KEY = "website_rules_request"
         const val RESULT_BLOCKED_URLS = "result_blocked_urls"
         const val RESULT_ALLOWED_URLS = "result_allowed_urls"
+        private const val REQ_ADD_WEBSITE = "req_add_website"
+        private const val TAG_ADD_WEBSITE = "tag_add_website"
 
         private const val ARG_BLOCKED_URLS = "arg_blocked_urls"
         private const val ARG_ALLOWED_URLS = "arg_allowed_urls"

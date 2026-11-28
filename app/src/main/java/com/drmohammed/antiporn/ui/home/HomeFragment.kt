@@ -7,13 +7,11 @@ import android.net.VpnService
 import android.os.Bundle
 import android.os.SystemClock
 import android.provider.Settings
-import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
@@ -37,9 +35,10 @@ import com.drmohammed.antiporn.databinding.FragmentHomeBinding
 import com.drmohammed.antiporn.provisioning.ui.ProvisioningWizardActivity
 import com.drmohammed.antiporn.shields.DnsShield
 import com.drmohammed.antiporn.ui.ProtectionUiState
-import com.drmohammed.antiporn.ui.common.SecondaryProfileResolutionDialogHelper
+import com.drmohammed.antiporn.ui.common.ConfirmActionDialogFragment
+import com.drmohammed.antiporn.ui.common.SecondaryProfileResolutionDialogFragment
+import com.drmohammed.antiporn.ui.common.showSafely
 import com.drmohammed.antiporn.ui.shields.ActiveShieldsBottomSheet
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -48,6 +47,7 @@ import org.koin.androidx.viewmodel.ext.android.viewModel
 import org.koin.android.ext.android.inject
 import com.drmohammed.antiporn.notification.repository.NotificationRepository
 import com.drmohammed.antiporn.ui.notification.NotificationCenterActivity
+import timber.log.Timber
 
 /**
  * Modern Hero Dashboard Fragment.
@@ -63,7 +63,7 @@ class HomeFragment : Fragment() {
     private var actionListener: HomeActionListener? = null
 
     private var _binding: FragmentHomeBinding? = null
-    private val binding get() = _binding!!
+    private val binding get() = _binding ?: throw IllegalStateException("Binding is only valid between onCreateView and onDestroyView")
 
     private val homeViewModel: HomeViewModel by viewModel()
     private val notificationRepo: NotificationRepository by inject()
@@ -75,8 +75,6 @@ class HomeFragment : Fragment() {
     private var lastBellClickTime = 0L
     private var lastProvisioningClickTime = 0L
     private var wasStopped = false
-    private var napConfirmDialog: AlertDialog? = null
-    private var activeProfileDialog: AlertDialog? = null
     private var dnsStatusNoticeJob: Job? = null
 
     private val vpnConsentLauncher = registerForActivityResult(
@@ -123,8 +121,71 @@ class HomeFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        setupFragmentResultListeners()
         setupListeners()
         observeViewModel()
+    }
+
+    private fun setupFragmentResultListeners() {
+        childFragmentManager.setFragmentResultListener(REQ_NAP_CONFIRM, viewLifecycleOwner) { _, bundle ->
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) == ConfirmActionDialogFragment.BUTTON_POSITIVE) {
+                val appCtx = context?.applicationContext ?: return@setFragmentResultListener
+                _binding?.btnHeroNapStart?.isEnabled = false
+                _binding?.btnHeroNapExtend?.isEnabled = false
+                homeViewModel.startNap { success ->
+                    if (isAdded && _binding != null) {
+                        binding.btnHeroNapExtend.isEnabled = true
+                        if (success) {
+                            Toast.makeText(appCtx, R.string.toast_nap_started, Toast.LENGTH_SHORT).show()
+                            updateNapDisplay()
+                        } else {
+                            if (!NapController.isNapActive(appCtx) && !HomeViewModel.isEnforcedCurfewActive(appCtx)) {
+                                binding.btnHeroNapStart.isEnabled = true
+                            }
+                            val errorRes = when {
+                                HomeViewModel.isEnforcedCurfewActive(appCtx) -> R.string.card_curfew_night_locked_hint
+                                !ProtectionEngine.isDeviceOwner(appCtx) -> R.string.status_no_device_owner_title
+                                else -> R.string.status_need_enforce_desc
+                            }
+                            Toast.makeText(appCtx, errorRes, Toast.LENGTH_SHORT).show()
+                            updateNapDisplay()
+                        }
+                    }
+                }
+            }
+        }
+
+        childFragmentManager.setFragmentResultListener(
+            SecondaryProfileResolutionDialogFragment.REQUEST_KEY,
+            viewLifecycleOwner
+        ) { _, bundle ->
+            val ctx = context ?: return@setFragmentResultListener
+            when (bundle.getString(SecondaryProfileResolutionDialogFragment.RESULT_ACTION)) {
+                SecondaryProfileResolutionDialogFragment.ACTION_OPEN_SETTINGS -> {
+                    try {
+                        startActivity(SecondaryProfileDetector.resolveCloneSettingsIntent(ctx))
+                    } catch (e: Exception) {
+                        Timber.tag("HomeFragment").w(e, "Unable to open clone settings")
+                        Toast.makeText(ctx.applicationContext, R.string.toast_open_settings_failed, Toast.LENGTH_SHORT).show()
+                    }
+                }
+                SecondaryProfileResolutionDialogFragment.ACTION_CONFIRM_REMOVE -> {
+                    val selectedProfile = SecondaryProfileResolutionDialogFragment.extractConfirmedProfile(bundle)
+                        ?: return@setFragmentResultListener
+                    val appCtx = ctx.applicationContext
+                    homeViewModel.removeSecondaryProfile(selectedProfile) { removedTarget, allCleared ->
+                        if (isAdded && _binding != null) {
+                            val msgRes = when {
+                                allCleared -> R.string.msg_cloned_app_removed_success
+                                removedTarget -> R.string.msg_profile_removed_more_remaining
+                                else -> R.string.msg_cloned_app_remove_failed
+                            }
+                            Toast.makeText(appCtx, msgRes, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            }
+        }
     }
 
     override fun onResume() {
@@ -185,7 +246,7 @@ class HomeFragment : Fragment() {
             try {
                 startActivity(Intent(ctx, NotificationCenterActivity::class.java))
             } catch (e: Exception) {
-                Log.w("HomeFragment", "Unable to launch NotificationCenterActivity", e)
+                Timber.tag("HomeFragment").w(e, "Unable to launch NotificationCenterActivity")
             }
         }
 
@@ -193,7 +254,7 @@ class HomeFragment : Fragment() {
             val now = SystemClock.elapsedRealtime()
             if (now - lastShieldClickTime >= 600L) {
                 lastShieldClickTime = now
-                context?.let { ctx -> ActiveShieldsBottomSheet.show(ctx) }
+                ActiveShieldsBottomSheet.show(parentFragmentManager)
             }
         }
 
@@ -209,41 +270,15 @@ class HomeFragment : Fragment() {
                 return@setOnClickListener
             }
 
-            if (napConfirmDialog?.isShowing == true) return@setOnClickListener
-            napConfirmDialog = MaterialAlertDialogBuilder(ctx)
-                .setTitle(R.string.dialog_nap_confirm_title)
-                .setMessage(R.string.dialog_nap_confirm_msg)
-                .setPositiveButton(android.R.string.ok) { dialog, _ ->
-                    dialog.dismiss()
-                    _binding?.btnHeroNapStart?.isEnabled = false
-                    _binding?.btnHeroNapExtend?.isEnabled = false
-                    val appCtx = ctx.applicationContext
-                    homeViewModel.startNap { success ->
-                        if (isAdded && _binding != null) {
-                            binding.btnHeroNapExtend.isEnabled = true
-                            if (success) {
-                                Toast.makeText(appCtx, R.string.toast_nap_started, Toast.LENGTH_SHORT).show()
-                                updateNapDisplay()
-                            } else {
-                                if (!NapController.isNapActive(appCtx) && !HomeViewModel.isEnforcedCurfewActive(appCtx)) {
-                                    binding.btnHeroNapStart.isEnabled = true
-                                }
-                                val errorRes = when {
-                                    HomeViewModel.isEnforcedCurfewActive(appCtx) -> R.string.card_curfew_night_locked_hint
-                                    !ProtectionEngine.isDeviceOwner(appCtx) -> R.string.status_no_device_owner_title
-                                    else -> R.string.status_need_enforce_desc
-                                }
-                                Toast.makeText(appCtx, errorRes, Toast.LENGTH_SHORT).show()
-                                updateNapDisplay()
-                            }
-                        }
-                    }
-                }
-                .setNegativeButton(android.R.string.cancel, null)
-                .setOnDismissListener {
-                    napConfirmDialog = null
-                }
-                .show()
+            childFragmentManager.showSafely(TAG_NAP_CONFIRM) {
+                ConfirmActionDialogFragment.newInstance(
+                    requestKey = REQ_NAP_CONFIRM,
+                    titleRes = R.string.dialog_nap_confirm_title,
+                    messageRes = R.string.dialog_nap_confirm_msg,
+                    positiveRes = android.R.string.ok,
+                    negativeRes = android.R.string.cancel
+                )
+            }
         }
 
         binding.btnHeroNapExtend.setOnClickListener {
@@ -330,7 +365,7 @@ class HomeFragment : Fragment() {
                             false
                         }
                     } catch (e: Exception) {
-                        Log.w("HomeFragment", "Unable to prepare or launch VpnService consent intent", e)
+                        Timber.tag("HomeFragment").w(e, "Unable to prepare or launch VpnService consent intent")
                         Toast.makeText(
                             appCtx,
                             R.string.toast_emergency_vpn_consent_denied,
@@ -359,7 +394,7 @@ class HomeFragment : Fragment() {
             try {
                 startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
             } catch (e: Exception) {
-                Log.w("HomeFragment", "Unable to open Usage Access Settings", e)
+                Timber.tag("HomeFragment").w(e, "Unable to open Usage Access Settings")
                 Toast.makeText(ctx.applicationContext, R.string.toast_open_settings_failed, Toast.LENGTH_SHORT).show()
             }
         }
@@ -620,45 +655,20 @@ class HomeFragment : Fragment() {
         secondaries: List<SecondaryProfileDetector.UnaffiliatedProfileInfo>
     ) {
         if (secondaries.isEmpty()) return
-        activeProfileDialog?.dismiss()
-        SecondaryProfileResolutionDialogHelper.showProfileSelectionDialog(
-            context = ctx,
-            secondaries = secondaries,
-            onOpenSettings = {
-                try {
-                    val intent = SecondaryProfileDetector.resolveCloneSettingsIntent(ctx)
-                    startActivity(intent)
-                } catch (e: Exception) {
-                    Toast.makeText(ctx.applicationContext, R.string.toast_open_settings_failed, Toast.LENGTH_SHORT).show()
-                }
-            },
-            onConfirmRemoveSingleProfile = { selectedProfile ->
-                val appCtx = ctx.applicationContext
-                homeViewModel.removeSecondaryProfile(selectedProfile) { removedTarget, allCleared ->
-                    if (isAdded && _binding != null) {
-                        val msgRes = when {
-                            allCleared -> R.string.msg_cloned_app_removed_success
-                            removedTarget -> R.string.msg_profile_removed_more_remaining
-                            else -> R.string.msg_cloned_app_remove_failed
-                        }
-                        Toast.makeText(appCtx, msgRes, Toast.LENGTH_LONG).show()
-                    }
-                }
-            },
-            onActiveDialogChanged = { dialog ->
-                activeProfileDialog = dialog
-            }
-        )
+        childFragmentManager.showSafely(SecondaryProfileResolutionDialogFragment.TAG_SELECT) {
+            SecondaryProfileResolutionDialogFragment.newSelectionInstance(secondaries)
+        }
     }
 
     override fun onDestroyView() {
         dnsStatusNoticeJob?.cancel()
         dnsStatusNoticeJob = null
-        napConfirmDialog?.dismiss()
-        napConfirmDialog = null
-        activeProfileDialog?.dismiss()
-        activeProfileDialog = null
         super.onDestroyView()
         _binding = null
+    }
+
+    companion object {
+        private const val REQ_NAP_CONFIRM = "req_home_nap_confirm"
+        private const val TAG_NAP_CONFIRM = "tag_home_nap_confirm"
     }
 }

@@ -68,6 +68,8 @@ open class AccountabilityViewModel(
 
     private val pairingSessionMutex = Mutex()
     private var loadPairingCodeJob: Job? = null
+    private var loadPartnersJob: Job? = null
+    private var loadPendingApprovalsJob: Job? = null
     private var breakoutCountdownJob: Job? = null
     private var pairingCountdownJob: Job? = null
 
@@ -340,11 +342,12 @@ open class AccountabilityViewModel(
     }
 
     fun loadPartners() {
-        viewModelScope.launch(Dispatchers.IO) {
+        loadPartnersJob?.cancel()
+        loadPartnersJob = viewModelScope.launch(ioDispatcher) {
             try {
                 val wards = accountabilityRepo.getWards()
                 val guardians = accountabilityRepo.getGuardians()
-                withContext(Dispatchers.Main) {
+                withContext(mainDispatcher) {
                     _uiState.update { current ->
                         current.copy(
                             wards = wards,
@@ -353,19 +356,21 @@ open class AccountabilityViewModel(
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed loading partner records", e)
+                if (e is CancellationException) throw e
+                safeLogError("Failed loading partner records", e)
             }
         }
     }
 
     fun loadPendingApprovals() {
-        viewModelScope.launch(Dispatchers.IO) {
+        loadPendingApprovalsJob?.cancel()
+        loadPendingApprovalsJob = viewModelScope.launch(ioDispatcher) {
             try {
                 val activeWards = accountabilityRepo.getWards()
                     .filter { it.status == PartnerEntity.STATUS_ACTIVE }
 
                 if (activeWards.isEmpty()) {
-                    withContext(Dispatchers.Main) {
+                    withContext(mainDispatcher) {
                         _uiState.update { it.copy(pendingApprovalsCount = 0) }
                     }
                     return@launch
@@ -378,7 +383,7 @@ open class AccountabilityViewModel(
                 }.distinct()
 
                 if (resolvedWardIds.isEmpty()) {
-                    withContext(Dispatchers.Main) {
+                    withContext(mainDispatcher) {
                         _uiState.update { it.copy(pendingApprovalsCount = 0) }
                     }
                     return@launch
@@ -394,7 +399,8 @@ open class AccountabilityViewModel(
                                 .await()
                             snap.size()
                         } catch (e: Exception) {
-                            Log.w(TAG, "Failed loading pending approvals count for ward $wardId", e)
+                            if (e is CancellationException) throw e
+                            safeLogError("Failed loading pending approvals count for ward $wardId", e)
                             0
                         }
                     }
@@ -402,12 +408,13 @@ open class AccountabilityViewModel(
 
                 val totalPending = countDeferreds.awaitAll().sum()
 
-                withContext(Dispatchers.Main) {
+                withContext(mainDispatcher) {
                     _uiState.update { it.copy(pendingApprovalsCount = totalPending) }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed loading approvals", e)
-                withContext(Dispatchers.Main) {
+                if (e is CancellationException) throw e
+                safeLogError("Failed loading approvals", e)
+                withContext(mainDispatcher) {
                     _uiState.update { it.copy(pendingApprovalsCount = 0) }
                 }
             }
@@ -527,6 +534,10 @@ open class AccountabilityViewModel(
         stopBreakoutTicker()
         loadPairingCodeJob?.cancel()
         loadPairingCodeJob = null
+        loadPartnersJob?.cancel()
+        loadPartnersJob = null
+        loadPendingApprovalsJob?.cancel()
+        loadPendingApprovalsJob = null
         pairingCountdownJob?.cancel()
         pairingCountdownJob = null
         super.onCleared()

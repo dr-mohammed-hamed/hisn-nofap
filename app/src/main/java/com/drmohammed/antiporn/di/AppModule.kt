@@ -20,10 +20,14 @@ import com.drmohammed.antiporn.waqfa.data.WaqfaRepository
 import com.drmohammed.antiporn.waqfa.engine.WaqfaSessionManager
 import com.drmohammed.antiporn.waqfa.ui.gate.WaqfaGateViewModel
 import com.drmohammed.antiporn.waqfa.ui.settings.WaqfaSettingsViewModel
+import com.drmohammed.antiporn.provisioning.ui.SystemAppsManagerViewModel
 import com.drmohammed.antiporn.ui.accountability.AccountabilityViewModel
+import com.drmohammed.antiporn.ui.accountability.GuardianApprovalsHubViewModel
 import com.drmohammed.antiporn.ui.accountability.GuardianControlViewModel
+import com.drmohammed.antiporn.ui.accountability.GuardianSelfControlSettingsViewModel
 import com.drmohammed.antiporn.ui.accountability.RemoteAppManagerViewModel
 import com.drmohammed.antiporn.ui.control.SelfControlViewModel
+import com.drmohammed.antiporn.ui.control.web.DnsPickerValidationViewModel
 import com.drmohammed.antiporn.ui.control.web.WebFilterViewModel
 import com.drmohammed.antiporn.ui.home.HomeViewModel
 import com.drmohammed.antiporn.ui.main.MainViewModel
@@ -102,9 +106,14 @@ val appModule = module {
     viewModel { HomeViewModel(androidApplication(), get()) }
     viewModel { SelfControlViewModel(androidApplication(), get(), get()) }
     viewModel { WebFilterViewModel(androidApplication(), get(), get()) }
+    viewModel { DnsPickerValidationViewModel() }
     viewModel { AccountabilityViewModel(androidApplication(), get(), get(), get(), get()) }
     viewModel { RemoteAppManagerViewModel(androidApplication(), get(), get(), get()) }
     viewModel { GuardianControlViewModel(androidApplication(), get(), get(), get()) }
+    viewModel { GuardianSelfControlSettingsViewModel(androidApplication(), get()) }
+    viewModel { GuardianApprovalsHubViewModel(androidApplication(), get(), get(), get(), get()) }
+    viewModel { SystemAppsManagerViewModel(androidApplication()) }
+    viewModel { com.drmohammed.antiporn.provisioning.ui.ProvisioningWizardViewModel(androidApplication()) }
     viewModel { SettingsViewModel(androidApplication(), get(), get(), get()) }
     viewModel { NotificationCenterViewModel(get()) }
     viewModel { WaqfaGateViewModel(androidApplication(), get(), get()) }

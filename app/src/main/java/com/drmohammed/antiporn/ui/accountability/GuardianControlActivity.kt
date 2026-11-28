@@ -21,13 +21,13 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.drmohammed.antiporn.R
 import com.drmohammed.antiporn.accessibility.control.AccessibilityPolicyCoordinator
+import com.drmohammed.antiporn.ui.common.TextInputDialogFragment
+import com.drmohammed.antiporn.ui.common.showSafely
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.color.MaterialColors
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
-import com.google.android.material.textfield.TextInputEditText
 import kotlinx.coroutines.launch
 import org.koin.androidx.viewmodel.ext.android.viewModel
 
@@ -94,10 +94,26 @@ class GuardianControlActivity : AppCompatActivity() {
         }
 
         initViews()
+        setupFragmentResultListeners()
         setupListeners()
         observeViewModel()
 
         viewModel.initialize(wardId, wardName)
+    }
+
+    private fun setupFragmentResultListeners() {
+        supportFragmentManager.setFragmentResultListener(REQ_EDIT_WARD_NAME, this) { _, bundle ->
+            if (!bundle.getBoolean(TextInputDialogFragment.RESULT_CONFIRMED, false)) return@setFragmentResultListener
+            val newName = bundle.getString(TextInputDialogFragment.RESULT_TEXT)?.trim().orEmpty()
+            viewModel.renameWard(newName)
+        }
+
+        supportFragmentManager.setFragmentResultListener(RemoteTeardownDialogFragment.REQUEST_KEY, this) { _, bundle ->
+            when (bundle.getString(RemoteTeardownDialogFragment.RESULT_ACTION)) {
+                RemoteTeardownDialogFragment.ACTION_CONFIRM_TEARDOWN -> alertsViewBinder.executeApprovedImmediateTeardown()
+                RemoteTeardownDialogFragment.ACTION_CANCEL_PENDING_TEARDOWN -> alertsViewBinder.executeCancelPendingTeardown()
+            }
+        }
     }
 
     private fun applyWindowInsets() {
@@ -353,29 +369,18 @@ class GuardianControlActivity : AppCompatActivity() {
 
     private fun showEditWardNameDialog() {
         val currentName = viewModel.uiState.value.wardName
-        val input = TextInputEditText(this).apply {
-            setText(currentName)
-            hint = getString(R.string.dialog_edit_ward_name_hint)
-            setSingleLine()
-            setSelection(text?.length ?: 0)
-            filters = arrayOf(android.text.InputFilter.LengthFilter(28))
+        supportFragmentManager.showSafely(TAG_EDIT_WARD_NAME) {
+            TextInputDialogFragment.newInstance(
+                requestKey = REQ_EDIT_WARD_NAME,
+                titleRes = R.string.dialog_edit_ward_name_title,
+                hintRes = R.string.dialog_edit_ward_name_hint,
+                initialText = currentName,
+                positiveRes = R.string.btn_save,
+                negativeRes = R.string.dialog_btn_cancel,
+                maxLength = 28,
+                singleLine = true
+            )
         }
-        val frame = android.widget.FrameLayout(this).apply {
-            val pad = (20 * resources.displayMetrics.density).toInt()
-            setPadding(pad, (8 * resources.displayMetrics.density).toInt(), pad, 0)
-            addView(input)
-        }
-
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.dialog_edit_ward_name_title)
-            .setView(frame)
-            .setPositiveButton(R.string.btn_save) { dialog, _ ->
-                val newName = input.text?.toString()?.trim() ?: ""
-                viewModel.renameWard(newName)
-                dialog.dismiss()
-            }
-            .setNegativeButton(R.string.dialog_btn_cancel, null)
-            .show()
     }
 
     override fun onResume() {
@@ -401,5 +406,7 @@ class GuardianControlActivity : AppCompatActivity() {
     companion object {
         const val EXTRA_WARD_ID = "extra_ward_id"
         const val EXTRA_WARD_NAME = "extra_ward_name"
+        private const val REQ_EDIT_WARD_NAME = "req_guardian_edit_ward_name"
+        private const val TAG_EDIT_WARD_NAME = "tag_guardian_edit_ward_name"
     }
 }

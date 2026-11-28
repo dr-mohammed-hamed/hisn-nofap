@@ -5,8 +5,11 @@ import android.content.Intent
 import android.os.Bundle
 import android.view.View
 import android.widget.Toast
+import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -38,10 +41,24 @@ class PageShieldSettingsActivity : AppCompatActivity() {
     private var awaitingA11yReturn = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         awaitingA11yReturn = savedInstanceState?.getBoolean(KEY_AWAITING_A11Y_RETURN, false) ?: false
         binding = ActivityPageShieldSettingsBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        val rootView = binding.layoutRootPageShieldSettings
+        val baseL = rootView.paddingLeft
+        val baseT = rootView.paddingTop
+        val baseR = rootView.paddingRight
+        val baseB = rootView.paddingBottom
+        ViewCompat.setOnApplyWindowInsetsListener(rootView) { view, windowInsets ->
+            val insets = windowInsets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            view.setPadding(baseL + insets.left, baseT + insets.top, baseR + insets.right, baseB + insets.bottom)
+            windowInsets
+        }
 
         val isRemote = intent.getBooleanExtra(EXTRA_IS_REMOTE, false)
         val wardId = intent.getStringExtra(EXTRA_WARD_ID)
@@ -64,6 +81,13 @@ class PageShieldSettingsActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        val isRemote = intent.getBooleanExtra(EXTRA_IS_REMOTE, false)
+        if (!isRemote && (!SelfControlAccessGateRegistry.isSelfControlPermitted(this) ||
+                !SelfControlAccessGateRegistry.isSectionPermitted(this, SelfControlSection.PAGE_SHIELD))) {
+            Toast.makeText(this, R.string.self_control_section_locked_by_guardian, Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
         viewModel.refreshEngineStatus()
         val state = viewModel.uiState.value
         if (awaitingA11yReturn && state.isAccessibilityActive) {
@@ -123,49 +147,44 @@ class PageShieldSettingsActivity : AppCompatActivity() {
 
         binding.btnSavePageShieldSettings.setOnClickListener {
             binding.btnSavePageShieldSettings.isEnabled = false
-            viewModel.saveSettings { success, updatedPolicy, reconcileResult ->
-                if (isFinishing || isDestroyed) return@saveSettings
-                if (!success) {
-                    binding.btnSavePageShieldSettings.isEnabled = true
-                    Toast.makeText(this, getString(R.string.page_shield_save_failed_toast), Toast.LENGTH_SHORT).show()
-                    return@saveSettings
-                }
+            viewModel.saveSettings()
+        }
+    }
 
-                if (updatedPolicy != null) {
-                    setResult(
-                        Activity.RESULT_OK,
-                        Intent().putExtra(EXTRA_POLICY_JSON, updatedPolicy.toJson())
-                    )
-                }
-                Toast.makeText(this, getString(R.string.page_shield_saved_toast), Toast.LENGTH_SHORT).show()
+    private fun handleSaveSucceeded(event: PageShieldSettingsEvent.SaveSucceeded) {
+        if (isFinishing || isDestroyed) return
+        if (event.updatedPolicy != null) {
+            setResult(
+                Activity.RESULT_OK,
+                Intent().putExtra(EXTRA_POLICY_JSON, event.updatedPolicy.toJson())
+            )
+        }
+        Toast.makeText(this, getString(R.string.page_shield_saved_toast), Toast.LENGTH_SHORT).show()
 
-                if (viewModel.uiState.value.isRemote) {
+        if (event.isRemote) {
+            finish()
+            return
+        }
+
+        when (event.reconcileResult) {
+            is AccessibilityReconcileResult.NeedsManualActivation -> {
+                binding.btnSavePageShieldSettings.isEnabled = true
+                awaitingA11yReturn = true
+                AccessibilityOnboardingBottomSheet.showIfNotShowing(
+                    fragmentManager = supportFragmentManager,
+                    reason = AccessibilityOnboardingBottomSheet.REASON_PAGE_SHIELD
+                )
+            }
+            is AccessibilityReconcileResult.EnabledSilently -> {
+                val shown = BankingShortcutPromptHelper.maybePrompt(this) {
+                    if (!isFinishing && !isDestroyed) finish()
+                }
+                if (!shown) {
                     finish()
-                    return@saveSettings
                 }
-
-                when (reconcileResult) {
-                    is AccessibilityReconcileResult.NeedsManualActivation -> {
-                        // إبقاء الشاشة مفتوحة حتى يكمل المستخدم التفعيل اليدوي ويعود
-                        binding.btnSavePageShieldSettings.isEnabled = true
-                        awaitingA11yReturn = true
-                        AccessibilityOnboardingBottomSheet.showIfNotShowing(
-                            fragmentManager = supportFragmentManager,
-                            reason = AccessibilityOnboardingBottomSheet.REASON_PAGE_SHIELD
-                        )
-                    }
-                    is AccessibilityReconcileResult.EnabledSilently -> {
-                        val shown = BankingShortcutPromptHelper.maybePrompt(this) {
-                            if (!isFinishing && !isDestroyed) finish()
-                        }
-                        if (!shown) {
-                            finish()
-                        }
-                    }
-                    else -> {
-                        finish()
-                    }
-                }
+            }
+            else -> {
+                finish()
             }
         }
     }
@@ -173,8 +192,27 @@ class PageShieldSettingsActivity : AppCompatActivity() {
     private fun observeUiState() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                viewModel.uiState.collect { state ->
-                    renderUi(state)
+                launch {
+                    viewModel.uiState.collect { state ->
+                        renderUi(state)
+                    }
+                }
+                launch {
+                    viewModel.events.collect { event ->
+                        when (event) {
+                            is PageShieldSettingsEvent.SaveSucceeded -> handleSaveSucceeded(event)
+                            is PageShieldSettingsEvent.SaveFailed -> {
+                                if (!isFinishing && !isDestroyed) {
+                                    binding.btnSavePageShieldSettings.isEnabled = true
+                                    Toast.makeText(
+                                        this@PageShieldSettingsActivity,
+                                        getString(R.string.page_shield_save_failed_toast),
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

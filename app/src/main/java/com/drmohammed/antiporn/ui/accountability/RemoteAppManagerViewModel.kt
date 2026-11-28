@@ -1,7 +1,6 @@
 package com.drmohammed.antiporn.ui.accountability
 
 import android.app.Application
-import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.drmohammed.antiporn.R
@@ -23,17 +22,19 @@ import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Source
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import timber.log.Timber
 
 /**
  * Clean MVVM ViewModel for RemoteAppManagerActivity.
@@ -51,8 +52,8 @@ class RemoteAppManagerViewModel(
     private val _uiState = MutableStateFlow(RemoteAppManagerUiState())
     val uiState: StateFlow<RemoteAppManagerUiState> = _uiState.asStateFlow()
 
-    private val _events = MutableSharedFlow<RemoteAppManagerEvent>()
-    val events: SharedFlow<RemoteAppManagerEvent> = _events.asSharedFlow()
+    private val _events = Channel<RemoteAppManagerEvent>(Channel.BUFFERED)
+    val events: Flow<RemoteAppManagerEvent> = _events.receiveAsFlow()
 
     private var inventoryListener: ListenerRegistration? = null
     private var isInitialized = false
@@ -186,7 +187,7 @@ class RemoteAppManagerViewModel(
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            Log.e(TAG, "Failed loading local app manager data", e)
+            Timber.tag(TAG).e(e, "Failed loading local app manager data")
             _uiState.update { it.copy(isLoading = false, errorMessage = e.message) }
         }
     }
@@ -200,11 +201,12 @@ class RemoteAppManagerViewModel(
             policySnapshot = firestore.collection("policies").document(wardId).get().await()
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            Log.w(TAG, "Network fetch failed for ward policy $wardId, trying cache", e)
+            Timber.tag(TAG).w(e, "Network fetch failed for ward policy %s, trying cache", wardId)
             try {
                 policySnapshot = firestore.collection("policies").document(wardId).get(Source.CACHE).await()
             } catch (cacheEx: Exception) {
-                Log.w(TAG, "Cache fetch failed for ward policy $wardId", cacheEx)
+                if (cacheEx is CancellationException) throw cacheEx
+                Timber.tag(TAG).w(cacheEx, "Cache fetch failed for ward policy %s", wardId)
             }
         }
 
@@ -221,11 +223,12 @@ class RemoteAppManagerViewModel(
             inventoryDoc = firestore.collection("inventories").document(wardId).get().await()
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            Log.w(TAG, "Network fetch failed for inventory $wardId, trying cache", e)
+            Timber.tag(TAG).w(e, "Network fetch failed for inventory %s, trying cache", wardId)
             try {
                 inventoryDoc = firestore.collection("inventories").document(wardId).get(Source.CACHE).await()
             } catch (cacheEx: Exception) {
-                Log.w(TAG, "Cache fetch failed for inventory $wardId", cacheEx)
+                if (cacheEx is CancellationException) throw cacheEx
+                Timber.tag(TAG).w(cacheEx, "Cache fetch failed for inventory %s", wardId)
             }
         }
 
@@ -301,20 +304,22 @@ class RemoteAppManagerViewModel(
         inventoryListener = firestore.collection("inventories").document(wardId)
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
-                    Log.w(TAG, "Real-time inventory listener error: ${error.message}")
+                    Timber.tag(TAG).w(error, "Real-time inventory listener error")
                     return@addSnapshotListener
                 }
                 if (snapshot != null && snapshot.exists() && snapshot.data != null) {
-                    val currentPolicy = _uiState.value.currentPolicy
-                    val sortedList = parseAndSortInventory(snapshot, currentPolicy)
-                    val query = _uiState.value.searchQuery.trim().lowercase()
-                    val filtered = filterAppsList(sortedList, query)
+                    viewModelScope.launch(Dispatchers.Default) {
+                        val state = _uiState.value
+                        val sortedList = parseAndSortInventory(snapshot, state.currentPolicy)
+                        val query = state.searchQuery.trim().lowercase()
+                        val filtered = filterAppsList(sortedList, query)
 
-                    _uiState.update {
-                        it.copy(
-                            allApps = sortedList,
-                            displayedApps = filtered
-                        )
+                        _uiState.update {
+                            it.copy(
+                                allApps = sortedList,
+                                displayedApps = filtered
+                            )
+                        }
                     }
                 }
             }
@@ -451,14 +456,14 @@ class RemoteAppManagerViewModel(
                                     displayedApps = current.displayedApps.map { if (it.packageName == pkg) it.copy(isSuspended = false) else it }
                                 )
                             }
-                            _events.emit(
+                            _events.send(
                                 RemoteAppManagerEvent.ShowToastString(
                                     context.getString(R.string.toast_quick_unsuspend_local_success, displayName)
                                 )
                             )
                         }
                         ApprovalDecisionResult.APPROVED_CURFEW_DEFERRED -> {
-                            _events.emit(
+                            _events.send(
                                 RemoteAppManagerEvent.ShowToastString(
                                     context.getString(R.string.notif_self_qr_approval_deferred_curfew_desc, displayName),
                                     isLong = true
@@ -466,22 +471,22 @@ class RemoteAppManagerViewModel(
                             )
                         }
                         ApprovalDecisionResult.BLOCKED_REJECTED -> {
-                            _events.emit(
+                            _events.send(
                                 RemoteAppManagerEvent.ShowToastRes(R.string.toast_quick_unsuspend_rejected, isLong = true)
                             )
                         }
                         ApprovalDecisionResult.BLOCKED_BLACKLISTED -> {
-                            _events.emit(
+                            _events.send(
                                 RemoteAppManagerEvent.ShowToastRes(R.string.toast_quick_unsuspend_blacklisted, isLong = true)
                             )
                         }
                         ApprovalDecisionResult.BLOCKED_SELF_CONTROL_FORBIDDEN -> {
-                            _events.emit(
+                            _events.send(
                                 RemoteAppManagerEvent.ShowToastRes(R.string.toast_quick_unsuspend_forbidden, isLong = true)
                             )
                         }
                         ApprovalDecisionResult.FAILED_NOT_DEVICE_OWNER -> {
-                            _events.emit(
+                            _events.send(
                                 RemoteAppManagerEvent.ShowToastString(
                                     context.getString(
                                         R.string.toast_quick_unsuspend_failed,
@@ -492,7 +497,7 @@ class RemoteAppManagerViewModel(
                             )
                         }
                         ApprovalDecisionResult.FAILED_DPM_ERROR -> {
-                            _events.emit(
+                            _events.send(
                                 RemoteAppManagerEvent.ShowToastString(
                                     context.getString(
                                         R.string.toast_quick_unsuspend_failed,
@@ -529,10 +534,10 @@ class RemoteAppManagerViewModel(
                                 approve = true,
                                 guardianName = myName
                             )
-                            Log.i(TAG, "Quick unsuspend: Auto-resolved ward approval for $pkg (success=$approvalSuccess)")
+                            Timber.tag(TAG).i("Quick unsuspend: Auto-resolved ward approval for %s (success=%s)", pkg, approvalSuccess)
                         } catch (e: Exception) {
                             if (e is CancellationException) throw e
-                            Log.e(TAG, "Quick unsuspend: Error resolving ward approval for $pkg", e)
+                            Timber.tag(TAG).e(e, "Quick unsuspend: Error resolving ward approval for %s", pkg)
                         }
 
                         _uiState.update { current ->
@@ -545,14 +550,14 @@ class RemoteAppManagerViewModel(
                             )
                         }
 
-                        _events.emit(
+                        _events.send(
                             RemoteAppManagerEvent.ShowToastString(
                                 context.getString(R.string.toast_quick_unsuspend_remote_sent, displayName, state.wardName),
                                 isLong = true
                             )
                         )
                     } else {
-                        _events.emit(
+                        _events.send(
                             RemoteAppManagerEvent.ShowToastString(
                                 context.getString(R.string.toast_quick_unsuspend_failed, context.getString(R.string.error_unknown)),
                                 isLong = true
@@ -562,8 +567,8 @@ class RemoteAppManagerViewModel(
                 }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                Log.e(TAG, "Quick unsuspend failed for $pkg", e)
-                _events.emit(
+                Timber.tag(TAG).e(e, "Quick unsuspend failed for %s", pkg)
+                _events.send(
                     RemoteAppManagerEvent.ShowToastString(
                         context.getString(R.string.toast_quick_unsuspend_failed, e.localizedMessage ?: context.getString(R.string.error_unknown)),
                         isLong = true
@@ -580,7 +585,7 @@ class RemoteAppManagerViewModel(
         if (state.isRepairing || state.isSaving) return
         if (state.hasUnsavedChanges) {
             viewModelScope.launch {
-                _events.emit(RemoteAppManagerEvent.ShowToastRes(R.string.dialog_unsaved_changes_msg))
+                _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.dialog_unsaved_changes_msg))
             }
             return
         }
@@ -589,19 +594,25 @@ class RemoteAppManagerViewModel(
 
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>()
-            val count = CurfewEnforcer.repairStuckSuspendedApps(context)
-            _uiState.update { it.copy(isRepairing = false, isLoading = false) }
-
-            if (count > 0) {
-                _events.emit(
-                    RemoteAppManagerEvent.ShowToastString(
-                        context.getString(R.string.toast_repair_stuck_apps_success, count),
-                        isLong = true
+            try {
+                val count = CurfewEnforcer.repairStuckSuspendedApps(context)
+                if (count > 0) {
+                    _events.send(
+                        RemoteAppManagerEvent.ShowToastString(
+                            context.getString(R.string.toast_repair_stuck_apps_success, count),
+                            isLong = true
+                        )
                     )
-                )
-                loadData()
-            } else {
-                _events.emit(RemoteAppManagerEvent.ShowToastRes(R.string.toast_no_stuck_apps))
+                    loadData()
+                } else {
+                    _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.toast_no_stuck_apps))
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                Timber.tag(TAG).e(e, "Failed repairing stuck suspended apps")
+                _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.toast_self_policy_save_failed))
+            } finally {
+                _uiState.update { it.copy(isRepairing = false, isLoading = false) }
             }
         }
     }
@@ -633,28 +644,33 @@ class RemoteAppManagerViewModel(
             )
 
             try {
-                val success = if (state.isLocalMode) {
-                    policyRepository.saveAndEnforceSelfPolicy(updatedPolicy)
-                } else {
-                    policyRepository.pushPolicyToWard(state.wardId, updatedPolicy)
+                val success = withContext(NonCancellable) {
+                    val saved = if (state.isLocalMode) {
+                        policyRepository.saveAndEnforceSelfPolicy(updatedPolicy)
+                    } else {
+                        policyRepository.pushPolicyToWard(state.wardId, updatedPolicy)
+                    }
+
+                    if (saved) {
+                        // Auto-resolve Zero-Trust approvals for any packages removed from 24/7 blacklist AFTER policy push succeeds
+                        val unFrozenPackages = state.initialBlacklist - state.customBlacklist
+                        for (pkg in unFrozenPackages) {
+                            try {
+                                if (state.isLocalMode) {
+                                    approvalRepository.unsuspendAndApprove(pkg, decidedBy = "SELF")
+                                } else {
+                                    approvalRepository.resolveWardApproval(state.wardId, pkg, approve = true, guardianName = myName ?: "GUARDIAN")
+                                }
+                                Timber.tag(TAG).i("saveChanges: Auto-approved un-frozen package '%s'", pkg)
+                            } catch (e: Exception) {
+                                Timber.tag(TAG).e(e, "saveChanges: Error auto-approving package '%s'", pkg)
+                            }
+                        }
+                    }
+                    saved
                 }
 
                 if (success) {
-                    // Auto-resolve Zero-Trust approvals for any packages removed from 24/7 blacklist AFTER policy push succeeds
-                    val unFrozenPackages = state.initialBlacklist - state.customBlacklist
-                    for (pkg in unFrozenPackages) {
-                        try {
-                            if (state.isLocalMode) {
-                                approvalRepository.unsuspendAndApprove(pkg, decidedBy = "SELF")
-                            } else {
-                                approvalRepository.resolveWardApproval(state.wardId, pkg, approve = true, guardianName = myName ?: "GUARDIAN")
-                            }
-                            Log.i(TAG, "saveChanges: Auto-approved un-frozen package '$pkg'")
-                        } catch (e: Exception) {
-                            Log.e(TAG, "saveChanges: Error auto-approving package '$pkg'", e)
-                        }
-                    }
-
                     _uiState.update {
                         it.copy(
                             isSaving = false,
@@ -667,17 +683,17 @@ class RemoteAppManagerViewModel(
                             initialLockNewInstalls = state.lockNewInstallsUntilApproved
                         )
                     }
-                    _events.emit(RemoteAppManagerEvent.ShowToastRes(R.string.toast_app_manager_saved))
-                    _events.emit(RemoteAppManagerEvent.SaveSuccess)
+                    _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.toast_app_manager_saved))
+                    _events.send(RemoteAppManagerEvent.SaveSuccess)
                 } else {
                     _uiState.update { it.copy(isSaving = false) }
-                    _events.emit(RemoteAppManagerEvent.ShowToastRes(R.string.toast_app_manager_save_failed, isLong = true))
+                    _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.toast_app_manager_save_failed, isLong = true))
                 }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                Log.e(TAG, "Error pushing updated policies from RemoteAppManagerViewModel", e)
+                Timber.tag(TAG).e(e, "Error pushing updated policies from RemoteAppManagerViewModel")
                 _uiState.update { it.copy(isSaving = false) }
-                _events.emit(RemoteAppManagerEvent.ShowToastRes(R.string.toast_app_manager_save_failed, isLong = true))
+                _events.send(RemoteAppManagerEvent.ShowToastRes(R.string.toast_app_manager_save_failed, isLong = true))
             }
         }
     }

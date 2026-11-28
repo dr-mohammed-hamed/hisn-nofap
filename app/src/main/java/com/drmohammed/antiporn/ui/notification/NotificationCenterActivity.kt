@@ -3,7 +3,10 @@ package com.drmohammed.antiporn.ui.notification
 import android.content.Intent
 import android.os.Bundle
 import android.view.View
+import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -14,7 +17,8 @@ import com.drmohammed.antiporn.notification.manager.AppNotificationManager
 import com.drmohammed.antiporn.notification.model.NotificationActionType
 import com.drmohammed.antiporn.notification.model.NotificationCategory
 import com.drmohammed.antiporn.notification.router.NotificationActionRouter
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.drmohammed.antiporn.ui.common.ConfirmActionDialogFragment
+import com.drmohammed.antiporn.ui.common.showSafely
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import org.koin.androidx.viewmodel.ext.android.viewModel
@@ -32,10 +36,13 @@ class NotificationCenterActivity : AppCompatActivity() {
     private var lastActionClickTime = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         binding = ActivityNotificationCenterBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        applyWindowInsets()
+        setupFragmentResultListeners()
         setupToolbar()
         setupFilters()
         setupRecyclerView()
@@ -47,6 +54,48 @@ class NotificationCenterActivity : AppCompatActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleIntentAction(intent)
+    }
+
+    private fun applyWindowInsets() {
+        val appBarLeft = binding.appBarLayout.paddingLeft
+        val appBarTop = binding.appBarLayout.paddingTop
+        val appBarRight = binding.appBarLayout.paddingRight
+        val appBarBottom = binding.appBarLayout.paddingBottom
+
+        val rvLeft = binding.rvNotifications.paddingLeft
+        val rvTop = binding.rvNotifications.paddingTop
+        val rvRight = binding.rvNotifications.paddingRight
+        val rvBottom = binding.rvNotifications.paddingBottom
+
+        val emptyLeft = binding.layoutEmptyState.paddingLeft
+        val emptyTop = binding.layoutEmptyState.paddingTop
+        val emptyRight = binding.layoutEmptyState.paddingRight
+        val emptyBottom = binding.layoutEmptyState.paddingBottom
+
+        ViewCompat.setOnApplyWindowInsetsListener(binding.layoutRootNotificationCenter) { _, windowInsets ->
+            val insets = windowInsets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            binding.appBarLayout.setPadding(
+                appBarLeft + insets.left,
+                appBarTop + insets.top,
+                appBarRight + insets.right,
+                appBarBottom
+            )
+            binding.rvNotifications.setPadding(
+                rvLeft + insets.left,
+                rvTop,
+                rvRight + insets.right,
+                rvBottom + insets.bottom
+            )
+            binding.layoutEmptyState.setPadding(
+                emptyLeft + insets.left,
+                emptyTop,
+                emptyRight + insets.right,
+                emptyBottom + insets.bottom
+            )
+            windowInsets
+        }
     }
 
     private fun handleIntentAction(intent: Intent?) {
@@ -135,15 +184,29 @@ class NotificationCenterActivity : AppCompatActivity() {
         }
     }
 
-    private fun showClearConfirmationDialog() {
-        if (isFinishing || isDestroyed) return
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.confirm_clear_notifications_title)
-            .setMessage(R.string.confirm_clear_notifications_msg)
-            .setPositiveButton(R.string.btn_confirm_clear) { _, _ ->
+    private fun setupFragmentResultListeners() {
+        supportFragmentManager.setFragmentResultListener(REQ_CLEAR_NOTIFICATIONS, this) { _, bundle ->
+            if (bundle.getString(ConfirmActionDialogFragment.RESULT_BUTTON) == ConfirmActionDialogFragment.BUTTON_POSITIVE) {
                 viewModel.clearAllNotifications()
             }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
+        }
+    }
+
+    private fun showClearConfirmationDialog() {
+        if (isFinishing || isDestroyed) return
+        supportFragmentManager.showSafely(TAG_CLEAR_NOTIFICATIONS) {
+            ConfirmActionDialogFragment.newInstance(
+                requestKey = REQ_CLEAR_NOTIFICATIONS,
+                titleRes = R.string.confirm_clear_notifications_title,
+                messageRes = R.string.confirm_clear_notifications_msg,
+                positiveRes = R.string.btn_confirm_clear,
+                negativeRes = android.R.string.cancel
+            )
+        }
+    }
+
+    companion object {
+        private const val REQ_CLEAR_NOTIFICATIONS = "req_notif_clear_all"
+        private const val TAG_CLEAR_NOTIFICATIONS = "tag_notif_clear_all"
     }
 }
