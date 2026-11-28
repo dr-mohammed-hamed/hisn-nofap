@@ -20,7 +20,8 @@ internal data class AccountAuditReport(
     val accountCountsByType: Map<String, Int>,
     val targetPackages: List<String>,
     val hasAnyAccountEvidence: Boolean,
-    val diagnosticsSummary: String
+    val diagnosticsSummary: String,
+    val packagesByType: Map<String, List<String>> = emptyMap()
 )
 
 internal data class DumpsysAccountSummary(
@@ -51,8 +52,12 @@ internal object AdbAccountInspector {
     private val KNOWN_ACCOUNT_TYPE_TO_PACKAGES: Map<String, List<String>> = mapOf(
         "com.google" to listOf("com.google.android.gms", "com.google.android.gsf"),
         "com.google.android.gms.auth.account" to listOf("com.google.android.gms", "com.google.android.gsf"),
+        "com.google.android.apps.tachyon" to listOf("com.google.android.apps.tachyon"),
         "com.osp.app.signin" to listOf("com.osp.app.signin"), "com.samsung.account" to listOf("com.osp.app.signin"),
-        "com.samsung.android.core.account" to listOf("com.osp.app.signin"), "com.xiaomi" to listOf("com.xiaomi.account"),
+        "com.samsung.android.core.account" to listOf("com.osp.app.signin"),
+        "com.samsung.android.email" to listOf("com.samsung.android.email.provider"),
+        "com.samsung.android.mobileservice" to listOf("com.samsung.android.mobileservice"),
+        "com.xiaomi" to listOf("com.xiaomi.account"),
         "com.xiaomi.account" to listOf("com.xiaomi.account"), "com.heytap.usercenter" to listOf("com.heytap.usercenter"),
         "com.heytap.account" to listOf("com.heytap.usercenter"), "com.oplus.account" to listOf("com.oplus.account"),
         "com.oneplus.account" to listOf("com.oneplus.account"), "com.oppo.account" to listOf("com.heytap.usercenter", "com.oplus.account"),
@@ -63,6 +68,10 @@ internal object AdbAccountInspector {
         "com.whatsapp.w4b" to listOf("com.whatsapp.w4b"), "org.telegram.messenger" to listOf("org.telegram.messenger"),
         "org.telegram.messenger.web" to listOf("org.telegram.messenger"), "com.facebook.auth.login" to listOf("com.facebook.katana"),
         "com.facebook.katana" to listOf("com.facebook.katana"), "com.facebook.orca" to listOf("com.facebook.orca"),
+        "com.facebook.messenger" to listOf("com.facebook.orca"), "www.instagram.com" to listOf("com.instagram.android"),
+        "com.truecaller.account" to listOf("com.truecaller"), "com.egyptianbanks.instapay" to listOf("com.egyptianbanks.instapay"),
+        "cn.wps.moffice" to listOf("cn.wps.moffice_eng"),
+        "com.adobe.creativesdk.foundation.auth.adobeid.dc" to listOf("com.adobe.reader"),
         "com.viber.voip" to listOf("com.viber.voip"), "com.microsoft.office.outlook" to listOf("com.microsoft.office.outlook"),
         "com.microsoft.workaccount" to listOf("com.microsoft.office.outlook"), "com.google.android.gm.exchange" to listOf("com.microsoft.office.outlook")
     )
@@ -168,7 +177,7 @@ internal object AdbAccountInspector {
         val checkinHasAccountLine = checkinResult != null && ACCOUNT_LINE_START_REGEX.containsMatchIn(checkinResult.stdoutText)
 
         val dumpsysResult = safeShell("dumpsys account", shellExecutor)
-        val validDumpsys = dumpsysResult?.takeIf { it.isSuccess && !hasShellError(it.combinedOutput()) }
+        val validDumpsys = dumpsysResult?.takeIf { isValidDumpsysAccountResult(it) }
         val dumpsysOk = validDumpsys != null
         val dumpsysSummary = validDumpsys?.let { parseDumpsysAccountSummary(it.stdoutText, userId) }
             ?: DumpsysAccountSummary(null, emptySet(), emptyMap(), hasAnyAccountLine = false)
@@ -188,16 +197,19 @@ internal object AdbAccountInspector {
             hasExplicitZeroCount -> AccountAuditStatus.VERIFIED_ZERO
             else -> AccountAuditStatus.UNKNOWN_OR_REDACTED
         }
-        val targetPackages = resolveTargetPackages(status, mergedTypes, dumpsysSummary.accountsHeaderCount, shellAuthenticatorMap, localAuthenticatorMap)
+        val (targetPackages, packagesByType, unmappedTypes) = resolveTargetPackagesWithDetails(
+            status, mergedTypes, dumpsysSummary.accountsHeaderCount, shellAuthenticatorMap, localAuthenticatorMap
+        )
         val hasEvidence = mergedTypes.isNotEmpty() || (dumpsysSummary.accountsHeaderCount ?: 0) > 0 ||
             dumpsysSummary.hasAnyAccountLine || checkinHasAccountLine
         val summary = "status=${status.name}, userId=$userId, headerCount=${dumpsysSummary.accountsHeaderCount}, " +
-            "types=${mergedTypes.sorted().joinToString(",")}, targetPkgs=${targetPackages.size}"
+            "dumpsysOk=$dumpsysOk, shellAuth=${shellAuthenticatorMap.size}, localAuth=${localAuthenticatorMap.size}, " +
+            "unmapped=${unmappedTypes.size}, types=${mergedTypes.sorted().joinToString(",")}, targetPkgs=${targetPackages.size}"
 
         if (recordAudit && appContext != null) {
             BlackBoxRecorder.recordPairing(appContext, "ADB_ACCOUNT_AUDIT", isSuccess = status != AccountAuditStatus.UNKNOWN_OR_REDACTED, details = summary)
         }
-        return AccountAuditReport(status, userId, mergedTypes, mergedCounts, targetPackages, hasEvidence, summary)
+        return AccountAuditReport(status, userId, mergedTypes, mergedCounts, targetPackages, hasEvidence, summary, packagesByType)
     }
 
     private suspend fun safeShell(cmd: String, shellExecutor: suspend (String) -> ShellResult): ShellResult? = try {
@@ -207,26 +219,53 @@ internal object AdbAccountInspector {
         Timber.tag(TAG).w(e, "Shell command failed during account audit: $cmd"); null
     }
 
+    /**
+     * Validates `dumpsys account` output without false-positive rejection when `dumpDebugTable`
+     * or `Active Sessions` inside a healthy dump contains historical `Error:` / `*Exception` lines.
+     */
+    internal fun isValidDumpsysAccountResult(result: ShellResult): Boolean {
+        if (!result.isSuccess) return false
+        if (hasShellError(result.stderrText)) return false
+        val stdout = result.stdoutText
+        val hasStructure = USER_INFO_REGEX.containsMatchIn(stdout) ||
+            ACCOUNTS_HEADER_REGEX.containsMatchIn(stdout) ||
+            AUTH_DESC_REGEX.containsMatchIn(stdout) ||
+            stdout.contains("RegisteredServicesCache")
+        if (!hasStructure) return !hasShellError(stdout)
+        val leadingLines = stdout.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.take(3).joinToString("\n")
+        return !hasShellError(leadingLines)
+    }
+
     private fun hasShellError(combined: String): Boolean =
         combined.contains("Permission Denial", ignoreCase = true) || combined.contains("SecurityException", ignoreCase = true) ||
             combined.contains("Unknown command", ignoreCase = true) || combined.contains("Can't find service", ignoreCase = true) ||
             SHELL_ERROR_PREFIX_REGEX.containsMatchIn(combined) || SHELL_EXCEPTION_LINE_REGEX.containsMatchIn(combined)
 
-    private fun resolveTargetPackages(
+    private fun resolveTargetPackagesWithDetails(
         status: AccountAuditStatus,
         accountTypes: List<String>,
         accountsHeaderCount: Int?,
         shellAuthMap: Map<String, String>,
         localAuthMap: Map<String, String>
-    ): List<String> {
+    ): Triple<List<String>, Map<String, List<String>>, List<String>> {
         val packages = linkedSetOf<String>()
+        val packagesByType = linkedMapOf<String, List<String>>()
+        val unmapped = mutableListOf<String>()
         var hasGoogle = false
         for (type in accountTypes) {
             if (type.contains("google", ignoreCase = true)) hasGoogle = true
-            shellAuthMap[type]?.let { packages.add(it) }
-            localAuthMap[type]?.let { packages.add(it) }
-            KNOWN_ACCOUNT_TYPE_TO_PACKAGES[type.lowercase(Locale.ROOT)]?.let { packages.addAll(it) }
-            packages.addAll(heuristicPackagesForType(type))
+            val resolvedForType = linkedSetOf<String>()
+            shellAuthMap[type]?.let { resolvedForType.add(it) }
+            localAuthMap[type]?.let { resolvedForType.add(it) }
+            KNOWN_ACCOUNT_TYPE_TO_PACKAGES[type.lowercase(Locale.ROOT)]?.let { resolvedForType.addAll(it) }
+            if (resolvedForType.isEmpty()) resolvedForType.addAll(heuristicPackagesForType(type))
+            val validForType = resolvedForType.filter { PACKAGE_NAME_REGEX.matches(it) }
+            if (validForType.isEmpty()) {
+                unmapped.add(type)
+            } else {
+                packagesByType[type] = validForType
+                packages.addAll(validForType)
+            }
         }
         if (hasGoogle || "com.google.android.gms" in packages) {
             packages.add("com.google.android.gms")
@@ -239,7 +278,7 @@ internal object AdbAccountInspector {
                 packages.addAll(listOf("com.whatsapp", "org.telegram.messenger"))
             }
         }
-        return packages.filter { PACKAGE_NAME_REGEX.matches(it) }
+        return Triple(packages.filter { PACKAGE_NAME_REGEX.matches(it) }, packagesByType, unmapped)
     }
 
     private fun heuristicPackagesForType(type: String): List<String> {
@@ -318,6 +357,12 @@ internal object AdbAccountInspector {
                     label(R.string.provisioning_account_label_microsoft, "Microsoft / Outlook")
                 l.contains("viber") ->
                     label(R.string.provisioning_account_label_viber, "Viber")
+                l.contains("instagram") -> "Instagram"
+                l.contains("truecaller") -> "Truecaller"
+                l.contains("instapay") -> "InstaPay"
+                l.contains("yandex") -> "Yandex"
+                l.contains("adobe") -> "Adobe"
+                l.contains("wps") -> "WPS Office"
                 else -> type.substringAfterLast('.').replace('_', ' ').replace('-', ' ').trim()
                     .replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }.ifBlank { type }
             }

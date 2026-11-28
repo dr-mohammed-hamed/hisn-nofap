@@ -449,4 +449,70 @@ class AdbAccountInspectorTest {
             Locale.setDefault(previousLocale)
         }
     }
+
+    @Test
+    fun inspectAccountsWithShell_healthyDumpsysWithDebugHistoryExceptions_preservesHeaderCountAndShellAuthMap() = runBlocking {
+        val dumpsysWithHistoryNoise = """
+            User UserInfo{0:Owner:c13}:
+              Accounts: 4
+                Account {name=private_user@gmail.com, type=com.google}
+                Account {name=samsung_user@mail.com, type=com.osp.app.signin}
+
+              Account history:
+                2026-11-28 19:00:00 Error: transient token refresh failed
+                java.lang.SecurityException: historical binder check from third-party app
+
+              Active Sessions: 0
+
+              RegisteredServicesCache: 4 services
+                ServiceInfo: AuthenticatorDescription {type=com.google}, ComponentInfo{com.google.android.gms/.auth.AccountService}, uid 10123
+                ServiceInfo: AuthenticatorDescription {type=com.osp.app.signin}, ComponentInfo{com.osp.app.signin/.account.AuthService}, uid 10050
+                ServiceInfo: AuthenticatorDescription {type=com.samsung.android.email}, ComponentInfo{com.samsung.android.email.provider/.AuthService}, uid 10090
+                ServiceInfo: AuthenticatorDescription {type=com.vendor.custom}, ComponentInfo{com.vendor.customapp/.AuthService}, uid 10250
+        """.trimIndent()
+
+        val report = AdbAccountInspector.inspectAccountsWithShell(
+            context = context,
+            userId = 0,
+            shellExecutor = { cmd ->
+                when (cmd) {
+                    "dumpsys account --checkin" -> shellOk(
+                        "com.google,1\ncom.osp.app.signin,1\ncom.samsung.android.email,1\ncom.vendor.custom,1\n"
+                    )
+                    "dumpsys account" -> shellOk(dumpsysWithHistoryNoise)
+                    else -> error("Unexpected command: $cmd")
+                }
+            },
+            recordAudit = true
+        )
+
+        assertEquals(AccountAuditStatus.ACCOUNTS_DETECTED, report.status)
+        assertTrue("Expected headerCount=4 in summary, got: ${report.diagnosticsSummary}", report.diagnosticsSummary.contains("headerCount=4"))
+        assertTrue("Expected dumpsysOk=true in summary, got: ${report.diagnosticsSummary}", report.diagnosticsSummary.contains("dumpsysOk=true"))
+        assertTrue("Expected shellAuth=4 in summary, got: ${report.diagnosticsSummary}", report.diagnosticsSummary.contains("shellAuth=4"))
+        assertTrue("Expected unmapped=0 in summary, got: ${report.diagnosticsSummary}", report.diagnosticsSummary.contains("unmapped=0"))
+        assertTrue(report.targetPackages.contains("com.google.android.gms"))
+        assertTrue(report.targetPackages.contains("com.google.android.gsf"))
+        assertTrue(report.targetPackages.contains("com.osp.app.signin"))
+        assertTrue(report.targetPackages.contains("com.samsung.android.email.provider"))
+        assertTrue(report.targetPackages.contains("com.vendor.customapp"))
+        assertFalse("Zero-PII invariant must hold", report.diagnosticsSummary.contains("private_user@gmail.com"))
+        assertFalse("Zero-PII invariant must hold", report.diagnosticsSummary.contains("samsung_user@mail.com"))
+    }
+
+    @Test
+    fun resolveFriendlyAccountLabels_mapsCommonThirdPartyTypesCleanly() {
+        val labels = AdbAccountInspector.resolveFriendlyAccountLabels(
+            null,
+            listOf(
+                "www.instagram.com",
+                "com.truecaller.account",
+                "com.egyptianbanks.instapay",
+                "com.yandex.passport",
+                "com.adobe.creativesdk.foundation.auth.adobeID.DC",
+                "cn.wps.moffice"
+            )
+        )
+        assertEquals(listOf("Instagram", "Truecaller", "InstaPay", "Yandex", "Adobe", "WPS Office"), labels)
+    }
 }

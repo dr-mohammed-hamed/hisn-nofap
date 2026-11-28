@@ -17,10 +17,19 @@ internal object AdbShellValidation {
 
     const val DPM_BEGIN_MARKER = "__HISN_DPM_BEGIN__"
     const val DPM_END_MARKER = "__HISN_DPM_END__"
+    const val SURVIVING_AUTH_BEGIN_MARKER = "__HISN_SURVIVING_AUTH_BEGIN__"
+    const val SURVIVING_AUTH_END_MARKER = "__HISN_SURVIVING_AUTH_END__"
+    const val SURVIVING_AUTH_UNAVAILABLE = "__UNAVAILABLE__"
 
     val PACKAGE_NAME_REGEX = Regex("^[a-zA-Z0-9_]+(\\.[a-zA-Z0-9_]+)+$")
+    val SAFE_ACCOUNT_TYPE_REGEX = Regex("^[a-zA-Z0-9_.-]+$")
     val SAFE_PATH_REGEX = Regex("^[a-zA-Z0-9_./-]+$")
     val ADMIN_COMPONENT_REGEX = Regex("^[a-zA-Z0-9_]+(\\.[a-zA-Z0-9_]+)+/\\.?[a-zA-Z0-9_.]+$")
+
+    internal data class SurvivingAuthSnapshot(
+        val observed: Boolean,
+        val types: List<String>
+    )
     private val PACKAGE_NEW_STATE_REGEX = Regex("^\\s*Package\\s+\\S+\\s+new state:.*$", RegexOption.IGNORE_CASE)
     private val STACK_TRACE_AT_REGEX = Regex("^\\s*at\\s+.*$")
     private val STACK_TRACE_CAUSED_BY_REGEX = Regex("^\\s*Caused by:\\s*.*$")
@@ -45,12 +54,61 @@ internal object AdbShellValidation {
         return if (endIdx >= contentStart) raw.substring(contentStart, endIdx).trim() else raw.trim()
     }
 
+    fun extractPreDpmOutput(raw: String): String =
+        raw.substringBefore(SURVIVING_AUTH_BEGIN_MARKER).substringBefore(DPM_BEGIN_MARKER)
+
+    fun extractSurvivingAuthSnapshot(raw: String): SurvivingAuthSnapshot {
+        val startIdx = raw.indexOf(SURVIVING_AUTH_BEGIN_MARKER)
+        if (startIdx < 0) return SurvivingAuthSnapshot(observed = false, types = emptyList())
+        val contentStart = startIdx + SURVIVING_AUTH_BEGIN_MARKER.length
+        val endIdx = raw.indexOf(SURVIVING_AUTH_END_MARKER, startIndex = contentStart)
+        if (endIdx < contentStart) return SurvivingAuthSnapshot(observed = false, types = emptyList())
+        val body = raw.substring(contentStart, endIdx).trim()
+        if (body == SURVIVING_AUTH_UNAVAILABLE) return SurvivingAuthSnapshot(observed = false, types = emptyList())
+        val types = body.split(Regex("\\s+"))
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && SAFE_ACCOUNT_TYPE_REGEX.matches(it) }
+            .distinct()
+        return SurvivingAuthSnapshot(observed = true, types = types)
+    }
+
+    fun hasDisableFailureSignal(text: String): Boolean =
+        text.contains("SecurityException", ignoreCase = true) ||
+            text.contains("Failure", ignoreCase = true) ||
+            text.contains("Exception", ignoreCase = true) ||
+            text.contains("Error:", ignoreCase = true) ||
+            text.contains("Unknown package", ignoreCase = true) ||
+            text.contains("protected package", ignoreCase = true)
+
+    fun buildFreezeSettleAndProbeCmd(trackedAccountTypes: List<String>): String {
+        val safeTracked = trackedAccountTypes.map { it.trim() }.filter { SAFE_ACCOUNT_TYPE_REGEX.matches(it) }.distinct()
+        if (safeTracked.isEmpty()) return "sleep 2"
+        val typesArg = safeTracked.joinToString(" ")
+        return "surv=\"\"; prev_surv=\"\"; stable=0; obs=0; settle=0; " +
+            "while [ \$settle -lt 6 ]; do sleep 1; settle=\$((settle + 1)); " +
+            "auths=\$(dumpsys account 2>/dev/null | grep \"AuthenticatorDescription\"); " +
+            "if [ -z \"\$auths\" ]; then [ \$settle -ge 2 ] && break; continue; fi; " +
+            "obs=1; surv=\"\"; " +
+            "for t in $typesArg; do case \"\$auths\" in *\"type=\$t}\"*|*\"type=\$t,\"*) surv=\"\$surv \$t\";; esac; done; " +
+            "[ -z \"\$surv\" ] && break; " +
+            "if [ \"\$surv\" = \"\$prev_surv\" ]; then stable=\$((stable + 1)); [ \$stable -ge 2 ] && break; " +
+            "else stable=0; prev_surv=\"\$surv\"; fi; done; " +
+            "printf \"%s\\n\" \"$SURVIVING_AUTH_BEGIN_MARKER\"; " +
+            "if [ \"\$obs\" = \"1\" ]; then printf \"%s\\n\" \"\$surv\"; else printf \"%s\\n\" \"$SURVIVING_AUTH_UNAVAILABLE\"; fi; " +
+            "printf \"%s\\n\" \"$SURVIVING_AUTH_END_MARKER\""
+    }
+
     fun sanitizeUserFacingError(raw: String, maxLength: Int = 220): String {
         if (maxLength <= 0 || raw.isBlank()) return ""
         val cleanedLines = mutableListOf<String>()
         var inUsageBlock = false
         for (line in raw.lineSequence()) {
-            val noMarkers = line.replace(DPM_BEGIN_MARKER, "").replace(DPM_END_MARKER, "")
+            val noMarkers = line
+                .replace(DPM_BEGIN_MARKER, "")
+                .replace(DPM_END_MARKER, "")
+                .replace(SURVIVING_AUTH_BEGIN_MARKER, "")
+                .replace(SURVIVING_AUTH_END_MARKER, "")
+                .replace(SURVIVING_AUTH_UNAVAILABLE, "")
             val trimmedStart = noMarkers.trimStart()
             if (trimmedStart.startsWith("usage: dpm", ignoreCase = true)) {
                 inUsageBlock = true

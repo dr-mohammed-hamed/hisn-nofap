@@ -1108,4 +1108,87 @@ class AdbPromotionExecutorHardeningTest {
         assertNull(BlockingAccountsPayload.fromJson("{}"))
         assertNull(BlockingAccountsPayload.fromJson("{not-valid-json"))
     }
+
+    @Test
+    fun buildAtomicFreezeAndDpmScript_redirectsDisableStderrAndProbesRegisteredServicesCacheSafely() {
+        val script = AdbPackageFreezeManager.buildAtomicFreezeAndDpmScript(
+            lockPath = "/data/local/tmp/antiporn_freeze_0_999.lock",
+            userId = 0,
+            adminComponent = "com.drmohammed.antiporn/.AdminReceiver",
+            safePackages = listOf("com.google.android.gms", "com.osp.app.signin"),
+            trackedAccountTypes = listOf("com.google", "com.osp.app.signin", "bad; rm -rf /", "has space")
+        )
+
+        assertTrue("Disable commands must redirect stderr (2>&1)", script.contains("pm disable-user --user 0 com.google.android.gms 2>&1"))
+        assertTrue("Disable commands must redirect stderr (2>&1)", script.contains("pm disable-user --user 0 com.osp.app.signin 2>&1"))
+        assertTrue("Settle loop must probe AuthenticatorDescription cache", script.contains("AuthenticatorDescription"))
+        assertFalse("Settle loop must not poll static --checkin table", script.contains("dumpsys account --checkin"))
+        assertTrue(script.contains(AdbShellValidation.SURVIVING_AUTH_BEGIN_MARKER))
+        assertTrue(script.contains(AdbShellValidation.SURVIVING_AUTH_END_MARKER))
+        assertTrue(script.contains("for t in com.google com.osp.app.signin;"))
+        assertFalse("Unsafe tracked types must be rejected before shell interpolation", script.contains("rm -rf"))
+        assertFalse("Unsafe tracked types with spaces must be rejected", script.contains("has space"))
+    }
+
+    @Test
+    fun executePackageFreezeWithShell_onlyProtectedSamsungAccountSurvives_surfacesOnlySurvivingAccountAndFallsBackWhenUnavailable() = runBlocking {
+        val result = AdbPackageFreezeManager.executePackageFreezeWithShell(
+            context = context,
+            userId = 0,
+            adminComponent = "com.drmohammed.antiporn/.AdminReceiver",
+            accountAuthenticatorMap = mapOf(
+                "com.whatsapp" to "com.whatsapp",
+                "org.telegram.messenger" to "org.telegram.messenger",
+                "www.instagram.com" to "com.instagram.android"
+            ),
+            shellExecutor = { cmd ->
+                when {
+                    cmd == "dumpsys account --checkin" ->
+                        shellOk("com.google,1\ncom.osp.app.signin,1\ncom.whatsapp,1\norg.telegram.messenger,1\nwww.instagram.com,1\n")
+                    cmd == "dumpsys account" -> shellOk("User UserInfo{0:Owner:c13}:\n  Accounts: 5")
+                    cmd == "pm list packages -d --user 0" -> shellOk("")
+                    cmd.startsWith("( trap '' HUP;") -> shellOk("")
+                    cmd.startsWith("sh -c '") -> shellFail(
+                        stdout = """
+                            Package com.google.android.gms new state: disabled-user
+                            Package com.whatsapp new state: disabled-user
+                            java.lang.SecurityException: Cannot disable a protected package: com.osp.app.signin
+                            ${AdbShellValidation.SURVIVING_AUTH_BEGIN_MARKER}
+                            com.osp.app.signin
+                            ${AdbShellValidation.SURVIVING_AUTH_END_MARKER}
+                            ${AdbShellValidation.DPM_BEGIN_MARKER}
+                            java.lang.IllegalStateException: Not allowed to set the device owner because there are already some accounts on the device
+                            ${AdbShellValidation.DPM_END_MARKER}
+                        """.trimIndent(),
+                        exitCode = 1
+                    )
+                    cmd.startsWith("rm -f ") -> shellOk("")
+                    else -> error("Unexpected shell command: $cmd")
+                }
+            }
+        )
+
+        assertTrue("Expected AccountsBlocking, got $result", result is PromotionResult.AccountsBlocking)
+        val blocking = result as PromotionResult.AccountsBlocking
+        assertEquals(
+            "Dialog must list ONLY the surviving protected Samsung account, not all 5 pre-freeze accounts",
+            listOf("com.osp.app.signin"),
+            blocking.accountTypes
+        )
+        assertEquals(1, blocking.accountLabels.size)
+        assertTrue(blocking.accountLabels.first().contains("Samsung"))
+
+        // Verify extractSurvivingAuthSnapshot handles empty (0 surviving) and __UNAVAILABLE__ cleanly
+        val emptyObserved = AdbShellValidation.extractSurvivingAuthSnapshot(
+            "${AdbShellValidation.SURVIVING_AUTH_BEGIN_MARKER}\n\n${AdbShellValidation.SURVIVING_AUTH_END_MARKER}"
+        )
+        assertTrue(emptyObserved.observed)
+        assertTrue(emptyObserved.types.isEmpty())
+
+        val unavailable = AdbShellValidation.extractSurvivingAuthSnapshot(
+            "${AdbShellValidation.SURVIVING_AUTH_BEGIN_MARKER}\n${AdbShellValidation.SURVIVING_AUTH_UNAVAILABLE}\n${AdbShellValidation.SURVIVING_AUTH_END_MARKER}"
+        )
+        assertFalse(unavailable.observed)
+        assertTrue(unavailable.types.isEmpty())
+    }
 }

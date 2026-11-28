@@ -7,6 +7,8 @@ import com.drmohammed.antiporn.provisioning.engine.AdbShellValidation.DPM_BEGIN_
 import com.drmohammed.antiporn.provisioning.engine.AdbShellValidation.DPM_END_MARKER
 import com.drmohammed.antiporn.provisioning.engine.AdbShellValidation.PACKAGE_NAME_REGEX
 import com.drmohammed.antiporn.provisioning.engine.AdbShellValidation.SAFE_PATH_REGEX
+import com.drmohammed.antiporn.provisioning.engine.AdbShellValidation.SURVIVING_AUTH_BEGIN_MARKER
+import com.drmohammed.antiporn.provisioning.engine.AdbShellValidation.SurvivingAuthSnapshot
 import com.drmohammed.antiporn.provisioning.engine.AdbShellValidation.combinedOutput
 import com.drmohammed.antiporn.telemetry.BlackBoxRecorder
 import io.github.rhythmcache.adb.AdbClient
@@ -84,14 +86,16 @@ internal object AdbPackageFreezeManager {
         lockPath: String,
         userId: Int,
         adminComponent: String,
-        safePackages: List<String>
+        safePackages: List<String>,
+        trackedAccountTypes: List<String> = emptyList()
     ): String {
         require(userId >= 0) { "Invalid userId: $userId" }
         require(SAFE_PATH_REGEX.matches(lockPath)) { "Unsafe lockPath: $lockPath" }
         require(ADMIN_COMPONENT_REGEX.matches(adminComponent)) { "Unsafe adminComponent: $adminComponent" }
         require(safePackages.isNotEmpty() && safePackages.all { PACKAGE_NAME_REGEX.matches(it) }) { "Invalid freeze packages" }
         val enableCmds = safePackages.joinToString("; ") { "pm enable --user $userId $it" }
-        val disableCmds = safePackages.joinToString("; ") { "pm disable-user --user $userId $it" }
+        val disableCmds = safePackages.joinToString("; ") { "pm disable-user --user $userId $it 2>&1" }
+        val settleAndProbeCmd = AdbShellValidation.buildFreezeSettleAndProbeCmd(trackedAccountTypes)
         val dpmAttemptCmd =
             "out=\$(dpm set-device-owner --user $userId $adminComponent 2>&1); rc=\$?; " +
                 "case \"\$out\" in *\"unknown option: --user\"*|*\"Unknown option: --user\"*|*\"illegal option\"*|*\"Illegal option\"*) " +
@@ -99,8 +103,7 @@ internal object AdbPackageFreezeManager {
         return "sh -c 'touch \"$lockPath\"; restore() { trap - EXIT HUP INT TERM; $enableCmds; rm -f \"$lockPath\"; }; " +
             "trap restore EXIT; trap \"restore; exit 129\" HUP; trap \"restore; exit 130\" INT; trap \"restore; exit 143\" TERM; " +
             "$disableCmds; " +
-            "settle=0; while [ \$settle -lt 3 ]; do sleep 1; settle=\$((settle + 1)); " +
-            "checkin=\$(dumpsys account --checkin 2>/dev/null); case \"\$checkin\" in *\",\"[1-9][0-9]*) ;; *) break;; esac; done; " +
+            "$settleAndProbeCmd; " +
             "printf \"%s\\n\" \"$DPM_BEGIN_MARKER\"; " +
             "$dpmAttemptCmd; " +
             "case \"\$out\" in *\"being removed\"*|*\"Being removed\"*|*\"mRemovingAdmins\"*) sleep 2; $dpmAttemptCmd;; esac; " +
@@ -189,32 +192,38 @@ internal object AdbPackageFreezeManager {
                 Timber.tag(TAG).w(e, "Watchdog launch returned non-fatal error; continuing with trap + finally")
             }
 
-            val atomicScript = buildAtomicFreezeAndDpmScript(lockPath, userId, adminComponent, safePackages)
-            val rawOutput = shellExecutor(atomicScript).combinedOutput()
-            recordPartialDisableFailures(appContext, userId, safePackages.size, rawOutput)
+            val trackedTypes = auditReport.accountTypes.filter { type ->
+                val mapped = auditReport.packagesByType[type].orEmpty()
+                mapped.isEmpty() || mapped.any { it !in alreadyDisabled }
+            }
+            val atomicScript = buildAtomicFreezeAndDpmScript(lockPath, userId, adminComponent, safePackages, trackedTypes)
+            val shellResult = shellExecutor(atomicScript)
+            val rawOutput = shellResult.combinedOutput()
+            recordPartialDisableFailures(appContext, userId, safePackages.size, rawOutput, shellResult.stderrText)
+            val survivingAuth = AdbShellValidation.extractSurvivingAuthSnapshot(rawOutput)
+            if (survivingAuth.observed && appContext != null) {
+                val summary = "userId=$userId, surviving=${survivingAuth.types.size}, totalBefore=${auditReport.accountTypes.size}, types=${survivingAuth.types.sorted().joinToString(",")}"
+                BlackBoxRecorder.recordPairing(appContext, "ADB_FREEZE_SURVIVING_ACCOUNTS", isSuccess = survivingAuth.types.isEmpty(), details = summary)
+            }
             val dpmOutput = AdbShellValidation.extractDelimitedDpmOutput(rawOutput)
             Timber.tag(TAG).i("DPM atomic freeze execution output: ${AdbShellValidation.sanitizeUserFacingError(dpmOutput)}")
-            return mapDpmOutputToPromotionResult(appContext, dpmOutput, auditReport)
+            return mapDpmOutputToPromotionResult(appContext, dpmOutput, auditReport, survivingAuth)
         } finally {
-            verifyAndRecoverInFinally(
-                appContext, userId, lockPath, safePackages, priorLedgerPackages, shellExecutor, reconnectAndHeal
-            )
+            verifyAndRecoverInFinally(appContext, userId, lockPath, safePackages, priorLedgerPackages, shellExecutor, reconnectAndHeal)
         }
     }
 
-    private fun recordPartialDisableFailures(appContext: Context?, userId: Int, targetCount: Int, rawOutput: String) {
-        if (appContext == null || !rawOutput.contains(DPM_BEGIN_MARKER)) return
-        val preDpmSection = rawOutput.substringBefore(DPM_BEGIN_MARKER)
-        val hasDisableError = preDpmSection.contains("SecurityException", ignoreCase = true) ||
-            preDpmSection.contains("Failure", ignoreCase = true) ||
-            preDpmSection.contains("Exception", ignoreCase = true)
-        if (hasDisableError) {
+    private fun recordPartialDisableFailures(appContext: Context?, userId: Int, targetCount: Int, rawOutput: String, stderrText: String = "") {
+        if (appContext == null) return
+        val preDpmSection = if (rawOutput.contains(DPM_BEGIN_MARKER) || rawOutput.contains(SURVIVING_AUTH_BEGIN_MARKER)) {
+            AdbShellValidation.extractPreDpmOutput(rawOutput)
+        } else ""
+        val combinedErrors = listOf(preDpmSection, stderrText).filter { it.isNotBlank() }.joinToString("\n")
+        if (AdbShellValidation.hasDisableFailureSignal(combinedErrors)) {
             BlackBoxRecorder.recordPairing(
-                appContext,
-                "ADB_FREEZE_DISABLE_PARTIAL",
-                isSuccess = false,
+                appContext, "ADB_FREEZE_DISABLE_PARTIAL", isSuccess = false,
                 details = "userId=$userId, targetCount=$targetCount",
-                error = AdbShellValidation.sanitizeUserFacingError(preDpmSection)
+                error = AdbShellValidation.sanitizeUserFacingError(combinedErrors, maxLength = 300)
             )
         }
     }
@@ -222,19 +231,20 @@ internal object AdbPackageFreezeManager {
     private fun mapDpmOutputToPromotionResult(
         appContext: Context?,
         dpmOutput: String,
-        auditReport: AccountAuditReport
-    ): PromotionResult {
-        return when (val outcome = AdbPromotionExecutor.classifySetupBypassOutput(
-            appContext, dpmOutput, OemProvisioningHelper.isXiaomi(), OemProvisioningHelper.isRealmeOrOppo()
-        )) {
-            is SetupBypassOutcome.Success -> PromotionResult.Success
-            is SetupBypassOutcome.OemPermissionRequired -> PromotionResult.OemPermissionRequired(outcome.oemType, outcome.message)
-            is SetupBypassOutcome.HardStopFailure -> PromotionResult.Failure(outcome.message)
-            is SetupBypassOutcome.SecondaryUsersError ->
-                PromotionResult.Failure(AdbPromotionExecutor.formatFriendlyError(appContext, dpmOutput))
-            is SetupBypassOutcome.AccountsBlockedFailure -> PromotionResult.AccountsBlocking(
-                accountLabels = AdbAccountInspector.resolveFriendlyAccountLabels(appContext, auditReport.accountTypes),
-                accountTypes = auditReport.accountTypes,
+        auditReport: AccountAuditReport,
+        survivingAuth: SurvivingAuthSnapshot = SurvivingAuthSnapshot(observed = false, types = emptyList())
+    ): PromotionResult = when (val outcome = AdbPromotionExecutor.classifySetupBypassOutput(
+        appContext, dpmOutput, OemProvisioningHelper.isXiaomi(), OemProvisioningHelper.isRealmeOrOppo()
+    )) {
+        is SetupBypassOutcome.Success -> PromotionResult.Success
+        is SetupBypassOutcome.OemPermissionRequired -> PromotionResult.OemPermissionRequired(outcome.oemType, outcome.message)
+        is SetupBypassOutcome.HardStopFailure -> PromotionResult.Failure(outcome.message)
+        is SetupBypassOutcome.SecondaryUsersError -> PromotionResult.Failure(AdbPromotionExecutor.formatFriendlyError(appContext, dpmOutput))
+        is SetupBypassOutcome.AccountsBlockedFailure -> {
+            val blockingTypes = if (survivingAuth.observed && survivingAuth.types.isNotEmpty()) survivingAuth.types else auditReport.accountTypes
+            PromotionResult.AccountsBlocking(
+                accountLabels = AdbAccountInspector.resolveFriendlyAccountLabels(appContext, blockingTypes),
+                accountTypes = blockingTypes,
                 message = AdbPromotionExecutor.formatFriendlyError(appContext, dpmOutput)
             )
         }
@@ -303,12 +313,8 @@ internal object AdbPackageFreezeManager {
     }
 
     private suspend fun verifyAndRecoverInFinally(
-        appContext: Context?,
-        userId: Int,
-        lockPath: String,
-        safePackages: List<String>,
-        priorLedgerPackages: List<String>,
-        shellExecutor: suspend (String) -> ShellResult,
+        appContext: Context?, userId: Int, lockPath: String, safePackages: List<String>,
+        priorLedgerPackages: List<String>, shellExecutor: suspend (String) -> ShellResult,
         reconnectAndHeal: (suspend (List<String>, Int) -> Set<String>)?
     ) {
         withContext(NonCancellable) {

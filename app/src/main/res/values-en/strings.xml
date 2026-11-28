@@ -1475,7 +1475,7 @@
     <!-- Blocking Accounts Guidance Dialog & Notification -->
     <string name="provisioning_accounts_dialog_title">Temporarily Remove Accounts to Activate</string>
     <string name="provisioning_accounts_dialog_intro">Your phone\'s system blocked automatic account bypass (common on Samsung Android 11 and protected OEM builds).\n\nRest assured: removing an account from Settings does NOT delete your photos, files, or chats—it is only a temporary sign-out and you can sign back in right after activation.</string>
-    <string name="provisioning_accounts_dialog_list_header">Detected accounts on this device:</string>
+    <string name="provisioning_accounts_dialog_list_header">Accounts that require temporary removal:</string>
     <string name="provisioning_accounts_dialog_steps">1. Tap \"Open Account Settings\" below.\n2. Select each listed account (such as Samsung or Google) and tap \"Remove account\".\n3. Press Back and tap \"Retry Now\" without re-entering a pairing code.</string>
     <string name="provisioning_accounts_btn_open_settings">Open Account Settings</string>
     <string name="provisioning_accounts_btn_retry_now">Retry Now</string>

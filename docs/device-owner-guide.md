@@ -257,6 +257,9 @@ public class SetupStateHelper {
         if (Build.VERSION.SDK_INT >= 31) {
             dpm.forceUpdateUserSetupComplete(userId);
         } else {
+            // تنبيه مهم: على أندرويد 11 وما دونه (النسخ التجارية user builds)،
+            // يتجاهل النظام هذه الدالة بسبب قفل (!mInjector.isBuildDebuggable()) في AOSP؛
+            // لذلك يُستخدم التجميد المؤقت للحزم (pm disable-user) كخطة بديلة على API <= 30.
             dpm.forceUpdateUserSetupComplete();
         }
         System.out.println("SUCCESS_CACHE_UPDATED");
